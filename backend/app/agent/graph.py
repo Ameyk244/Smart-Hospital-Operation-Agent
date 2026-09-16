@@ -320,7 +320,10 @@ def _route_after_tools(state: AgentState) -> str:
 
 
 def build_graph(
-    chat_model: BaseChatModel, session_factory: async_sessionmaker[AsyncSession], settings: Settings
+    chat_model: BaseChatModel,
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    checkpointer: Any | None = None,
 ):
     graph = StateGraph(AgentState)
     graph.add_node("agent", _make_agent_node(chat_model, session_factory, settings))
@@ -328,7 +331,7 @@ def build_graph(
     graph.set_entry_point("agent")
     graph.add_conditional_edges("agent", _route_after_agent, {"tools": "tools", END: END})
     graph.add_conditional_edges("tools", _route_after_tools, {"agent": "agent", END: END})
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)
 
 
 async def _build_system_message(
@@ -360,6 +363,7 @@ async def run_agent(
     session_factory: async_sessionmaker[AsyncSession],
     settings: Settings,
     history: list[Any] | None = None,
+    checkpointer: Any | None = None,
 ) -> AgentState:
     # Session identity (concept 34) is established here, once, regardless of
     # which entrance (API route, test, script) invoked the agent — every
@@ -368,27 +372,47 @@ async def run_agent(
         await SessionRepository(session).get_or_create(session_id)
         await session.commit()
 
-    system_message = await _build_system_message(session_factory, session_id)
+    compiled = build_graph(chat_model, session_factory, settings, checkpointer=checkpointer)
+    recursion_limit = settings.max_agent_rounds * 4 + 10
 
-    compiled = build_graph(chat_model, session_factory, settings)
-    # `history` (concepts 35, 42): prior turns from ConversationMessage,
-    # already converted to LangChain messages by the caller — this is what
-    # lets the agent resolve "that appointment" / "the next one" against
-    # what was actually said earlier in the session, instead of starting
-    # fresh on every request. The system message is placed in state once,
-    # here, rather than re-prepended by agent_node every round — that keeps
-    # it inspectable (tests can assert on state["messages"][0]) and avoids
-    # the node needing to know or care whether it's the first round.
+    if checkpointer is not None:
+        # Checkpointing (concept 36) is the primary history mechanism here,
+        # not `history` from ConversationMessage — passing both would
+        # duplicate the transcript, since freshly-constructed LangChain
+        # messages have no id LangGraph could use to recognize them as
+        # already present in the checkpoint (the same class of pitfall as
+        # the FakeMessagesListChatModel issue documented in
+        # tests/integration/test_agent_loop.py). `thread_id=session_id`
+        # means a second run_agent call for the same session automatically
+        # resumes with this thread's prior messages already in state.
+        config = {
+            "configurable": {"thread_id": session_id},
+            "recursion_limit": recursion_limit,
+        }
+        existing = await compiled.aget_state(config)
+        is_new_thread = not existing.values
+        system_message = await _build_system_message(session_factory, session_id)
+        messages: list[Any] = (
+            [system_message] if is_new_thread else []
+        ) + [HumanMessage(content=user_text)]
+    else:
+        config = {"recursion_limit": recursion_limit}
+        system_message = await _build_system_message(session_factory, session_id)
+        # `history` (concepts 35, 42): prior turns from ConversationMessage,
+        # already converted to LangChain messages by the caller — the
+        # fallback path for when no checkpointer is configured, so a
+        # multi-turn conversation still has continuity.
+        messages = [system_message, *(history or []), HumanMessage(content=user_text)]
+
+    # round/tool/invalid counters and terminated_reason are explicitly reset
+    # to their starting values on every call, checkpointer or not — these
+    # bounds are per-turn, not cumulative across a thread's entire lifetime.
     initial_state: AgentState = {
         "session_id": session_id,
-        "messages": [system_message, *(history or []), HumanMessage(content=user_text)],
+        "messages": messages,
         "round_count": 0,
         "tool_call_count": 0,
         "invalid_call_count": 0,
         "terminated_reason": None,
     }
-    # Generous relative to max_agent_rounds: our own bounds always trigger
-    # first, this is only a hard backstop against a bug in that logic.
-    return await compiled.ainvoke(
-        initial_state, config={"recursion_limit": settings.max_agent_rounds * 4 + 10}
-    )
+    return await compiled.ainvoke(initial_state, config=config)

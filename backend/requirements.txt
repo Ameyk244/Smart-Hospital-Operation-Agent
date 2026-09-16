@@ -12,10 +12,17 @@ alembic>=1.14,<2
 # Agent framework (versions unpinned within a range; langchain-core is a
 # transitive dep of all three and must be left for pip to resolve)
 langchain>=0.3.14,<0.4
-langgraph>=0.2.62,<0.3
+# langgraph-checkpoint-postgres 2.x requires langgraph>=0.5 (it warns
+# otherwise); 0.6.x is the smallest bump off the original 0.2.x pin that
+# satisfies that without jumping to the materially different 1.x API.
+langgraph>=0.6,<0.7
 langchain-anthropic>=0.3.3,<0.4
 langchain-openai>=0.3,<0.4
 langgraph-checkpoint-postgres>=2.0.13,<3
+# langgraph-checkpoint-postgres uses psycopg (v3), not asyncpg. The plain
+# `psycopg` package needs a system libpq; the [binary] extra bundles a
+# prebuilt wheel so this works without a separate libpq install.
+psycopg[binary]>=3.2,<4
 
 # Observability
 structlog>=24.4,<25

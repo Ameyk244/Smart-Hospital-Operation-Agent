@@ -15,7 +15,7 @@ What calls it: the frontend's chat UI; `tests/e2e/*`.
 import uuid
 from typing import Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -56,11 +56,19 @@ def _format_deterministic_message(command: Command, success: bool, error: str | 
     return f"OK — ran {command.name}."
 
 
+def get_checkpointer(request: Request):
+    """The long-lived LangGraph checkpointer built once at process startup
+    (see app/main.py's `lifespan`). A FastAPI dependency, like `get_db` and
+    `get_session_factory`, so tests can override it the same way."""
+    return request.app.state.checkpointer
+
+
 @router.post("", response_model=ChatResponse)
 async def chat(
     request: ChatRequest,
     db: AsyncSession = Depends(get_db),
     session_factory=Depends(get_session_factory),
+    checkpointer=Depends(get_checkpointer),
 ) -> ChatResponse:
     session_id = request.session_id or str(uuid.uuid4())
     session_repo = SessionRepository(db)
@@ -68,6 +76,8 @@ async def chat(
 
     # Load history *before* appending this turn, so it doesn't duplicate
     # the message we're about to hand the agent as the new HumanMessage.
+    # Only used as a fallback when no checkpointer is active — see
+    # run_agent's docstring-level comment on why the two can't both apply.
     prior_rows = await session_repo.get_recent_messages(session_id, limit=20)
     history = to_langchain_messages(prior_rows)
 
@@ -105,6 +115,7 @@ async def chat(
         session_factory=session_factory,
         settings=settings,
         history=history,
+        checkpointer=checkpointer,
     )
     last_message = final_state["messages"][-1]
     reply_text = (

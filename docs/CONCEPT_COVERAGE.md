@@ -82,7 +82,7 @@ started**.
 |---|---|---|---|---|---|
 | 34 | Conversation/session identity | Every session has a stable id, created on first use regardless of entrance | `AgentSession`, `SessionRepository.get_or_create`, called from both `run_agent` and the chat route | `test_agent_loop.py`, `test_chat_api.py::test_session_id_is_reused_across_turns` | **Done** |
 | 35 | Short-term conversation state | Durable transcript per session, actually read back into the next turn | `ConversationMessage`, `app/agent/history.py` (`to_langchain_messages`), wired into `app/api/routes/chat.py` | `test_session_id_is_reused_across_turns` (storage) | **Done** |
-| 36 | LangGraph checkpointing | Graph execution/resumption state, kept separate from conversation state | `langgraph-checkpoint-postgres` (dependency installed, not yet wired into `build_graph`) | — | Not started |
+| 36 | LangGraph checkpointing | Graph execution/resumption state, kept separate from conversation state (`ConversationMessage`) and preferences | `app/agent/checkpointer.py` (`AsyncPostgresSaver`), wired into `build_graph`/`run_agent` (optional `checkpointer` param; `history` is only used as a fallback when no checkpointer is active, to avoid duplicating messages neither source can recognize the other already has) | `tests/integration/test_checkpointing.py` (3 tests: resumption without manual history, per-turn bound reset despite a shared thread, thread isolation) | **Done** — verified live through the *real* running server (not a test override): two HTTP turns to `/api/chat` with the same `session_id`, second turn correctly answered "what did I just ask?" from checkpointed state alone |
 | 37 | Persistent preference memory | Explicit, session-scoped, never inferred | `Preference`, `PreferenceRepository` | `test_preference_remember_forget_roundtrip`, `test_memory_tools.py` | **Done** |
 | 38 | Explicit memory tools | `remember_preference`/`forget_preference`/`list_preferences` | `app/agent/tools/memory_tools.py` | `test_memory_tools.py::test_remember_then_list_preference`, `::test_forget_preference` | **Done** |
 | 39 | Memory separation | Conversation / preferences / checkpoint never merged | Separate tables + separate code paths (`app/agent/history.py` only touches `ConversationMessage`; `memory_tools.py` only touches `Preference`; neither routes through `CommandRunner`) | — | **Done** |
@@ -133,26 +133,27 @@ started**.
 
 ---
 
-**Snapshot as of this update**: 66 backend tests (62 offline + 4 live-gated),
+**Snapshot as of this update**: 69 backend tests (65 offline + 4 live-gated),
 all passing; `ruff` clean. The full architecture diagram in
 docs/ARCHITECTURE.md §1 is real and demonstrated end-to-end with a live
-model. **All 7 tool categories from the original inventory are now
-implemented**: deterministic commands, command decomposition
-(`execute_command`), search/retrieval (`search_appointments`), grounding
-(enforced throughout, including on reads), action/write
-(`reschedule_appointment`), observation (`get_scanner_availability`), and
-memory (`remember_preference`/`forget_preference`/`list_preferences`). All
-three memory concepts (conversation, preferences, checkpoint) are
-implemented and kept separate, except checkpointing, which is still just a
-dependency, not wired code.
+model. **All 7 tool categories and all three memory concepts are now
+implemented**, kept genuinely separate: conversation (`ConversationMessage`),
+preferences (`Preference`), and LangGraph checkpointing (`AsyncPostgresSaver`)
+each own a distinct persistence mechanism and a distinct purpose, verified
+individually.
 
-Real bugs caught and fixed by tests during this project so far (see
+Real bugs caught and fixed during this project so far (see
 `docs/PROGRESS.md` for detail): an invalid-call counter that silently never
-reached its threshold for two of three rejection branches, a
+reached its threshold for two of three rejection branches; a
 `FakeMessagesListChatModel` object-identity pitfall that made LangGraph's
 message-merge silently truncate a scripted "looping model" test's
-transcript, and an unconstrained client-supplied `session_id` that would
-have hit the database as a raw 500 instead of a clean 422.
+transcript; an unconstrained client-supplied `session_id` that would have
+hit the database as a raw 500 instead of a clean 422; a checkpointer test
+isolation gap (its own Postgres tables aren't covered by `Base.metadata`,
+so nothing cleared them between test runs); and a Windows-specific event
+loop timing issue where `uvicorn app.main:app` creates its event loop
+*before* importing the app module, making an in-app fix for psycopg's
+Proactor-incompatibility too late — required a dedicated `run.py` entrypoint
+instead.
 
-**Remaining gaps going into the next phase**: LangGraph checkpointing
-(concept 36) isn't wired in yet, and the frontend doesn't exist yet.
+**Remaining gap going into the next phase**: the frontend doesn't exist yet.

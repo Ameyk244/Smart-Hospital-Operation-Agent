@@ -20,12 +20,22 @@ that requests the `db_session` or `seeded_session` fixture. Unit tests
 (`tests/unit/`) should not need this file at all.
 """
 
+import asyncio
+import sys
 from collections.abc import AsyncGenerator
 
 import asyncpg
 import pytest_asyncio
+
+if sys.platform == "win32":
+    # psycopg's async mode (used by the LangGraph Postgres checkpointer,
+    # app/agent/checkpointer.py) refuses to run under Windows' default
+    # ProactorEventLoop. Must be set before pytest-asyncio creates any event
+    # loop, so this runs at conftest import time, not inside a fixture.
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.agent.checkpointer import build_checkpointer
 from app.config import get_settings
 from app.db import models  # noqa: F401  populates Base.metadata
 from app.db.base import Base
@@ -119,3 +129,26 @@ async def agent_session_factory():
         yield session_factory
     finally:
         await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def checkpointer(agent_session_factory):
+    """A real `AsyncPostgresSaver` against the same test database
+    `agent_session_factory` uses — for tests of concept 36 (LangGraph
+    checkpointing) specifically. Depends on `agent_session_factory` purely
+    to reuse its test-database setup; the checkpointer itself uses its own
+    psycopg connection, separate from the asyncpg engine the rest of the
+    app uses (see app/agent/checkpointer.py for why).
+
+    Truncates the checkpointer's own tables before each test: they are
+    created/migrated by `AsyncPostgresSaver.setup()`, not by
+    `Base.metadata`, so nothing else clears them between test runs — a
+    fixed thread_id (session_id) reused across two runs of the same test
+    would otherwise silently resume the *previous run's* checkpoint data.
+    """
+    _admin_url, test_url = _test_database_url()
+    async with build_checkpointer(test_url) as cp:
+        # Only the state tables — checkpoint_migrations just tracks which
+        # schema migrations have already run and doesn't need resetting.
+        await cp.conn.execute("TRUNCATE checkpoints, checkpoint_blobs, checkpoint_writes")
+        yield cp

@@ -7,6 +7,7 @@ conversation history persisted) with a real model.
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app.api.routes.chat import get_checkpointer
 from app.db.session import get_db, get_session_factory
 from app.main import app
 
@@ -18,7 +19,17 @@ async def client(seeded_session):
     async def _override_get_db():
         yield seeded_session
 
+    async def _override_get_checkpointer():
+        # httpx's ASGITransport doesn't run the app's lifespan (that's what
+        # normally sets app.state.checkpointer — see app/main.py), and these
+        # tests don't exercise checkpointing specifically. run_agent treats
+        # checkpointer=None as "fall back to ConversationMessage-based
+        # history", which is exactly what the deterministic/rejected-path
+        # tests here need anyway.
+        return None
+
     app.dependency_overrides[get_db] = _override_get_db
+    app.dependency_overrides[get_checkpointer] = _override_get_checkpointer
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
@@ -61,12 +72,12 @@ async def test_oversized_session_id_is_rejected_with_a_clean_422(client):
 
 
 @pytest.mark.live_llm
-async def test_agent_path_via_http_with_live_model(agent_session_factory):
+async def test_agent_path_via_http_with_live_model(agent_session_factory, checkpointer):
     """The full concept-58 chain through the real HTTP endpoint: request ->
-    parser (unmatched) -> eligibility gate -> LangGraph agent -> real
-    Anthropic call -> real tool -> Postgres -> conversation history
-    persisted -> HTTP response. Uses the test database via dependency
-    overrides so it never touches dev data."""
+    parser (unmatched) -> eligibility gate -> LangGraph agent (with real
+    Postgres checkpointing) -> real Anthropic call -> real tool -> Postgres
+    -> conversation history persisted -> HTTP response. Uses the test
+    database via dependency overrides so it never touches dev data."""
     from app.config import get_settings
 
     settings = get_settings()
@@ -80,8 +91,12 @@ async def test_agent_path_via_http_with_live_model(agent_session_factory):
     def _override_get_session_factory():
         return agent_session_factory
 
+    def _override_get_checkpointer():
+        return checkpointer
+
     app.dependency_overrides[get_db] = _override_get_db
     app.dependency_overrides[get_session_factory] = _override_get_session_factory
+    app.dependency_overrides[get_checkpointer] = _override_get_checkpointer
     try:
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:

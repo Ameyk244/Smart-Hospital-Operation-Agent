@@ -296,9 +296,68 @@ the frontend.
   are now implemented. 8 new tests. **66 backend tests total (62 offline +
   4 live-gated), all passing, ruff clean.**
 
+## Status: Phase 9 complete — LangGraph Postgres checkpointing
+
+This was the piece flagged in advance as most likely to eat unexpected
+time, and it did surface two genuine platform-specific issues — both real,
+both fixed, neither a dead end.
+
+### Completed
+- **`app/agent/checkpointer.py`**: `AsyncPostgresSaver` wrapped in a small
+  context manager, converting our asyncpg-style `DATABASE_URL` to the
+  psycopg connection string format the checkpointer package needs.
+- **`build_graph`/`run_agent`** now accept an optional `checkpointer`. When
+  present: `thread_id=session_id`, and manual `history` (from
+  `ConversationMessage`) is *not* also injected — passing both would
+  duplicate the transcript, since freshly-constructed LangChain messages
+  have no id the checkpoint could use to recognize them as already present
+  (the same class of pitfall as the `FakeMessagesListChatModel` bug from
+  the agent-loop phase). round/tool/invalid-call counters and
+  `terminated_reason` are explicitly reset every call regardless — those
+  bounds are per-turn, not per-thread-lifetime, and checkpointing would
+  otherwise silently accumulate them across a whole conversation.
+- **Real app wiring, not just tests**: `app/main.py` now builds the
+  checkpointer once via a FastAPI `lifespan`, stored on `app.state`; `/api/
+  chat` reads it through a `get_checkpointer` dependency (overridable in
+  tests exactly like `get_db`).
+- 3 new tests (`tests/integration/test_checkpointing.py`): resumption
+  without manual history, per-turn bound reset despite a shared thread,
+  thread isolation.
+
+### Two real platform-specific bugs found and fixed
+1. **psycopg async vs. Windows' default event loop**: `psycopg`'s async
+   mode refuses to run under `ProactorEventLoop` (Windows' default since
+   Python 3.8). Fixed for tests by setting
+   `asyncio.WindowsSelectorEventLoopPolicy()` at `conftest.py` import time
+   (before pytest-asyncio creates any loop).
+2. **The same fix didn't work for the actually-served app**: `uvicorn
+   app.main:app` calls `asyncio.run()` — creating its event loop — *before*
+   it imports the app string, so a policy fix inside `app/main.py` itself
+   is set too late to matter (confirmed by reproducing the exact
+   `psycopg.InterfaceError` via a live server start). Fixed with a
+   dedicated `backend/run.py` entrypoint that sets the policy before ever
+   calling into uvicorn. Verified with the real, non-overridden lifespan
+   checkpointer: two HTTP turns to a running server, same `session_id`,
+   second turn correctly answered "what did I just ask you?" — genuine
+   proof through the actual serving path, not a test double.
+3. **Checkpointer test isolation**: its own Postgres tables
+   (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) are created by
+   `AsyncPostgresSaver.setup()`, not `Base.metadata`, so nothing cleared
+   them between test runs — a fixed thread_id reused across two runs of the
+   same test silently resumed the *previous run's* checkpoint data. Fixed
+   by truncating those tables in the `checkpointer` fixture.
+- Also bumped `langgraph` from the original `0.2.x` pin to `0.6.x` (the
+  smallest change that satisfies `langgraph-checkpoint-postgres`'s own
+  version check, avoiding a much larger, riskier jump to the materially
+  different 1.x API) — full offline suite re-verified clean after the bump
+  before proceeding.
+
+**69 backend tests total (65 offline + 4 live-gated), all passing, ruff
+clean.**
+
 ### Next
-Phase 9: LangGraph Postgres checkpointing (concept 36) — the piece flagged
-as most likely to eat unexpected time. Then the frontend.
+Phase 10: the frontend — the last major piece. Operations view, chat panel,
+trace panel.
 
 ## Concepts covered so far
 - **31. PostgreSQL** — `docker-compose.yml`, live schema.

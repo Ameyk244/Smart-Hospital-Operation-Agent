@@ -29,6 +29,9 @@ python -m app.seed.seed_data
 
 # 3. Run tests
 pytest
+
+# 4. Run the dev server
+python run.py                   # NOT `uvicorn app.main:app` directly — see note below
 ```
 
 **Port note**: `docker-compose.yml` maps Postgres to host port **5433**, not
@@ -36,6 +39,14 @@ the usual 5432, because this dev machine already has a native PostgreSQL
 service bound to 5432. If your machine doesn't have that conflict, you can
 override with `POSTGRES_PORT=5432` in `.env` and it'll just work either way
 since the app reads `DATABASE_URL` directly.
+
+**Windows + `run.py` note**: the LangGraph Postgres checkpointer
+(`app/agent/checkpointer.py`) uses `psycopg`, whose async mode refuses to run
+under Windows' default `ProactorEventLoop`. `python run.py` sets the correct
+event loop policy *before* starting uvicorn; running `uvicorn app.main:app`
+directly on Windows will fail at startup, because uvicorn creates its event
+loop before it ever imports the app module — see `run.py`'s docstring for
+the full explanation. Not an issue on Linux/macOS; `run.py` works there too.
 
 ## Secrets
 
