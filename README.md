@@ -27,25 +27,36 @@ copy .env.example .env          # cp on macOS/Linux — fill in an LLM API key w
 alembic upgrade head
 python -m app.seed.seed_data
 
-# 3. Run tests
-pytest
+# 3. Frontend
+cd ../frontend
+npm install
 
-# 4. Run the dev server
-python run.py                   # NOT `uvicorn app.main:app` directly — see note below
+# 4. Run tests (from backend/)
+cd ../backend && pytest
 ```
 
-## Frontend setup
+## Running it
 
 ```bash
-cd frontend
-npm install
-npm run dev
+./dev.sh
 ```
 
-Serves at `http://localhost:5173` (CORS on the backend is already configured
-for this origin). Requires the backend running at `http://localhost:8000`
-(see Setup above) — the base URL is configurable via `VITE_API_BASE_URL`
-(see `frontend/.env.example`) if you need to point it elsewhere.
+One command, from the repo root: starts Postgres (if not already up), the
+backend, and the frontend together, and stops both on Ctrl+C. Open
+**`http://localhost:5173`** — that's the app. `http://localhost:8000` is the
+backend API only; don't open it in a browser, there's no page there.
+
+To run backend and frontend separately instead (e.g. for debugging one side
+in isolation):
+
+```bash
+cd backend && python run.py     # NOT `uvicorn app.main:app` directly — see note below
+cd frontend && npm run dev      # separate terminal
+```
+
+CORS on the backend is already configured for `http://localhost:5173`; the
+frontend's API base URL is configurable via `VITE_API_BASE_URL` (see
+`frontend/.env.example`) if you need to point it elsewhere.
 
 **Port note**: `docker-compose.yml` maps Postgres to host port **5433**, not
 the usual 5432, because this dev machine already has a native PostgreSQL
