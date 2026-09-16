@@ -1,0 +1,23 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: hospital_agent_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hospital_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hospital_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-hospital_ops}
+    ports:
+      # Host port defaults to 5433, not 5432: a native PostgreSQL service may
+      # already own 5432 on the host (it does in this project's dev env).
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - hospital_agent_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hospital_admin} -d ${POSTGRES_DB:-hospital_ops}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  hospital_agent_pgdata:

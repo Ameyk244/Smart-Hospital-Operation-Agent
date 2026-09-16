@@ -1,0 +1,24 @@
+# Web / API
+fastapi>=0.115,<0.116
+uvicorn[standard]>=0.34,<0.35
+pydantic>=2.10,<3
+pydantic-settings>=2.7,<3
+
+# Database
+sqlalchemy[asyncio]>=2.0,<2.1
+asyncpg>=0.30,<0.31
+alembic>=1.14,<2
+
+# Agent framework (versions unpinned within a range; langchain-core is a
+# transitive dep of all three and must be left for pip to resolve)
+langchain>=0.3.14,<0.4
+langgraph>=0.2.62,<0.3
+langchain-anthropic>=0.3.3,<0.4
+langchain-openai>=0.3,<0.4
+langgraph-checkpoint-postgres>=2.0.13,<3
+
+# Observability
+structlog>=24.4,<25
+
+# Utilities
+python-dotenv>=1.0,<2
