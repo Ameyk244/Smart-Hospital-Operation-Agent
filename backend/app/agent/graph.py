@@ -45,6 +45,7 @@ from app.agent.state import AgentState
 from app.agent.tools import TOOL_REGISTRY, ToolExecutionError, all_tool_dicts
 from app.config import Settings
 from app.db.models.agent import EventStatus
+from app.db.repositories.preference_repository import PreferenceRepository
 from app.db.repositories.session_repository import SessionRepository
 from app.observability.tracing import record_event
 
@@ -56,7 +57,10 @@ SYSTEM_PROMPT = (
     "values into reschedule_appointment that came from a search result earlier in "
     "this conversation — a value you make up will be rejected. If a tool call is "
     "rejected or fails, explain why to the user rather than retrying the same "
-    "invented value. Be concise."
+    "invented value. You also have remember_preference/forget_preference/"
+    "list_preferences tools for this session's explicit preferences — use them only "
+    "when the user actually asks you to remember, forget, or recall something; never "
+    "save a preference on your own initiative. Be concise."
 )
 
 
@@ -78,10 +82,6 @@ def _make_agent_node(
                 await session.commit()
             return {"terminated_reason": "max_rounds_exceeded"}
 
-        messages = state["messages"]
-        if not messages or not isinstance(messages[0], SystemMessage):
-            messages = [SystemMessage(content=SYSTEM_PROMPT), *messages]
-
         round_num = state["round_count"] + 1
         async with session_factory() as session:
             await record_event(
@@ -95,7 +95,7 @@ def _make_agent_node(
 
         try:
             response = await asyncio.wait_for(
-                model_with_tools.ainvoke(messages), timeout=settings.llm_timeout_seconds
+                model_with_tools.ainvoke(state["messages"]), timeout=settings.llm_timeout_seconds
             )
         except TimeoutError:
             async with session_factory() as session:
@@ -328,6 +328,27 @@ def build_graph(
     return graph.compile()
 
 
+async def _build_system_message(
+    session_factory: async_sessionmaker[AsyncSession], session_id: str
+) -> SystemMessage:
+    """Base system prompt, plus this session's remembered preferences
+    (concept 40: memory injection) when there are any — never fabricated,
+    only what the `remember_preference` tool actually wrote for this exact
+    session_id."""
+    async with session_factory() as session:
+        prefs = await PreferenceRepository(session).list_for_session(session_id)
+    if not prefs:
+        return SystemMessage(content=SYSTEM_PROMPT)
+    pref_lines = "\n".join(f"- {p.key}: {p.value}" for p in prefs)
+    return SystemMessage(
+        content=(
+            f"{SYSTEM_PROMPT}\n\n"
+            "Remembered preferences for this session (apply only where relevant to "
+            f"the current request, don't force them into unrelated answers):\n{pref_lines}"
+        )
+    )
+
+
 async def run_agent(
     *,
     session_id: str,
@@ -344,15 +365,20 @@ async def run_agent(
         await SessionRepository(session).get_or_create(session_id)
         await session.commit()
 
+    system_message = await _build_system_message(session_factory, session_id)
+
     compiled = build_graph(chat_model, session_factory, settings)
     # `history` (concepts 35, 42): prior turns from ConversationMessage,
     # already converted to LangChain messages by the caller — this is what
     # lets the agent resolve "that appointment" / "the next one" against
     # what was actually said earlier in the session, instead of starting
-    # fresh on every request.
+    # fresh on every request. The system message is placed in state once,
+    # here, rather than re-prepended by agent_node every round — that keeps
+    # it inspectable (tests can assert on state["messages"][0]) and avoids
+    # the node needing to know or care whether it's the first round.
     initial_state: AgentState = {
         "session_id": session_id,
-        "messages": [*(history or []), HumanMessage(content=user_text)],
+        "messages": [system_message, *(history or []), HumanMessage(content=user_text)],
         "round_count": 0,
         "tool_call_count": 0,
         "invalid_call_count": 0,

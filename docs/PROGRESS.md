@@ -232,12 +232,40 @@ prompt asking the model to skip searching and act on a fabricated ID
 directly — the model declined per the system prompt, and grounding would
 have rejected it in code regardless if it hadn't.
 
+## Status: Phase 8a complete — memory tools + preference injection
+
+Reviewed with the user before proceeding (per their explicit request);
+confirmed to proceed with memory tools next, deferring checkpointing and
+the frontend.
+
+### Completed
+- **Structural fix first**: the system prompt used to be silently
+  re-prepended inside `agent_node` every round, checking `messages[0]` and
+  never actually landing in `AgentState` — impossible to test or inspect
+  from outside. Refactored so `run_agent` builds the system message once
+  (via `_build_system_message`) and puts it in `initial_state["messages"][0]`
+  directly; `agent_node` now just calls the model with `state["messages"]`
+  as-is. This is what made preference injection actually testable.
+- **Memory tools** (`app/agent/tools/memory_tools.py`): `remember_preference`,
+  `forget_preference`, `list_preferences`. Deliberately do **not** route
+  through `CommandRunner` — preferences are a distinct memory concern
+  (docs/ARCHITECTURE.md §7), not a hospital-operations command, and forcing
+  them through the command grammar would blur that separation for no
+  benefit.
+- **Preference injection** (concept 40): `_build_system_message` loads a
+  session's preferences and appends them to the system prompt only when any
+  exist — verified both in scripted tests and **live**, across two separate
+  `run_agent` calls sharing one session_id: the first remembered "prefer MRI
+  scanners", the second (a fresh run) correctly answered "MRI" from the
+  injected system message alone, without even calling `list_preferences`.
+- 4 new tests (`tests/integration/test_memory_tools.py`): remember→list
+  round trip, forget, injection-present, injection-absent. **58 backend
+  tests total (55 offline + 3 live-gated), all passing, ruff clean.**
+
 ### Next
-Phase 8: remaining tool categories — command decomposition
-(`execute_command`), observation/read tools, explicit memory tools
-(`remember_preference`/`forget_preference`/`list_preferences`) with
-preference injection into agent context. Then LangGraph Postgres
-checkpointing (concept 36), then the frontend.
+Phase 8b: remaining tool categories — command decomposition
+(`execute_command`) and observation/read tools beyond search. Then
+LangGraph Postgres checkpointing (concept 36), then the frontend.
 
 ## Concepts covered so far
 - **31. PostgreSQL** — `docker-compose.yml`, live schema.

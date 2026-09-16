@@ -17,7 +17,7 @@ started**.
 | 3 | System prompting | Establishes the agent's role, tool set, and constraints | `app/agent/graph.py` (`SYSTEM_PROMPT`) | live tests show the model refusing to fabricate an ID per the prompt's instruction | **Done** |
 | 4 | Structured tool/function calling | Real typed tool calls, never string-parsed pseudo-tools | `app/agent/tools/base.py` (`to_openai_tool_dict`, Pydantic `args_schema`) | `tests/integration/test_agent_loop.py`, live tests | **Done** |
 | 5 | Model-driven tool selection | The LLM decides which tool(s) to call | `app/agent/graph.py` (`_make_agent_node`) | live tests (model chose `search_appointments` unprompted) | **Done** |
-| 6 | Multiple tools | Search, action tools so far; more categories next phase | `app/agent/tools/{search,action}_tools.py` | `test_agent_loop.py` | **Done** (2 of 7 categories implemented; rest pending) |
+| 6 | Multiple tools | Search, action, memory tools so far; observation + decomposition categories next | `app/agent/tools/{search,action,memory}_tools.py` | `test_agent_loop.py`, `test_memory_tools.py` | **Done** (3 of 7 categories implemented; rest pending) |
 | 7 | Tool registry | One place tools are declared and bound to the model | `app/agent/tools/base.py` (`TOOL_REGISTRY`) | — | **Done** |
 | 8 | Tool execution layer | Validates args, checks grounding, executes, times out | `app/agent/graph.py` (`_make_tool_node`) | `test_agent_loop.py` (timeout, validation, grounding all covered) | **Done** |
 | 9 | Tool results returned to the LLM | `ToolMessage` round-trip in the graph | `app/agent/graph.py` | `test_agent_loop.py::test_multi_round_search_then_reschedule` | **Done** |
@@ -81,13 +81,13 @@ started**.
 | # | Concept | Why | Location | Test(s) | Status |
 |---|---|---|---|---|---|
 | 34 | Conversation/session identity | Every session has a stable id, created on first use regardless of entrance | `AgentSession`, `SessionRepository.get_or_create`, called from both `run_agent` and the chat route | `test_agent_loop.py`, `test_chat_api.py::test_session_id_is_reused_across_turns` | **Done** |
-| 35 | Short-term conversation state | Durable transcript per session, actually read back into the next turn | `ConversationMessage`, `app/agent/history.py` (`to_langchain_messages`), wired into `app/api/routes/chat.py` | `test_session_id_is_reused_across_turns` (storage); live multi-turn context test tracked as a gap | **Done** (storage + injection wired); a test proving the agent actually *uses* prior turns is still pending |
+| 35 | Short-term conversation state | Durable transcript per session, actually read back into the next turn | `ConversationMessage`, `app/agent/history.py` (`to_langchain_messages`), wired into `app/api/routes/chat.py` | `test_session_id_is_reused_across_turns` (storage) | **Done** |
 | 36 | LangGraph checkpointing | Graph execution/resumption state, kept separate from conversation state | `langgraph-checkpoint-postgres` (dependency installed, not yet wired into `build_graph`) | — | Not started |
-| 37 | Persistent preference memory | Explicit, session-scoped, never inferred | `Preference`, `PreferenceRepository` | `test_preference_remember_forget_roundtrip` | **Done** (storage layer); not yet injected into agent context |
-| 38 | Explicit memory tools | `remember_preference`/`forget_preference`/`list_preferences` | `app/agent/tools/memory_tools.py` (pending) | — | Not started |
-| 39 | Memory separation | Conversation / preferences / checkpoint never merged | Separate tables + separate code paths (`app/agent/history.py` only ever touches `ConversationMessage`) | — | **Done** |
-| 40 | Memory injection | Prior conversation injected at the start of a run; preferences only when relevant | `app/api/routes/chat.py` (history), preference injection pending | — | Partial (conversation done, preferences not started) |
-| 41 | Memory safeguards | Preferences can't be silently overwritten by inference | `PreferenceRepository.remember` is upsert-by-explicit-call only; nothing in the agent loop writes to it | — | **Done** at the repository boundary |
+| 37 | Persistent preference memory | Explicit, session-scoped, never inferred | `Preference`, `PreferenceRepository` | `test_preference_remember_forget_roundtrip`, `test_memory_tools.py` | **Done** |
+| 38 | Explicit memory tools | `remember_preference`/`forget_preference`/`list_preferences` | `app/agent/tools/memory_tools.py` | `test_memory_tools.py::test_remember_then_list_preference`, `::test_forget_preference` | **Done** |
+| 39 | Memory separation | Conversation / preferences / checkpoint never merged | Separate tables + separate code paths (`app/agent/history.py` only touches `ConversationMessage`; `memory_tools.py` only touches `Preference`; neither routes through `CommandRunner`) | — | **Done** |
+| 40 | Memory injection | Prior conversation injected at the start of a run; preferences injected into the system message only when they exist | `app/agent/graph.py` (`_build_system_message`, called once per `run_agent`, not per round — refactored this phase specifically so it's inspectable via `state["messages"][0]`) | `test_memory_tools.py::test_existing_preferences_are_injected_into_system_message`, `::test_no_preferences_means_plain_system_prompt`; **verified live**: a preference remembered in one `run_agent` call was correctly recalled by a second, separate `run_agent` call for the same session_id, without even needing to call a tool | **Done** |
+| 41 | Memory safeguards | Preferences can't be silently overwritten by inference | `PreferenceRepository.remember` is upsert-by-explicit-call only; nothing in the agent loop writes to it outside the `remember_preference` tool handler | — | **Done** |
 
 ## Application context
 
@@ -133,23 +133,26 @@ started**.
 
 ---
 
-**Snapshot as of this update**: 54 backend tests (51 offline + 3 live-gated),
+**Snapshot as of this update**: 58 backend tests (55 offline + 3 live-gated),
 all passing; `ruff` clean. The full architecture diagram in
 docs/ARCHITECTURE.md §1 is now real and demonstrated end-to-end with a live
 model: a request either matches the deterministic parser and never touches
 the LLM, or falls through the eligibility gate into a LangGraph loop that
 does real structured tool calling, grounds every entity reference in the
 database, enforces rejection of fabricated IDs, and is bounded on rounds/
-tool-calls/invalid-calls — all reachable over real HTTP.
+tool-calls/invalid-calls — all reachable over real HTTP. All three memory
+concepts (conversation, preferences, checkpoint) are now implemented and
+kept separate except checkpointing, which is still just a dependency, not
+wired code.
 
-Two real bugs were caught and fixed by tests during this phase (see
+Real bugs caught and fixed by tests during this project so far (see
 `docs/PROGRESS.md` for detail): an invalid-call counter that silently never
 reached its threshold for two of three rejection branches, and a
 `FakeMessagesListChatModel` object-identity pitfall that made LangGraph's
 message-merge silently truncate a scripted "looping model" test's
 transcript.
 
-**Remaining gaps going into the next phase**: tool categories 2 (command
-decomposition), 6 (observation), and 7 (memory) aren't built yet; LangGraph
-checkpointing isn't wired in; preference injection isn't wired in; and the
-frontend doesn't exist yet.
+**Remaining gaps going into the next phase**: tool category 2 (command
+decomposition) and category 6 (observation/read tools beyond search) aren't
+built yet; LangGraph checkpointing isn't wired in; and the frontend doesn't
+exist yet.
