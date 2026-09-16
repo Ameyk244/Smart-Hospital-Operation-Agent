@@ -10,7 +10,7 @@ current status. No real patient data is ever used.
 
 - Python 3.11
 - Docker (for PostgreSQL)
-- Node 18+ (for the frontend, once it exists)
+- Node 18+ (for the frontend)
 
 ## Setup
 
@@ -33,6 +33,19 @@ pytest
 # 4. Run the dev server
 python run.py                   # NOT `uvicorn app.main:app` directly — see note below
 ```
+
+## Frontend setup
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Serves at `http://localhost:5173` (CORS on the backend is already configured
+for this origin). Requires the backend running at `http://localhost:8000`
+(see Setup above) — the base URL is configurable via `VITE_API_BASE_URL`
+(see `frontend/.env.example`) if you need to point it elsewhere.
 
 **Port note**: `docker-compose.yml` maps Postgres to host port **5433**, not
 the usual 5432, because this dev machine already has a native PostgreSQL
@@ -60,6 +73,10 @@ checkpoint note in `docs/PROGRESS.md` for exactly which one and where to get it.
 ```
 backend/    FastAPI app: db models, repositories, deterministic parser,
             trusted command execution, agent (LangGraph + tools), API routes
-frontend/   React + TypeScript UI (operations view, chat, trace panel)
+frontend/   React + TypeScript + Vite UI: operations view (departments,
+            scanners, appointments, patient search), chat panel (POST
+            /api/chat, session persisted in localStorage), and a trace
+            panel (GET /api/sessions/{id}/trace) showing the real
+            parser/agent decisions and tool calls behind each reply
 docs/       architecture, progress log, concept coverage audit
 ```
