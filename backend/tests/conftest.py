@@ -33,6 +33,7 @@ if sys.platform == "win32":
     # ProactorEventLoop. Must be set before pytest-asyncio creates any event
     # loop, so this runs at conftest import time, not inside a fixture.
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.agent.checkpointer import build_checkpointer
@@ -152,3 +153,36 @@ async def checkpointer(agent_session_factory):
         # schema migrations have already run and doesn't need resetting.
         await cp.conn.execute("TRUNCATE checkpoints, checkpoint_blobs, checkpoint_writes")
         yield cp
+
+
+@pytest_asyncio.fixture
+async def client(seeded_session) -> AsyncGenerator[AsyncClient, None]:
+    """An `httpx.AsyncClient` against the real FastAPI app, with `get_db`
+    bound to `seeded_session` and `get_checkpointer` stubbed to `None`.
+
+    Shared across `tests/e2e/*` files that only need the deterministic/
+    rejected request paths (or an agent path that's fine falling back to
+    ConversationMessage-based history) — `httpx.ASGITransport` doesn't run
+    the app's `lifespan`, so `app.state.checkpointer` is never set outside
+    of this override; `run_agent` treats `checkpointer=None` as "use
+    `history` instead", which is exactly what those tests need. Tests that
+    specifically exercise checkpointing (e.g.
+    `test_agent_path_via_http_with_live_model`) override `get_checkpointer`
+    again themselves, pointing at the real `checkpointer` fixture.
+    """
+    from app.api.routes.chat import get_checkpointer
+    from app.db.session import get_db
+    from app.main import app
+
+    async def _override_get_db():
+        yield seeded_session
+
+    async def _override_get_checkpointer():
+        return None
+
+    app.dependency_overrides[get_db] = _override_get_db
+    app.dependency_overrides[get_checkpointer] = _override_get_checkpointer
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        yield ac
+    app.dependency_overrides.clear()

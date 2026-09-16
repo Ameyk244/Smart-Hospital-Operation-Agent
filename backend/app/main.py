@@ -22,7 +22,7 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from app.agent.checkpointer import build_checkpointer  # noqa: E402
-from app.api.routes import chat, commands  # noqa: E402
+from app.api.routes import chat, commands, operations, sessions  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from app.observability.logging_config import configure_logging  # noqa: E402
 
@@ -48,6 +48,8 @@ app.add_middleware(
 
 app.include_router(commands.router)
 app.include_router(chat.router)
+app.include_router(operations.router)
+app.include_router(sessions.router)
 
 
 @app.get("/api/health")

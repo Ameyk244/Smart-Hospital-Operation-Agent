@@ -355,9 +355,39 @@ both fixed, neither a dead end.
 **69 backend tests total (65 offline + 4 live-gated), all passing, ruff
 clean.**
 
+## Status: Phase 9.5 complete — read/trace API surface for the frontend
+
+Before delegating frontend work, closed a real gap: only `/api/commands`
+and `/api/chat` existed — nothing to browse hospital data directly, and no
+endpoint for the UI's trace panel to read `AgentEvent` rows from. Built
+these first, in the main session (not delegated), since the frontend
+subagent needs a genuinely complete, stable API surface to build against
+rather than discovering gaps mid-build.
+
+### Completed
+- `app/api/routes/operations.py`: `GET /api/operations/{departments,
+  scanners,appointments,patients}` — read-only, all built as thin
+  `CommandRunner.execute(Command(...))` calls, the *third* caller of the
+  same command vocabulary (alongside the parser and the agent's tools).
+- `app/api/routes/sessions.py`: `GET /api/sessions/{id}/trace` (the
+  action-level `AgentEvent` history a session's agent activity produced)
+  and `GET /api/sessions/{id}/messages` (conversation history, for
+  reloading a chat panel). Deliberately polling-based, not
+  streaming/SSE — documented in the module docstring why: a live-streaming
+  trace would need `record_event` to also push into a pub/sub channel,
+  meaningfully more infrastructure than this project's complexity budget
+  should spend on a transport layer rather than the agent architecture
+  itself.
+- Consolidated a `client` httpx fixture (previously duplicated across two
+  e2e test files) into `tests/conftest.py` as a shared fixture.
+- 6 new e2e tests. **72 backend tests total (68 offline + 4 live-gated),
+  all passing, ruff clean.**
+
 ### Next
-Phase 10: the frontend — the last major piece. Operations view, chat panel,
-trace panel.
+Phase 10: the frontend. Delegating to a subagent per the master prompt's
+§12 (clearly separated responsibility, the API surface is now stable) —
+explicit instruction to wire the trace panel to the real
+`/api/sessions/{id}/trace` endpoint, not a mocked one.
 
 ## Concepts covered so far
 - **31. PostgreSQL** — `docker-compose.yml`, live schema.

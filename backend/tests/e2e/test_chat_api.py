@@ -13,27 +13,7 @@ from app.main import app
 
 pytestmark = pytest.mark.integration
 
-
-@pytest.fixture
-async def client(seeded_session):
-    async def _override_get_db():
-        yield seeded_session
-
-    async def _override_get_checkpointer():
-        # httpx's ASGITransport doesn't run the app's lifespan (that's what
-        # normally sets app.state.checkpointer — see app/main.py), and these
-        # tests don't exercise checkpointing specifically. run_agent treats
-        # checkpointer=None as "fall back to ConversationMessage-based
-        # history", which is exactly what the deterministic/rejected-path
-        # tests here need anyway.
-        return None
-
-    app.dependency_overrides[get_db] = _override_get_db
-    app.dependency_overrides[get_checkpointer] = _override_get_checkpointer
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        yield ac
-    app.dependency_overrides.clear()
+# `client` fixture is shared — see tests/conftest.py.
 
 
 async def test_deterministic_request_via_chat_endpoint(client):

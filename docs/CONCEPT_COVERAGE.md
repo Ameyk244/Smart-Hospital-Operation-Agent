@@ -114,7 +114,7 @@ started**.
 
 | # | Concept | Why | Location | Test(s) | Status |
 |---|---|---|---|---|---|
-| 48 | Observability | Action-level execution trace | `app/observability/tracing.py` (`record_event`), called from every branch of `_make_agent_node`/`_make_tool_node` | visible in live test output (JSON lines per decision); `AgentEvent` rows queryable | **Done** |
+| 48 | Observability | Action-level execution trace | `app/observability/tracing.py` (`record_event`), called from every branch of `_make_agent_node`/`_make_tool_node`; served to the UI via `GET /api/sessions/{id}/trace` (`app/api/routes/sessions.py`) | visible in live test output (JSON lines per decision); `test_operations_and_sessions_api.py` covers the trace endpoint | **Done** |
 | 49 | Structured logging | JSON logs for every action-level decision | `app/observability/logging_config.py` (structlog, JSON renderer) | live test output shows real JSON log lines | **Done** |
 | 50 | Agent traceability (no hidden chain-of-thought) | Only observable actions are ever logged/stored | `AgentEvent`/`record_event` schema has no reasoning field — only event_type/tool_name/args/status/latency/error | — | **Done** |
 
