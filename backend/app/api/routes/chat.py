@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent.eligibility import check_eligibility
 from app.agent.graph import run_agent
 from app.agent.history import to_langchain_messages
+from app.agent.message_text import extract_text_content
 from app.agent.providers.factory import get_default_chat_model
 from app.config import get_settings
 from app.db.models.agent import MessageRole
@@ -174,11 +175,14 @@ async def chat(
         checkpointer=checkpointer,
     )
     last_message = final_state["messages"][-1]
-    reply_text = (
-        last_message.content
-        if isinstance(last_message.content, str)
-        else str(last_message.content)
-    )
+    # NOT `str(last_message.content)`: when a model turn includes a
+    # `thinking` block alongside its `text` block, `.content` is a list of
+    # block dicts, not a string — str()-ing that verbatim used to leak the
+    # raw block structure (including thinking content and signatures) into
+    # the reply the user actually reads. extract_text_content pulls out
+    # only the text; see that module's docstring for why the fix belongs
+    # here and not in the graph state itself.
+    reply_text = extract_text_content(last_message.content)
     await session_repo.append_message(session_id, MessageRole.ASSISTANT, reply_text)
     await db.commit()
     return ChatResponse(

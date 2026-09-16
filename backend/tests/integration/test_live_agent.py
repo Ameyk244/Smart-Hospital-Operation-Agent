@@ -9,6 +9,7 @@ Run explicitly with:  RUN_LIVE_LLM_TESTS=1 pytest -m live_llm -v
 import pytest
 
 from app.agent.graph import run_agent
+from app.agent.message_text import extract_text_content
 from app.agent.providers.factory import get_provider
 from app.config import get_settings
 
@@ -38,8 +39,13 @@ async def test_live_search_appointments(agent_session_factory):
     }
     last_message = final_state["messages"][-1]
     assert last_message.type == "ai"
-    assert last_message.content  # the model produced a real closing answer
-    print(f"\nLive agent response: {last_message.content}")
+    # extract_text_content, not raw .content: Claude Sonnet 5 can include a
+    # `thinking` block alongside the text block even without extended
+    # thinking requested, making .content a list of blocks rather than a
+    # string — see app/agent/message_text.py.
+    answer_text = extract_text_content(last_message.content)
+    assert answer_text  # the model produced a real closing answer
+    print(f"\nLive agent response: {answer_text}")
     print(f"Tool calls made: {final_state['tool_call_count']}, tools: {tool_names_called}")
 
 
@@ -119,6 +125,11 @@ async def test_live_preference_injection_across_separate_runs(agent_session_fact
 
     system_message = second_state["messages"][0]
     assert "preferred_scanner_type: MRI" in system_message.content
-    final_answer = second_state["messages"][-1].content
+    # extract_text_content: this specific assertion is exactly what the
+    # thinking-block bug would have broken silently — a raw content-block
+    # list stringified via str() would make "MRI" in final_answer a list-
+    # membership check (always False for a list of dicts) rather than the
+    # intended substring check, failing this test for the wrong reason.
+    final_answer = extract_text_content(second_state["messages"][-1].content)
     assert "MRI" in final_answer
     print(f"\nSecond-run answer (from injected preference, not a fresh tool call): {final_answer}")
