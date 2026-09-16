@@ -9,7 +9,10 @@ server, health check).
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import commands
+from app.api.routes import chat, commands
+from app.observability.logging_config import configure_logging
+
+configure_logging()
 
 app = FastAPI(title="Smart Hospital Operations Agent")
 
@@ -21,6 +24,7 @@ app.add_middleware(
 )
 
 app.include_router(commands.router)
+app.include_router(chat.router)
 
 
 @app.get("/api/health")

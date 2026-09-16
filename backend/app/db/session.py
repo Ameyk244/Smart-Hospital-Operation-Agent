@@ -32,3 +32,12 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     closed automatically at the end of the request."""
     async with async_session_factory() as session:
         yield session
+
+
+def get_session_factory() -> async_sessionmaker[AsyncSession]:
+    """FastAPI dependency handing out the *factory* itself, not a session —
+    for callers that need to open several independent sessions of their own
+    (the agent graph's tool_node, one fresh session per tool call; see
+    app/agent/graph.py). Overridden the same way as `get_db` in tests that
+    need the agent path to use a test database instead of the dev one."""
+    return async_session_factory

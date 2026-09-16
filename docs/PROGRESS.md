@@ -158,10 +158,86 @@ can still be built and unit-tested with a fake chat model — that work is not
 blocked. Only the actual live end-to-end agent run is blocked. Proceeding on
 that basis unless told otherwise.
 
+## Status: Phase 5-7 complete — LLM provider, first tools, full LangGraph loop (thin vertical slice, complete)
+
+The user supplied `ANTHROPIC_API_KEY` and it was verified live before
+building on top of it. The full architecture diagram from
+docs/ARCHITECTURE.md §1 is now real, both branches, proven end-to-end with a
+live model over real HTTP — this is the "thin vertical slice" milestone from
+the master prompt's §0/§20.
+
+### Completed
+- **Provider abstraction** (`app/agent/providers/`): `AnthropicProvider`
+  (default) and `OpenRouterProvider` (OpenAI-compatible base URL), selected
+  by `LLM_PROVIDER` via `factory.get_provider`; `get_default_chat_model()`
+  lazily constructs and caches the process-wide model so a deterministic-
+  only request never needs an API key.
+- **Tool framework** (`app/agent/tools/base.py`): `ToolSpec` + `TOOL_REGISTRY`,
+  hand-rolled rather than LangChain's `@tool`/`ToolNode` — deliberately, so
+  the validation → grounding → timeout → observability pipeline around every
+  call is visible in this codebase, not inside a framework black box.
+- **Grounding-by-rejection** (`app/agent/grounding.py`): `GroundingRegistry`
+  wraps the ledger repository; write tools call `require_grounded()` before
+  building a `Command`. Proven against both a scripted fake model and a real
+  adversarial prompt to live Claude that tried to skip searching first.
+- **Two real tools**: `search_appointments` (read, exposes appointment/
+  scanner/patient codes to the grounding ledger) and `reschedule_appointment`
+  (write, requires both codes grounded, routes through the same
+  `Command("reassign_scanner", ...)` the deterministic parser could build).
+- **Observability** (`app/observability/`): `structlog` JSON logging +
+  `AgentEvent` rows, emitted at every decision point in the graph — visible
+  live in test output.
+- **The LangGraph loop** (`app/agent/graph.py`): two nodes (`agent`, `tools`),
+  typed `AgentState`, conditional routing, and all four bounds (max rounds,
+  max tool calls, LLM/tool timeouts, max invalid calls) enforced explicitly.
+- **Eligibility gate** (`app/agent/eligibility.py`) and a unified
+  `POST /api/chat` endpoint (`app/api/routes/chat.py`) tying parser and agent
+  into one request flow, with conversation history persisted and fed back
+  into the next turn regardless of which path handled a given request.
+- Test growth: 7 scripted agent-loop tests (mocked LLM, concept 52), 3
+  gated live-model tests (concept 57, run manually against real Claude — all
+  passing), plus e2e coverage for both the deterministic and agent paths
+  through real HTTP. **54 backend tests total, `ruff` clean.**
+
+### Real bugs found and fixed during this phase
+- `AppointmentRepository.reassign_scanner` (carried over from last phase,
+  fixed here) needed a second look once tools called it indirectly — no new
+  issue, confirms the earlier fix held.
+- **Invalid-call termination had a real gap**: `_make_tool_node`'s
+  `max_invalid_tool_calls` check sat after the try/except block, but the
+  "unknown tool" and "invalid arguments" branches used `continue` to skip
+  past it — a model that only ever called unknown tools would loop all the
+  way to `max_agent_rounds` instead of stopping at `max_invalid_tool_calls`.
+  Caught by `test_too_many_invalid_calls_terminates`. Fixed by adding the
+  check to both branches (with a comment explaining why, so a future new
+  branch doesn't reintroduce the same gap).
+- **`FakeMessagesListChatModel` + LangGraph `add_messages` interaction**: a
+  test that reused one `AIMessage` object across every cycle broke silently
+  — LangGraph assigns an id to a message the first time it's merged into
+  state (mutating the object in place), so the *same* object handed back on
+  the next round was treated as an in-place update, not a new append, and
+  the transcript stopped growing without any error. Fixed by generating
+  distinct message instances per round in the test helper, documented in
+  the test file so the pitfall doesn't get reintroduced.
+- **`agent_events` FK violation**: `run_agent` recorded the first `AgentEvent`
+  before any `AgentSession` row existed for a fresh session id. Fixed by
+  having `run_agent` call `SessionRepository.get_or_create` as its first
+  action, regardless of which caller (API route, test, script) invoked it.
+
+### Verified live (not just unit-tested)
+Ran `RUN_LIVE_LLM_TESTS=1 pytest -m live_llm -v -s` against real Claude:
+search → real tool call → real Postgres query → coherent formatted answer
+citing actual seeded appointment/scanner codes; and a live adversarial
+prompt asking the model to skip searching and act on a fabricated ID
+directly — the model declined per the system prompt, and grounding would
+have rejected it in code regardless if it hadn't.
+
 ### Next
-Phase 5: LLM provider abstraction (Anthropic default + OpenRouter
-alternative) with a `FakeChatModel` test double, then the tool registry and
-first real structured tool, then the LangGraph loop itself.
+Phase 8: remaining tool categories — command decomposition
+(`execute_command`), observation/read tools, explicit memory tools
+(`remember_preference`/`forget_preference`/`list_preferences`) with
+preference injection into agent context. Then LangGraph Postgres
+checkpointing (concept 36), then the frontend.
 
 ## Concepts covered so far
 - **31. PostgreSQL** — `docker-compose.yml`, live schema.

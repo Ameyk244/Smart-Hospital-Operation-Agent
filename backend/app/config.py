@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     max_agent_rounds: int = 6
     max_tool_calls: int = 10
     tool_timeout_seconds: int = 15
+    llm_timeout_seconds: int = 30
     max_invalid_tool_calls: int = 3
 
     # --- App ---

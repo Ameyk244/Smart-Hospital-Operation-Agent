@@ -89,3 +89,33 @@ async def seeded_session(db_session: AsyncSession) -> AsyncSession:
     await seed_hospital_data(db_session)
     await db_session.flush()
     return db_session
+
+
+@pytest_asyncio.fixture
+async def agent_session_factory():
+    """An `async_sessionmaker` (not a single session) bound to a real,
+    genuinely committed, seeded test database.
+
+    Why this is different from `db_session`/`seeded_session`: the agent's
+    tool_node opens its *own* fresh session per tool call (see
+    app/agent/graph.py's module docstring for why), so agent-loop tests need
+    multiple independent connections that all see the same committed data —
+    not one connection's uncommitted, rolled-back-at-the-end transaction.
+    """
+    admin_url, test_url = _test_database_url()
+    test_db_name = test_url.rsplit("/", 1)[-1]
+    await _ensure_test_database_exists(admin_url, test_db_name)
+
+    engine = create_async_engine(test_url, echo=False)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with session_factory() as seeding_session:
+            await seed_hospital_data(seeding_session)
+            await seeding_session.commit()
+
+        yield session_factory
+    finally:
+        await engine.dispose()
