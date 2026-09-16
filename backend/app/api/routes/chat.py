@@ -16,7 +16,7 @@ import uuid
 from typing import Literal
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.eligibility import check_eligibility
@@ -35,7 +35,11 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 class ChatRequest(BaseModel):
     text: str
-    session_id: str | None = None
+    # 36 chars: must fit AgentSession.id (sized for a UUID — see
+    # app/db/models/agent.py). Rejecting an oversized client-supplied id
+    # here, with a clean 422, is better than letting it reach the DB as an
+    # unhandled StringDataRightTruncationError.
+    session_id: str | None = Field(None, max_length=36)
 
 
 class ChatResponse(BaseModel):

@@ -50,6 +50,16 @@ async def test_session_id_is_reused_across_turns(client):
     assert second.json()["session_id"] == session_id
 
 
+async def test_oversized_session_id_is_rejected_with_a_clean_422(client):
+    """AgentSession.id is sized for a UUID (36 chars). A client-supplied
+    session_id longer than that must fail request validation, not reach the
+    database as an unhandled StringDataRightTruncationError."""
+    response = await client.post(
+        "/api/chat", json={"text": "list departments", "session_id": "x" * 100}
+    )
+    assert response.status_code == 422
+
+
 @pytest.mark.live_llm
 async def test_agent_path_via_http_with_live_model(agent_session_factory):
     """The full concept-58 chain through the real HTTP endpoint: request ->

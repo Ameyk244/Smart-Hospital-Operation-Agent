@@ -17,7 +17,7 @@ started**.
 | 3 | System prompting | Establishes the agent's role, tool set, and constraints | `app/agent/graph.py` (`SYSTEM_PROMPT`) | live tests show the model refusing to fabricate an ID per the prompt's instruction | **Done** |
 | 4 | Structured tool/function calling | Real typed tool calls, never string-parsed pseudo-tools | `app/agent/tools/base.py` (`to_openai_tool_dict`, Pydantic `args_schema`) | `tests/integration/test_agent_loop.py`, live tests | **Done** |
 | 5 | Model-driven tool selection | The LLM decides which tool(s) to call | `app/agent/graph.py` (`_make_agent_node`) | live tests (model chose `search_appointments` unprompted) | **Done** |
-| 6 | Multiple tools | Search, action, memory tools so far; observation + decomposition categories next | `app/agent/tools/{search,action,memory}_tools.py` | `test_agent_loop.py`, `test_memory_tools.py` | **Done** (3 of 7 categories implemented; rest pending) |
+| 6 | Multiple tools | All 7 tool categories from docs/ARCHITECTURE.md §4 now implemented | `app/agent/tools/{search,action,memory,command,observation}_tools.py` | `test_agent_loop.py`, `test_memory_tools.py`, `test_command_tools.py`, `test_observation_tools.py` | **Done** |
 | 7 | Tool registry | One place tools are declared and bound to the model | `app/agent/tools/base.py` (`TOOL_REGISTRY`) | — | **Done** |
 | 8 | Tool execution layer | Validates args, checks grounding, executes, times out | `app/agent/graph.py` (`_make_tool_node`) | `test_agent_loop.py` (timeout, validation, grounding all covered) | **Done** |
 | 9 | Tool results returned to the LLM | `ToolMessage` round-trip in the graph | `app/agent/graph.py` | `test_agent_loop.py::test_multi_round_search_then_reschedule` | **Done** |
@@ -40,9 +40,9 @@ started**.
 | 16 | Command parser | Regex/keyword grammar over a fixed command set | `app/parser/parser.py` | `tests/unit/test_parser.py` | **Done** |
 | 17 | Structured intents | `Command(name, args)`, not a free-text string | `app/execution/commands/base.py` | parser + command-runner tests | **Done** |
 | 18 | Command runner | Single execution chokepoint for both entrances | `app/execution/commands/base.py` (`CommandRunner`) | `tests/integration/test_command_runner.py` | **Done** |
-| 19 | Agent → existing execution path | Agent tools resolve to the same `Command`s the parser can build | `app/agent/tools/search_tools.py`, `action_tools.py` (both call `CommandRunner.execute`) | `test_agent_loop.py`, live tests | **Done** |
-| 20 | Natural-language decomposition | An `execute_command` tool that re-parses a model-identified fragment through the same parser | `app/agent/tools/command_tools.py` (pending) | — | Not started |
-| 21 | Shared command grammar | One `Command` vocabulary used by parser and agent tools alike | `app/execution/commands/*`, both entrances confirmed to hit the same handlers | `test_parser_to_runner.py` + `test_agent_loop.py` both exercise `search_appointments`/`reassign_scanner` | **Done** |
+| 19 | Agent → existing execution path | Agent tools resolve to the same `Command`s the parser can build | `app/agent/tools/{search,action,command,observation}_tools.py` (all call `CommandRunner.execute`) | `test_agent_loop.py`, `test_command_tools.py`, live tests | **Done** |
+| 20 | Natural-language decomposition | `execute_command` re-parses a model-identified fragment through the *same* deterministic parser | `app/agent/tools/command_tools.py` | `test_command_tools.py` (happy path + grounding chain), live-verified (model correctly issued two `execute_command` calls for a compound question) | **Done** |
+| 21 | Shared command grammar | One `Command` vocabulary used by parser and agent tools alike; the grammar has **no rule that produces a write command**, so `execute_command` structurally cannot be a mutation backdoor | `app/execution/commands/*`, `app/parser/parser.py` (5 rules, all reads) | `test_parser_to_runner.py`, `test_command_tools.py::test_execute_command_cannot_be_used_to_mutate_data` (adversarial: scripted model tries to phrase a mutation as a command, verified unchanged afterward) | **Done** |
 
 ## Grounding + safety
 
@@ -51,7 +51,7 @@ started**.
 | 22 | Grounding | Track which entity codes were actually exposed to a session | `app/agent/grounding.py` (`GroundingRegistry`), `SessionGroundedEntity` | `test_repositories.py`, `test_agent_loop.py` | **Done** |
 | 23 | Grounding-by-rejection | A fabricated ID must be rejected in code, not by prompting | `app/agent/grounding.py` (`require_grounded` raises `GroundingRejectedError`) | `test_agent_loop.py::test_grounding_rejects_fabricated_appointment_code` (scripted) + `test_live_agent.py::test_live_grounding_rejects_fabricated_scanner` (real model, adversarial prompt) | **Done** |
 | 24 | Argument validation | Tool args are Pydantic-validated before execution | `app/agent/tools/*` args_schema + `_make_tool_node`'s `model_validate` | `test_agent_loop.py::test_invalid_arguments_are_rejected` | **Done** |
-| 25 | Read vs. action/write tools | Different risk profiles, different validation depth | `ToolSpec.is_write`; write tools additionally call `require_grounded` | `search_tools.py` vs `action_tools.py` | **Done** |
+| 25 | Read vs. action/write tools | Different risk profiles, different validation depth | `ToolSpec.is_write`; write tools additionally call `require_grounded` — and so does the narrow `get_scanner_availability` read tool, proving grounding isn't only a write-path concern | `search_tools.py`/`command_tools.py` (reads) vs `action_tools.py`/`memory_tools.py` (writes); `observation_tools.py` (a grounded read) | **Done** |
 | 26 | Error-aware tools | Tool failures return structured errors the model can react to | `CommandError`/`CommandResult` → `ToolExecutionError` → `ToolMessage` | `test_command_runner.py` (modality/availability rejections), live tests | **Done** |
 
 ## Bounded agent execution
@@ -127,32 +127,32 @@ started**.
 | 53 | Real tool integration tests | Tools actually hit the real DB | `test_command_runner.py`, `test_agent_loop.py` (tools called through the real graph against real Postgres) | — | **Done** |
 | 54 | Parser → executor tests | Deterministic path, no LLM | `tests/integration/test_parser_to_runner.py` | — | **Done** |
 | 55 | Agent-loop tests | Multiple tool rounds, termination behavior | `test_agent_loop.py` | 7 tests covering happy path + 3 termination modes | **Done** |
-| 56 | Adversarial/failure tests | Fabricated IDs, malformed args, unknown tools | `test_agent_loop.py` (scripted) + `test_live_agent.py` (real model, adversarial prompt) | — | **Done** (DB-failure and malformed-JSON-from-model cases still pending) |
-| 57 | Live-model tests (gated) | Real API calls, opt-in only | `tests/integration/test_live_agent.py`, `tests/e2e/test_chat_api.py::test_agent_path_via_http_with_live_model`, gated by `RUN_LIVE_LLM_TESTS` | run manually, all passing against real Claude | **Done** |
+| 56 | Adversarial/failure tests | Fabricated IDs, malformed args, unknown tools, mutation-via-decomposition attempts, oversized client input | `test_agent_loop.py`, `test_command_tools.py::test_execute_command_cannot_be_used_to_mutate_data`, `test_observation_tools.py::test_get_scanner_availability_rejects_ungrounded_code`, `test_chat_api.py::test_oversized_session_id_is_rejected_with_a_clean_422` (scripted) + `test_live_agent.py` (real model, adversarial prompts) | — | **Done** (DB-failure and malformed-JSON-from-model cases still pending) |
+| 57 | Live-model tests (gated) | Real API calls, opt-in only | `tests/integration/test_live_agent.py` (4 tests: search, adversarial grounding, adversarial preference injection across two independent runs), `tests/e2e/test_chat_api.py::test_agent_path_via_http_with_live_model`, gated by `RUN_LIVE_LLM_TESTS` | run manually, all passing against real Claude | **Done** |
 | 58 | End-to-end tests | Natural request → parser or agent → tools → Postgres → observable result | `tests/e2e/test_command_api.py` (deterministic), `tests/e2e/test_chat_api.py` (deterministic + live agent via real HTTP) | — | **Done** |
 
 ---
 
-**Snapshot as of this update**: 58 backend tests (55 offline + 3 live-gated),
+**Snapshot as of this update**: 66 backend tests (62 offline + 4 live-gated),
 all passing; `ruff` clean. The full architecture diagram in
-docs/ARCHITECTURE.md §1 is now real and demonstrated end-to-end with a live
-model: a request either matches the deterministic parser and never touches
-the LLM, or falls through the eligibility gate into a LangGraph loop that
-does real structured tool calling, grounds every entity reference in the
-database, enforces rejection of fabricated IDs, and is bounded on rounds/
-tool-calls/invalid-calls — all reachable over real HTTP. All three memory
-concepts (conversation, preferences, checkpoint) are now implemented and
-kept separate except checkpointing, which is still just a dependency, not
-wired code.
+docs/ARCHITECTURE.md §1 is real and demonstrated end-to-end with a live
+model. **All 7 tool categories from the original inventory are now
+implemented**: deterministic commands, command decomposition
+(`execute_command`), search/retrieval (`search_appointments`), grounding
+(enforced throughout, including on reads), action/write
+(`reschedule_appointment`), observation (`get_scanner_availability`), and
+memory (`remember_preference`/`forget_preference`/`list_preferences`). All
+three memory concepts (conversation, preferences, checkpoint) are
+implemented and kept separate, except checkpointing, which is still just a
+dependency, not wired code.
 
 Real bugs caught and fixed by tests during this project so far (see
 `docs/PROGRESS.md` for detail): an invalid-call counter that silently never
-reached its threshold for two of three rejection branches, and a
+reached its threshold for two of three rejection branches, a
 `FakeMessagesListChatModel` object-identity pitfall that made LangGraph's
 message-merge silently truncate a scripted "looping model" test's
-transcript.
+transcript, and an unconstrained client-supplied `session_id` that would
+have hit the database as a raw 500 instead of a clean 422.
 
-**Remaining gaps going into the next phase**: tool category 2 (command
-decomposition) and category 6 (observation/read tools beyond search) aren't
-built yet; LangGraph checkpointing isn't wired in; and the frontend doesn't
-exist yet.
+**Remaining gaps going into the next phase**: LangGraph checkpointing
+(concept 36) isn't wired in yet, and the frontend doesn't exist yet.

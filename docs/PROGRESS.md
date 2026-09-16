@@ -262,10 +262,43 @@ the frontend.
   round trip, forget, injection-present, injection-absent. **58 backend
   tests total (55 offline + 3 live-gated), all passing, ruff clean.**
 
+## Status: Phase 8b complete — command decomposition + observation tool (all 7 tool categories done)
+
+### Completed
+- **Regression test preserved**: the ad-hoc live preference-injection check
+  from the previous phase is now a permanent gated test
+  (`test_live_preference_injection_across_separate_runs`) — two independent
+  `run_agent` calls sharing one session_id, verified live.
+- **`execute_command`** (`app/agent/tools/command_tools.py`, concepts 19/20/21):
+  lets the agent decompose a natural-language sub-instruction into the same
+  parser + `CommandRunner` the deterministic path uses. Architectural
+  property made explicit and tested: the deterministic grammar has **no
+  rule that builds a write `Command`**, so `execute_command` cannot be used
+  as a mutation backdoor regardless of phrasing — proven with an adversarial
+  test that scripts a model trying exactly that, then verifies via a second,
+  independent `execute_command` call that nothing changed.
+  Live-verified: asked a real compound question ("what departments exist,
+  and how many scanners are available"), the model correctly issued two
+  separate `execute_command` calls and synthesized both results.
+- **`get_scanner_availability`** (`app/agent/tools/observation_tools.py`,
+  the observation/read category): deliberately small — its purpose is
+  proving grounding-by-rejection applies to a *read* of a specific entity,
+  not only to writes. Looking up an invented scanner code is rejected the
+  same way rescheduling onto one would be.
+- **Real bug found via a schema constraint, fixed at the boundary**: writing
+  tests with descriptive session_id strings hit
+  `StringDataRightTruncationError` — `AgentSession.id` is `String(36)`,
+  sized for a UUID, and nothing validated a client-supplied `session_id`
+  before it reached the database. Fixed by adding `max_length=36` to
+  `ChatRequest.session_id`, turning an unhandled 500 into a clean 422;
+  added `test_oversized_session_id_is_rejected_with_a_clean_422`.
+- All 7 tool categories from docs/ARCHITECTURE.md §4's original inventory
+  are now implemented. 8 new tests. **66 backend tests total (62 offline +
+  4 live-gated), all passing, ruff clean.**
+
 ### Next
-Phase 8b: remaining tool categories — command decomposition
-(`execute_command`) and observation/read tools beyond search. Then
-LangGraph Postgres checkpointing (concept 36), then the frontend.
+Phase 9: LangGraph Postgres checkpointing (concept 36) — the piece flagged
+as most likely to eat unexpected time. Then the frontend.
 
 ## Concepts covered so far
 - **31. PostgreSQL** — `docker-compose.yml`, live schema.
