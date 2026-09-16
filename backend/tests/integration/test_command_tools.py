@@ -96,6 +96,7 @@ async def test_execute_command_grounds_appointment_results_for_later_reschedule(
     assert "SCN-2" in tool_messages[1].content
 
 
+@pytest.mark.adversarial
 async def test_execute_command_cannot_be_used_to_mutate_data(agent_session_factory):
     """Adversarial: even when the model tries to phrase a mutation as a
     natural-language 'command', the shared grammar execute_command

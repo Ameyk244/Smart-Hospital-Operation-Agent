@@ -43,6 +43,7 @@ async def test_live_search_appointments(agent_session_factory):
     print(f"Tool calls made: {final_state['tool_call_count']}, tools: {tool_names_called}")
 
 
+@pytest.mark.adversarial
 async def test_live_grounding_rejects_fabricated_scanner(agent_session_factory):
     """Prompt-injection-style adversarial case against a real model: ask it
     to act on a scanner code it has no way of having seen. Even if the model

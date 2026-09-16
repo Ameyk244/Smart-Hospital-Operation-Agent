@@ -383,11 +383,136 @@ rather than discovering gaps mid-build.
 - 6 new e2e tests. **72 backend tests total (68 offline + 4 live-gated),
   all passing, ruff clean.**
 
-### Next
-Phase 10: the frontend. Delegating to a subagent per the master prompt's
-§12 (clearly separated responsibility, the API surface is now stable) —
-explicit instruction to wire the trace panel to the real
-`/api/sessions/{id}/trace` endpoint, not a mocked one.
+## Status: Phase 10 complete — frontend (delegated, reviewed, committed)
+
+Delegated to a `general-purpose` subagent per the master prompt's §12 —
+first delegation of the project (see `SKILLS.md`'s delegation log for the
+full rationale and how it was reviewed before committing).
+
+### Completed
+- React + TypeScript + Vite, plain CSS, no state library, under `frontend/`.
+- Operations view: departments, scanners (type/status filters), appointments
+  (status/type/patient/scanner filters + a one-click "delayed MRI" preset),
+  patient search.
+- Chat panel: posts to `/api/chat`, persists `session_id` in `localStorage`,
+  restores the transcript from `GET /api/sessions/{id}/messages` on reload,
+  shows a `handled_by` badge (deterministic/agent/rejected) per message.
+- Trace panel: polls the real `GET /api/sessions/{id}/trace` after every
+  chat turn — no mocked data anywhere. Explicit "handled deterministically,
+  nothing to trace" empty state instead of a blank box.
+- Root `README.md` updated with frontend setup instructions.
+
+### Review before committing (not just "the subagent said it passed")
+Independently re-ran `npm run build` (clean), started both dev servers
+fresh in this session, fetched the frontend's HTML directly, hit every
+`/api/operations/*` endpoint the operations panels use and confirmed
+response shapes match `frontend/src/api/types.ts` field-for-field, sent a
+real chat message and confirmed the deterministic path produces an empty
+trace exactly as `TracePanel.tsx` expects, and read through the core
+components in full. The subagent's own verification (documented in its
+handback) additionally used a temporary Playwright install to drive the
+live agent path in a real browser — confirmed cleaned up (`package.json`
+has no leftover test tooling) before committing.
+
+**76 backend tests still passing** (72 offline + 4 live-gated, unchanged —
+this phase touched no backend code) — frontend work was genuinely
+independent, as expected.
+
+## Status: Final audit complete — project meets §19 completion criteria
+
+### What the audit found and fixed
+Went through `docs/CONCEPT_COVERAGE.md` row by row against the actual code
+rather than trusting the running tally, and closed the two remaining real
+gaps:
+
+- **Timeouts (concept 28)** was the one concept still marked Partial —
+  config existed and was code-reviewed but never exercised by a test that
+  genuinely forces a timeout. Added
+  `tests/integration/test_bounded_execution_timeouts.py`: a scripted chat
+  model with a real multi-second `sleep` exceeding `llm_timeout_seconds`
+  (confirms `terminated_reason="llm_timeout"`), and a temporarily-registered
+  slow tool handler exceeding `tool_timeout_seconds` (confirms a
+  `ToolMessage` reporting the timeout — not a hang — and that it doesn't
+  count against the invalid-call limit, since a slow tool isn't the
+  model's fault). Both pass. Concept 28 is now Done.
+- **The `adversarial` pytest marker** was defined in `pytest.ini` from the
+  very first phase but never actually applied to a single test — a real,
+  if minor, honesty gap between the stated testing strategy and what the
+  suite actually did. Tagged the 7 tests that are genuinely adversarial
+  (fabricated IDs, unknown tools, malformed args, a mutation-via-
+  decomposition attempt, oversized client input) across their existing
+  files, and added `tests/adversarial/README.md` documenting that
+  convention (adversarial tests live next to the feature they attack, not
+  segregated) since the directory itself is otherwise empty and would
+  otherwise look abandoned. `pytest -m adversarial` now runs exactly those
+  7 tests in isolation.
+
+### §19 completion criteria — checked against what's actually built, not
+### what was intended
+- ✅ Synthetic PostgreSQL, deterministic command path, trusted execution
+  layer all work independently of the LLM (no API key required for
+  `/api/commands` or the deterministic half of `/api/chat`).
+- ✅ Real LLM integration and structured tool calling — live-verified
+  repeatedly against Claude, not just unit-tested.
+- ✅ LangGraph loop, multi-tool reasoning, grounding-by-rejection — all
+  demonstrated live, including under an adversarial prompt.
+- ✅ Mutating tools perform real, transactional DB actions
+  (`reassign_scanner`, tested for atomicity on failure).
+- ✅ Context tracking and all three memory concepts work and stay
+  separated (conversation/`ConversationMessage`, preferences/`Preference`,
+  checkpoint/`AsyncPostgresSaver` — three distinct tables/mechanisms, never
+  merged, each independently tested and live-verified).
+- ✅ Bounded execution (rounds, tool calls, timeouts, invalid-call
+  termination) implemented and tested — all four, as of this audit.
+- ✅ Async used purposefully (every DB/LLM/tool call site), not
+  decoratively.
+- ✅ Observability produces a readable action-level trace — both as
+  structured logs and as a queryable API the frontend's trace panel reads
+  directly, with no chain-of-thought ever captured.
+- ✅ The UI demonstrates the whole system end-to-end (built, delegated,
+  independently re-verified — see `SKILLS.md`'s delegation log).
+- ✅ Offline, integration, and adversarial tests pass (74 passed, 4
+  skipped-pending-credentials in the normal run); the live-model path
+  exists, is gated, and has been verified repeatedly with real
+  credentials; E2E behavior verified both for the deterministic path and
+  the live agent path, through real HTTP, through the real frontend.
+- ✅ `docs/CONCEPT_COVERAGE.md` maps all 58 concepts to real
+  implementation/tests — 57 fully Done, 1 (provider abstraction) Done for
+  its default path with an honestly-documented untested alternate
+  (OpenRouter, no key ever supplied).
+- ✅ `docs/PROGRESS.md` and other docs explain the architecture and were
+  kept current throughout, not reconstructed at the end.
+- ✅ Git history is a legible, feature-by-feature record: 10 commits,
+  each a coherent phase, each with tests passing before the commit.
+
+### Lightweight security pass
+Grepped for the obvious risk patterns given this project's scope: no
+`dangerouslySetInnerHTML`/`eval`/`exec`/shell-out patterns anywhere in
+either codebase; no raw SQL string interpolation (SQLAlchemy's parameterized
+queries throughout, including the ORM-level `ilike` fuzzy patient search);
+secrets stay in gitignored `.env` files with `.env.example` templates only;
+CORS scoped to the dev frontend origin only; all API inputs Pydantic-
+validated including the `session_id` length fix from this same audit
+process. No authentication/authorization layer exists — deliberately, per
+the master prompt's explicit instruction against "complex auth platforms"
+for a project of this scope; this is a local learning project, not
+something meant to be exposed to the internet as-is.
+
+### Known, deliberate, documented gaps (not oversights)
+- OpenRouter provider path implemented but never live-tested (no key was
+  ever provided).
+- No genuine mid-transaction DB-failure injection test (e.g. simulating a
+  connection drop mid-`CommandRunner.execute`) — the transactional
+  correctness *logic* is tested (commit-on-success, rollback-on-failure),
+  but not against a real infrastructure failure.
+- No test specifically proving cross-turn pronoun-style reference
+  resolution ("reschedule *that* appointment") beyond what the grounding-
+  ledger and conversation-history tests already cover together.
+- The trace panel is polling-based, not streaming/SSE — a deliberate scope
+  decision (see `backend/app/api/routes/sessions.py`'s docstring), not a
+  missing feature.
+
+None of these block any of the master prompt's stated completion criteria.
 
 ## Concepts covered so far
 - **31. PostgreSQL** — `docker-compose.yml`, live schema.

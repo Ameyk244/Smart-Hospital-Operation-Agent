@@ -41,6 +41,7 @@ async def test_session_id_is_reused_across_turns(client):
     assert second.json()["session_id"] == session_id
 
 
+@pytest.mark.adversarial
 async def test_oversized_session_id_is_rejected_with_a_clean_422(client):
     """AgentSession.id is sized for a UUID (36 chars). A client-supplied
     session_id longer than that must fail request validation, not reach the

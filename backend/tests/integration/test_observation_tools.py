@@ -54,6 +54,7 @@ async def test_get_scanner_availability_after_search(agent_session_factory):
     assert '"code": "SCN-1"' in tool_messages[1].content
 
 
+@pytest.mark.adversarial
 async def test_get_scanner_availability_rejects_ungrounded_code(agent_session_factory):
     model = ScriptedChatModel(
         responses=[

@@ -22,8 +22,24 @@ actually used (updated as it happens, not reconstructed after the fact).
 
 | Phase | Task | Delegated? | Why |
 |---|---|---|---|
-| 0-4 (foundation, schema, seed data, deterministic parser, CommandRunner, thin vertical slice) | Architecture, schema, repositories, parser, execution layer | No — done directly by the lead session | This is the critical path everything else depends on; correctness and internal coherence matter more here than parallel throughput, and the pieces are too interdependent to safely split. |
-| Later phases (frontend, targeted test-suite expansion, focused audits) | TBD | TBD | Recorded here as it happens. |
+| 0-9 (foundation through checkpointing: schema, seed data, deterministic parser, CommandRunner, LLM provider, tools, grounding, memory, checkpointing, and the operations/trace API surface) | Everything backend | No — done directly by the lead session | This is the critical path everything else depends on; correctness and internal coherence matter more here than parallel throughput, and the pieces are too interdependent to safely split. |
+| 10 (frontend: operations view, chat panel, trace panel) | React/TypeScript UI build | **Yes** — one `general-purpose` subagent, run in the background | By this point the API surface (`/api/operations/*`, `/api/chat`, `/api/sessions/{id}/{trace,messages}`) was stable and tested (72 backend tests passing). Frontend work has no coupling to backend implementation details, only to the API contract — exactly the "clearly separated, independently verifiable" case these principles call for. Given a complete brief (exact endpoint shapes, required 3-panel layout, explicit instruction that the trace panel must poll the real trace endpoint rather than being mocked), it could build and self-verify the whole thing without the lead session's involvement mid-build. |
 
-This table will grow as the project proceeds past the initial vertical
-slice. See `docs/PROGRESS.md` for the actual implementation timeline.
+**How the frontend delegation was reviewed before committing** (not just
+"the subagent said it passed"): re-ran `npm run build` independently (clean,
+zero errors); started both the backend and frontend dev servers fresh in
+this session (not reusing the subagent's own run); fetched the dev server's
+HTML directly; hit every `/api/operations/*` endpoint the operations panels
+depend on and confirmed the response shapes matched `frontend/src/api/
+types.ts` field-for-field; sent a real chat message through `/api/chat` and
+confirmed the trace endpoint correctly returned an empty list (deterministic
+path) matching what `TracePanel.tsx`'s empty-state logic expects; read
+through `App.tsx`, `ChatPanel.tsx`, `TracePanel.tsx`, and `client.ts` in
+full before committing. The subagent's own report also documented
+independent verification (Playwright-driven browser screenshots against the
+live agent path, confirming a real grounded tool-call trace rendered
+correctly) — its devDependency was removed again before handing back, and
+that was checked too (`package.json` has no leftover test tooling).
+
+This table will grow as the project proceeds past this point. See
+`docs/PROGRESS.md` for the actual implementation timeline.

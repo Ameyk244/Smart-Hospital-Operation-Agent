@@ -88,6 +88,7 @@ async def test_multi_round_search_then_reschedule(agent_session_factory):
     assert "SCN-2" in tool_messages[1].content  # reschedule result confirms it
 
 
+@pytest.mark.adversarial
 async def test_grounding_rejects_fabricated_appointment_code(agent_session_factory):
     """Adversarial (concept 56): the model tries to reschedule an
     appointment code it never got from a search — must be rejected in code,
@@ -122,6 +123,7 @@ async def test_grounding_rejects_fabricated_appointment_code(agent_session_facto
     assert "never exposed" in tool_messages[0].content
 
 
+@pytest.mark.adversarial
 async def test_unknown_tool_name_is_rejected(agent_session_factory):
     model = ScriptedChatModel(
         responses=[
@@ -148,6 +150,7 @@ async def test_unknown_tool_name_is_rejected(agent_session_factory):
     assert "Unknown tool" in tool_messages[0].content
 
 
+@pytest.mark.adversarial
 async def test_invalid_arguments_are_rejected(agent_session_factory):
     """search_appointments's `limit` field requires 1-100 — a model
     supplying something outside that range should be caught by Pydantic
