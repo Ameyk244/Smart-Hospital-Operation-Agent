@@ -107,7 +107,13 @@ class AppointmentRepository:
         appointment.scheduled_end = new_end
         appointment.status = AppointmentStatus.SCHEDULED
         await self._session.flush()
-        return appointment
+        # Re-fetch rather than returning `appointment` directly: setting
+        # scanner_id does not update the already-loaded `.scanner`
+        # relationship object in memory, and this method's whole point is to
+        # hand back a row whose relationships reflect the new state.
+        refreshed = await self.get_by_code(code)
+        assert refreshed is not None
+        return refreshed
 
     async def set_status(self, code: str, status: AppointmentStatus) -> Appointment:
         appointment = await self.get_by_code(code)
