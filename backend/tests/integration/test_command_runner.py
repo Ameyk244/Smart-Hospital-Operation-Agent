@@ -51,6 +51,35 @@ async def test_list_delayed_appointments_mri(seeded_session):
     assert all(a["appointment_type"] == "MRI" for a in result.data)
 
 
+async def test_show_next_appointment(seeded_session):
+    """No execution-level test existed for this command before — only a
+    parser-level test confirming the right Command gets built (tests/unit/
+    test_parser.py). Found and closed while auditing why the deterministic
+    chat reply's generic "OK — ran X" message didn't reflect real data: this
+    command's handler had never actually been confirmed to return correct
+    results, independent of that formatting question."""
+    runner = CommandRunner(seeded_session)
+    result = await runner.execute(Command("show_next_appointment"))
+    assert result.success is True
+    assert result.data is not None
+    assert result.data["status"] == "SCHEDULED"
+    assert result.data["code"].startswith("APT-")
+    assert result.data["patient"]["name"]
+
+
+async def test_show_next_appointment_scoped_to_patient(seeded_session):
+    runner = CommandRunner(seeded_session)
+    # PT-1001 (Anthony Martin) has a future SCHEDULED CT appointment in the
+    # seed data, on top of their DELAYED MRI one — see app/seed/seed_data.py.
+    result = await runner.execute(
+        Command("show_next_appointment", {"patient_code": "PT-1001"})
+    )
+    assert result.success is True
+    assert result.data is not None
+    assert result.data["patient"]["code"] == "PT-1001"
+    assert result.data["status"] == "SCHEDULED"
+
+
 async def test_reassign_scanner_happy_path(seeded_session):
     runner = CommandRunner(seeded_session)
     delayed = await runner.execute(

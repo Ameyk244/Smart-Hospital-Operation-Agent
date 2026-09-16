@@ -23,6 +23,31 @@ async def test_deterministic_request_via_chat_endpoint(client):
     assert body["handled_by"] == "deterministic"
     assert len(body["data"]) == 4
     assert body["session_id"]
+    # The reply text itself must contain real data, not a generic
+    # acknowledgment — asserting only that `message` is non-empty would let
+    # a regression back to "OK — ran list_departments." pass silently, since
+    # that string is also non-empty. Every department name must actually be
+    # named in the reply the user reads.
+    for department in body["data"]:
+        assert department["name"] in body["message"]
+
+
+async def test_deterministic_scanner_search_reply_names_real_scanners(client):
+    response = await client.post("/api/chat", json={"text": "list scanners mri available"})
+    body = response.json()
+    assert body["handled_by"] == "deterministic"
+    assert body["data"]  # seed data guarantees >=1 AVAILABLE MRI scanner
+    for scanner in body["data"]:
+        assert scanner["code"] in body["message"]
+
+
+async def test_deterministic_show_next_appointment_reply_names_the_appointment(client):
+    response = await client.post("/api/chat", json={"text": "show next appointment"})
+    body = response.json()
+    assert body["handled_by"] == "deterministic"
+    assert body["data"] is not None
+    assert body["data"]["code"] in body["message"]
+    assert body["data"]["patient"]["name"] in body["message"]
 
 
 async def test_empty_request_is_rejected_before_reaching_the_agent(client):

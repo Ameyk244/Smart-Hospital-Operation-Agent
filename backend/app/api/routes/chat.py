@@ -50,10 +50,66 @@ class ChatResponse(BaseModel):
     terminated_reason: str | None = None
 
 
-def _format_deterministic_message(command: Command, success: bool, error: str | None) -> str:
+def _plural(n: int, noun: str) -> str:
+    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
+
+
+def _format_deterministic_message(command: Command, success: bool, error: str | None, data: object) -> str:
+    """Builds the deterministic path's chat reply from the command's actual
+    result, so it's as informative as the agent path's LLM-synthesized
+    reply — not a generic acknowledgment a user has to cross-reference
+    against the response's `data` field (or a separate UI panel) to
+    understand. Kept in the backend, not the frontend, so `/api/chat`'s
+    `message` is self-sufficient for any client, not just this project's own
+    UI.
+
+    One branch per command name reachable from `app/parser/parser.py`'s
+    grammar; the fallback line only exists as a safety net if that grammar
+    ever adds a rule without updating this function to match — it should
+    never actually fire in normal use, which is exactly why it's a fallback
+    and not a KeyError.
+    """
     if not success:
         return f"Couldn't complete that: {error}"
-    return f"OK — ran {command.name}."
+
+    if command.name == "list_departments":
+        departments = data or []
+        if not departments:
+            return "No departments found."
+        names = ", ".join(d["name"] for d in departments)
+        return f"Found {_plural(len(departments), 'department')}: {names}."
+
+    if command.name == "list_scanners":
+        scanners = data or []
+        if not scanners:
+            return "No scanners matched that filter."
+        parts = ", ".join(f"{s['code']} ({s['type']}, {s['status']})" for s in scanners)
+        return f"Found {_plural(len(scanners), 'scanner')}: {parts}."
+
+    if command.name == "search_patients":
+        patients = data or []
+        if not patients:
+            return "No patients matched that search."
+        names = ", ".join(f"{p['name']} ({p['code']})" for p in patients)
+        return f"Found {_plural(len(patients), 'patient')}: {names}."
+
+    if command.name == "show_next_appointment":
+        if not data:
+            return "No upcoming appointment found."
+        a = data
+        return (
+            f"Next appointment: {a['code']} for {a['patient']['name']} "
+            f"({a['appointment_type']}) at {a['scheduled_start']}, status {a['status']}."
+        )
+
+    if command.name == "list_delayed_appointments":
+        appointments = data or []
+        if not appointments:
+            return "No delayed appointments found."
+        codes = ", ".join(a["code"] for a in appointments)
+        return f"Found {_plural(len(appointments), 'delayed appointment')}: {codes}."
+
+    return f"OK — ran {command.name}."  # safety net; see docstring
 
 
 def get_checkpointer(request: Request):
@@ -89,7 +145,7 @@ async def chat(
         command = outcome.command
         assert command is not None
         result = await CommandRunner(db).execute(command)
-        message = _format_deterministic_message(command, result.success, result.error)
+        message = _format_deterministic_message(command, result.success, result.error, result.data)
         await session_repo.append_message(session_id, MessageRole.ASSISTANT, message)
         await db.commit()
         return ChatResponse(
