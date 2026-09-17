@@ -3,7 +3,9 @@
 Smart Hospital Operations Agent — a modular monolith. `backend/`
 (Python/FastAPI/PostgreSQL/LangGraph) and `frontend/` (React/TypeScript/
 Vite) are separate concerns. See `docs/ARCHITECTURE.md` for the full
-design and `docs/PROGRESS.md` for the implementation timeline.
+design, `docs/PROGRESS.md` for the implementation timeline, and
+`rulebook.md` for the current command, tool, routing, grounding, and manual
+verification reference.
 
 ## Destructive/DB actions require explicit approval, every time
 No subagent or session may run Alembic migrations, `DROP`/`ALTER`
@@ -49,7 +51,8 @@ minimum number actually needed.
 ## Process norms
 - Commit only when explicitly asked; never `git add -A`/`.` blindly —
   stage explicit file lists.
-- Never commit or push `rulebook.md`.
+- Keep `rulebook.md` tracked and update it when parser commands, agent tools,
+  read/write boundaries, routing, grounding, or seed reference data change.
 - One commit per coherent unit of work, with a message explaining why, not
   just what.
 - Update `docs/PROGRESS.md` (and `SKILLS.md` for delegation patterns) as
