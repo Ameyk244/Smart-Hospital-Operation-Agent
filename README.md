@@ -452,7 +452,7 @@ Blueprint: a FastAPI web service, a React static site, and managed PostgreSQL.
 1. Push this repository to GitHub.
 2. In Render, choose **New > Blueprint** and connect the repository.
 3. Enter `ANTHROPIC_API_KEY` when Render prompts for the secret value.
-4. Apply the Blueprint and open the `ameyk244-smart-hospital-web` URL.
+4. Apply the Blueprint and open the `ameyk244-agentic-smart-hospital-web` URL.
 
 The backend applies Alembic migrations whenever it starts and seeds synthetic
 hospital data only when the database is empty. Restarts and later deployments
