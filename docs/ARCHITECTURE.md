@@ -14,13 +14,13 @@ User request
      |
 Deterministic parser (regex/keyword grammar over a fixed command set)
      |
-  Known command? ----NO----> Agent eligibility gate --> LangGraph agent loop
-     |YES                                                      |
-     v                                                          v
-CommandRunner.execute(Command)  <----------------------  execute_command tool
-     |                                                    action tools (reschedule_*,
-     v                                                     assign_*) also resolve to
-Repository layer (SQLAlchemy) -- transaction -- PostgreSQL  a Command + CommandRunner
+  Known command? ----NO----> Domain-relevance gate --> Agent eligibility gate --> LangGraph agent loop
+     |YES                                                                                |
+     v                                                                                    v
+CommandRunner.execute(Command)  <--------------------------------------------------  execute_command tool
+     |                                                                                action tools (reschedule_*,
+     v                                                                                 assign_*) also resolve to
+Repository layer (SQLAlchemy) -- transaction -- PostgreSQL                             a Command + CommandRunner
 ```
 
 There is exactly **one** canonical implementation per hospital operation
@@ -29,6 +29,35 @@ Both the deterministic parser and the agent's tools produce a `Command` object
 and hand it to the same `CommandRunner.execute()`. Neither path re-implements
 business logic. This is directly testable: `tests/unit/test_command_runner.py`
 exercises the runner without any parser or LLM involved.
+
+A request that doesn't match a known command doesn't go straight to the LLM
+either. It first passes through the **domain-relevance gate**
+(`backend/app/agent/domain_gate.py`, concept 44's neighbor) — a small,
+synchronous, keyword-based check (no LLM call) that screens whether the
+request plausibly belongs to this hospital-operations domain at all, using
+vocabulary drawn from the parser's own grammar and the agent's tool
+descriptions (patients, appointments, scanners, departments, modalities,
+reschedule/find/remember-style verbs, and the seeded department/staff
+names). Only after that does the **agent eligibility gate**
+(`backend/app/agent/eligibility.py`, concept 44) run its own checks
+(non-empty, under the length cap). Both must pass before an LLM client is
+even constructed.
+
+These two gates are kept as separate components on purpose, and neither is
+folded into the regex parser above them. The parser's job is to *structure*
+already-known command shapes into a `Command`; the domain gate's job is only
+to *screen relevance* — notice when a request shares nothing at all with the
+domain — without trying to understand or structure it. Growing the parser
+into something that also does relevance screening (or vice versa) would
+blur a line the whole architecture depends on: known commands are
+deterministic and exact, everything else is the agent's job, and the gates
+in front of the agent are policy, not grammar. Keeping them separate also
+lets the domain gate stay deliberately conservative — false negatives
+(slightly off-topic text still reaching the agent, which can decline
+conversationally) are far cheaper than false positives (blocking a
+legitimate hospital request), and that bias is easier to reason about as
+its own small function than as a side effect of a parser or an eligibility
+check that also has other jobs.
 
 ## 2. Tech stack (decided, not a menu)
 

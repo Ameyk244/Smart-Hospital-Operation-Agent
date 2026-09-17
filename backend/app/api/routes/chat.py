@@ -2,8 +2,9 @@
 diagram in docs/ARCHITECTURE.md §1, both entrances included.
 
 Flow: parser first, always. A match executes through `CommandRunner`
-(no LLM touched). No match goes through the eligibility gate
-(`app/agent/eligibility.py`); if eligible, the LangGraph agent
+(no LLM touched). No match goes through the domain-relevance gate
+(`app/agent/domain_gate.py`) and then the eligibility gate
+(`app/agent/eligibility.py`); if both pass, the LangGraph agent
 (`app/agent/graph.py`) runs, with this session's prior turns as context.
 Every branch appends to `ConversationMessage` (concept 35) so the next
 request in the same session has continuity regardless of which path
@@ -19,6 +20,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent.domain_gate import check_domain_gate
 from app.agent.eligibility import check_eligibility
 from app.agent.entity_codes import extract_entity_codes
 from app.agent.graph import run_agent
@@ -163,6 +165,16 @@ async def chat(
             data=result.data if result.success else None,
             touched_entity_codes=extract_entity_codes(result.data) if result.success else [],
         )
+
+    domain_gate = check_domain_gate(request.text)
+    if not domain_gate.in_domain:
+        message = (
+            "I only handle hospital scheduling and operations — try asking "
+            "about appointments, scanners, patients, or your preferences."
+        )
+        await session_repo.append_message(session_id, MessageRole.ASSISTANT, message)
+        await db.commit()
+        return ChatResponse(session_id=session_id, handled_by="rejected", message=message)
 
     eligibility = check_eligibility(request.text)
     if not eligibility.eligible:

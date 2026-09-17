@@ -4,6 +4,8 @@ half offline (no LLM), plus one gated live-model round trip proving the
 conversation history persisted) with a real model.
 """
 
+from unittest.mock import patch
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -56,6 +58,23 @@ async def test_empty_request_is_rejected_before_reaching_the_agent(client):
     assert response.status_code == 200
     body = response.json()
     assert body["handled_by"] == "rejected"
+
+
+async def test_off_topic_request_is_rejected_without_ever_invoking_the_llm(client):
+    """The domain gate (extends concept 44) must reject an off-topic request
+    entirely on its own — proving not just the response shape but that
+    `get_default_chat_model` (and therefore no LLM client at all) is ever
+    constructed or called is the actual point: this protects API spend, and
+    a test that only checks `handled_by` wouldn't catch a regression where
+    the gate rejects *after* the model was already built."""
+    with patch("app.api.routes.chat.get_default_chat_model") as mock_get_model:
+        response = await client.post(
+            "/api/chat", json={"text": "what's the weather like today?"}
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["handled_by"] == "rejected"
+    mock_get_model.assert_not_called()
 
 
 async def test_session_id_is_reused_across_turns(client):
