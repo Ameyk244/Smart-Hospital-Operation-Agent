@@ -15,17 +15,50 @@ before any LLM client is constructed. It is intentionally conservative: the
 cost of a false positive (blocking something that should have reached the
 agent) is much higher than a false negative (letting something mildly
 off-topic through, which the agent can still decline conversationally). So
-this only rejects requests that share *no* vocabulary at all with the
+this only rejects requests that have no plausible connection to the
 system's real domain surface — anything ambiguous-but-plausibly-hospital-
 related passes.
+
+Presence-based matching had a real bypass (found and fixed this session):
+the original version of this gate rejected a request only if *no* domain
+vocabulary word appeared *anywhere* in the message — pure substring/word
+presence, with no requirement that the domain word have anything to do with
+the actual request. That let a message like `"What's 47 times 12? mri"`
+sail through: the substantive request ("what's 47 times 12") is pure
+off-topic arithmetic, complete on its own with a "?", and "mri" is a
+disconnected word tacked on afterward — but because "mri" is in the
+vocabulary, the whole message passed and would have triggered a real LLM
+call to do arbitrary off-topic work. Same shape as `"Write me a poem.
+patient"` or `"Book a flight to Chicago. appointment"` — a throwaway domain
+word appended to an already-complete, unrelated sentence.
+
+The fix moves from presence-based to intent-shape-based matching: instead of
+asking "does a domain word appear anywhere in the message", this now asks
+"does the request's primary clause combine a domain noun with a plausible
+action/question word, structurally connected — not just co-occurring
+somewhere in the message". Concretely: the vocabulary is split into two
+sets — `_DOMAIN_NOUNS` (entities/statuses/modalities/department & role
+names — the "what this is about" words) and `_ACTION_WORDS` (the
+verbs/question words already implicit in the parser grammar and tool
+surface — "what this is asking for" words) — and the message is split into
+clause fragments on sentence punctuation (`.`/`?`/`!`) and on the
+coordinating conjunctions "and"/"but". A request is in-domain only if at
+least one fragment contains *both* a domain noun and an action word. This
+keeps the same "no NLP parse, no ML" simplicity as before — it's still pure
+regex/set-membership — while requiring the domain word to actually be part
+of the clause doing the asking, not just present somewhere in the text. A
+domain noun with zero action word anywhere (`"mri"` alone as its own
+fragment) fails; an action word with zero domain noun anywhere continues to
+fail outright, exactly as before.
 
 The vocabulary below is pulled from the system's actual domain surface, not
 invented: `app/parser/parser.py`'s grammar (department/scanner/patient/
 appointment nouns, MRI/CT/XRAY modalities, AVAILABLE/IN_USE/MAINTENANCE
-statuses, delayed appointments), the agent's own tool descriptions and
-`args_schema` fields in `app/agent/tools/*.py` (search/reschedule/
-availability/preference verbs and nouns), and the seeded department names
-and staff roles in `app/seed/seed_data.py`.
+statuses, delayed appointments, and the list/show/search verbs of its own
+grammar), the agent's own tool descriptions and `args_schema` fields in
+`app/agent/tools/*.py` (search/reschedule/availability/preference verbs and
+nouns), and the seeded department names and staff roles in
+`app/seed/seed_data.py`.
 
 Why a separate component from the regex parser, not folded into it: the
 parser's job is to *structure* known commands into a `Command` object it can
@@ -36,6 +69,14 @@ two would turn the parser into an ever-growing pseudo-NLU layer (exactly
 what its own docstring says not to do) while also making this gate's "stay
 conservative" property harder to reason about independently.
 
+Defense in depth: this gate is not the only safeguard against the bundled-
+off-topic-request pattern. `app/agent/graph.py`'s `SYSTEM_PROMPT` also
+carries an explicit instruction for the agent to decline any non-hospital
+sub-task that reaches it despite this gate — see that module's docstring.
+This gate exists to save the API call in the common case; the prompt
+instruction exists for whatever phrasing this gate's simple rules don't
+catch.
+
 What calls it: `app/api/routes/chat.py`, for every request the parser
 already returned `matched=False` for, before `check_eligibility` runs.
 """
@@ -45,8 +86,15 @@ from dataclasses import dataclass
 
 _WORD_RE = re.compile(r"[a-z]+")
 
-# Real domain vocabulary, derived from (not invented alongside) the actual
-# command grammar and tool surface:
+# Splits a message into clause-ish fragments: sentence-ending punctuation
+# runs, or a standalone coordinating conjunction ("and"/"but"). Deliberately
+# simple — this is not sentence-boundary detection, just enough structure to
+# tell "two separate thoughts" apart from "one thought with several words".
+_FRAGMENT_SPLIT_RE = re.compile(r"[.!?]+|\b(?:and|but)\b")
+
+# Domain nouns: the "what this is about" vocabulary — entities, statuses,
+# modalities, seeded department names and staff roles. Derived from (not
+# invented alongside) the actual command grammar and tool surface:
 #   - app/parser/parser.py: department/scanner/patient/appointment nouns,
 #     _MODALITY_WORDS (mri/ct/xray), _STATUS_WORDS (available/in use/
 #     maintenance), "delayed appointments", "next appointment"
@@ -54,12 +102,11 @@ _WORD_RE = re.compile(r"[a-z]+")
 #     COMPLETED, CANCELLED), appointment_type, patient/department/scanner
 #   - app/agent/tools/action_tools.py: reschedule, scanner_code, new_start
 #   - app/agent/tools/observation_tools.py: scanner availability
-#   - app/agent/tools/command_tools.py: list/show/search/find verbs
-#   - app/agent/tools/memory_tools.py: remember/forget/prefer(ence)
+#   - app/agent/tools/memory_tools.py: preference/prefer(s)/preferred
 #   - app/seed/seed_data.py: department names (Radiology, Cardiology,
 #     Orthopedics, Emergency) and staff roles (Radiologist, Technologist,
 #     Nurse, Physician)
-_DOMAIN_VOCABULARY: frozenset[str] = frozenset(
+_DOMAIN_NOUNS: frozenset[str] = frozenset(
     {
         # Core entities / nouns
         "patient",
@@ -93,26 +140,14 @@ _DOMAIN_VOCABULARY: frozenset[str] = frozenset(
         "cancelled",
         "cancel",
         "busy",
-        # Actions/verbs across the parser grammar and tool descriptions
-        "list",
-        "show",
-        "search",
-        "find",
-        "reschedule",
-        "move",
-        "assign",
-        "remember",
-        "forget",
+        "availability",
+        # Preference vocabulary (memory_tools.py) — subject matter, not an
+        # action, even though it reads like a verb ("what do I prefer").
         "prefer",
         "prefers",
         "preferred",
         "preference",
         "preferences",
-        "check",
-        "free",
-        "schedule",
-        "scheduling",
-        "availability",
         # Seeded department names (app/seed/seed_data.py DEPARTMENTS)
         "radiology",
         "cardiology",
@@ -124,6 +159,49 @@ _DOMAIN_VOCABULARY: frozenset[str] = frozenset(
         "technologist",
         "nurse",
         "physician",
+    }
+)
+
+# Action/question words: the "what this is asking for" vocabulary. Pulled
+# from the same grammar/tool surface as the nouns above (list/show/search/
+# find/reschedule/move/assign/remember/forget/check are verbs the parser or
+# the tool surface already uses) plus the ordinary question words a request
+# phrased as a question needs (what/how/which/who/is/are/any/does/do/can/
+# will/could/would/when/where) — not hospital-specific on their own, but
+# only ever decisive here when paired with a genuine domain noun in the same
+# clause fragment, so their genericness doesn't loosen the gate.
+_ACTION_WORDS: frozenset[str] = frozenset(
+    {
+        # Verbs from the parser grammar / tool surface
+        "list",
+        "show",
+        "search",
+        "find",
+        "reschedule",
+        "move",
+        "assign",
+        "remember",
+        "forget",
+        "check",
+        "free",
+        "schedule",
+        "scheduling",
+        # Question words
+        "what",
+        "how",
+        "which",
+        "who",
+        "is",
+        "are",
+        "any",
+        "does",
+        "do",
+        "can",
+        "will",
+        "could",
+        "would",
+        "when",
+        "where",
     }
 )
 
@@ -139,18 +217,37 @@ def check_domain_gate(text: str) -> DomainGateResult:
     input is deliberately let through here (`in_domain=True`): that's
     `check_eligibility`'s job to reject as `empty_request`, not this gate's;
     keeping that one concern in one place matches how the parser/eligibility
-    split already works."""
+    split already works.
+
+    Two-stage check, both against the same normalized text:
+      1. If no domain noun appears anywhere in the message, reject
+         immediately (`reason="off_topic"`) — identical to the old
+         behavior, and still the common case (weather/poetry/math/flight
+         requests share zero vocabulary with the domain).
+      2. Otherwise, split the message into clause fragments and require at
+         least one fragment to contain both a domain noun *and* an action/
+         question word. A domain noun sitting alone in its own fragment,
+         disconnected from the actual (off-topic) request, fails this stage
+         (`reason="off_topic_disconnected"`) — this is what closes the
+         `"What's 47 times 12? mri"`-style bypass.
+    """
     stripped = text.strip()
     if not stripped:
         return DomainGateResult(in_domain=True)
 
     # Hyphens stripped (not turned into spaces) so a term like "x-ray" folds
     # into "xray" and still matches the vocabulary, instead of splitting into
-    # two unrelated words ("x", "ray").
-    words = set(_WORD_RE.findall(stripped.lower().replace("-", "")))
-    if words & _DOMAIN_VOCABULARY:
-        return DomainGateResult(in_domain=True)
-    return DomainGateResult(
-        in_domain=False,
-        reason="off_topic",
-    )
+    # two unrelated words ("x", "ray"). Other punctuation (.?!,) is left
+    # alone here since fragment splitting below depends on some of it.
+    normalized = stripped.lower().replace("-", "")
+
+    all_words = set(_WORD_RE.findall(normalized))
+    if not (all_words & _DOMAIN_NOUNS):
+        return DomainGateResult(in_domain=False, reason="off_topic")
+
+    for fragment in _FRAGMENT_SPLIT_RE.split(normalized):
+        words = set(_WORD_RE.findall(fragment))
+        if (words & _DOMAIN_NOUNS) and (words & _ACTION_WORDS):
+            return DomainGateResult(in_domain=True)
+
+    return DomainGateResult(in_domain=False, reason="off_topic_disconnected")

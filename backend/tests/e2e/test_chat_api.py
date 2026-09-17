@@ -77,6 +77,26 @@ async def test_off_topic_request_is_rejected_without_ever_invoking_the_llm(clien
     mock_get_model.assert_not_called()
 
 
+async def test_bundled_off_topic_request_is_rejected_without_ever_invoking_the_llm(client):
+    """Regression test for the real bypass found this session: the domain
+    gate used to pass any message containing a domain word *anywhere*, even
+    a disconnected word tacked onto an already-complete, unrelated
+    sentence/question — e.g. this exact text, "What's 47 times 12? mri",
+    would have reached the agent (and constructed a real LLM client) purely
+    because "mri" appears somewhere in the message, despite the actual
+    request being pure off-topic arithmetic. Proves both the response shape
+    and, like the sibling test above, that `get_default_chat_model` is never
+    constructed or called for it."""
+    with patch("app.api.routes.chat.get_default_chat_model") as mock_get_model:
+        response = await client.post(
+            "/api/chat", json={"text": "What's 47 times 12? mri"}
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["handled_by"] == "rejected"
+    mock_get_model.assert_not_called()
+
+
 async def test_session_id_is_reused_across_turns(client):
     first = await client.post("/api/chat", json={"text": "list departments"})
     session_id = first.json()["session_id"]

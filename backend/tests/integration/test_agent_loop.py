@@ -9,7 +9,7 @@ import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 
-from app.agent.graph import run_agent
+from app.agent.graph import SYSTEM_PROMPT, run_agent
 from app.config import Settings
 
 pytestmark = pytest.mark.integration
@@ -290,6 +290,56 @@ async def test_max_tool_calls_terminates_before_max_rounds(agent_session_factory
 
     assert final_state["terminated_reason"] == "max_tool_calls_exceeded"
     assert final_state["tool_call_count"] <= 2
+
+
+def test_system_prompt_instructs_agent_to_decline_non_hospital_bundled_subtasks():
+    """Layer 2 defense-in-depth (see `app/agent/domain_gate.py`'s docstring
+    and `SYSTEM_PROMPT` itself): even if a bundled off-topic request reaches
+    the agent despite the domain gate, the system prompt must instruct it to
+    decline the non-hospital part rather than accommodate it "to be
+    helpful". Asserting directly against the prompt text is the precise way
+    to prove the instruction exists — a scripted-response test alone can
+    only prove a *particular* scripted reply survives the loop unmodified
+    (see the next test), not that the model is ever actually told to
+    refuse."""
+    lowered = SYSTEM_PROMPT.lower()
+    assert "non-hospital" in lowered
+    assert "decline" in lowered
+    assert "not maximum helpfulness" in lowered
+
+
+async def test_bundled_off_topic_request_scripted_decline_survives_the_loop(agent_session_factory):
+    """Plumbing sanity check for Layer 2: even when a bundled/ambiguous
+    request reaches the agent (as if it had slipped past the domain gate), a
+    decline-style final reply isn't stripped, rewritten, or overridden
+    anywhere in the agent loop — it reaches the caller verbatim. This
+    scripts the model's response rather than relying on a live call always
+    complying (which would require a real API call, not a mock) — it only
+    proves the loop's plumbing doesn't silently interfere with a decline
+    reply, and that the refusal instruction genuinely reaches the model as
+    part of the messages it's invoked with, not just defined in source."""
+    decline_reply = (
+        "I can tell you about delayed MRI appointments, but I can't calculate "
+        "47 times 12 — that's outside hospital scheduling, so I'm declining "
+        "that part of the request."
+    )
+    model = ScriptedChatModel(responses=[AIMessage(content=decline_reply)])
+
+    final_state = await run_agent(
+        session_id="test-bundled-decline",
+        user_text="What's 47 times 12, and how many delayed MRI appointments are there?",
+        chat_model=model,
+        session_factory=agent_session_factory,
+        settings=_settings(),
+    )
+
+    assert final_state["terminated_reason"] is None
+    assert final_state["messages"][-1].content == decline_reply
+    # messages[0] is the system message actually handed to the model (no
+    # checkpointer is used in this test, so run_agent's fallback path always
+    # puts it first) — confirms the refusal instruction is really part of
+    # what the model receives, not just present in the source file.
+    assert final_state["messages"][0].content == SYSTEM_PROMPT
 
 
 async def test_too_many_invalid_calls_terminates(agent_session_factory):
