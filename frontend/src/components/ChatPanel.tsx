@@ -1,9 +1,30 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { api } from "../api/client";
-import type { HandledBy } from "../api/types";
+import type { AgentEvent, HandledBy } from "../api/types";
+import type { TraceState } from "../hooks/useTrace";
 
-const SESSION_STORAGE_KEY = "shoa_session_id";
+// Active-session pointer: sessionStorage (not localStorage) on purpose —
+// this is what makes "reload keeps the chat, restart starts fresh" work
+// with no custom same-tab-vs-new-tab detection. sessionStorage persists
+// across a same-tab reload and is cleared the moment the tab closes.
+const ACTIVE_SESSION_KEY = "shoa_session_id";
+
+// The full rendered message list (badges included) for the active session,
+// cached alongside the pointer above. /api/sessions/{id}/messages can
+// restore *content* after a reload but was never told handled_by, so it
+// can't bring badges back — this cache is what lets a same-tab reload look
+// pixel-identical, badges included. Also cleared when the tab closes.
+const CACHED_MESSAGES_KEY = "shoa_cached_messages";
+
+// Index of past sessions, deliberately in localStorage so it survives a
+// full browser restart — this is the "Previous chats" list. Never
+// auto-loaded; only ever opened by the explicit control below.
+const PREVIOUS_SESSIONS_KEY = "shoa_previous_sessions";
+
+const PREVIEW_MAX_LEN = 80;
 
 interface DisplayMessage {
   key: string;
@@ -11,6 +32,20 @@ interface DisplayMessage {
   content: string;
   handledBy?: HandledBy;
   terminatedReason?: string | null;
+  // Set once an agent-routed turn finishes; renders as a collapsed one-line
+  // summary under the badge (see Task D in the brief this file implements).
+  progressSummary?: string;
+}
+
+interface PreviousSessionEntry {
+  session_id: string;
+  started_at: string;
+  last_message_preview: string;
+}
+
+interface CachedMessages {
+  sessionId: string;
+  messages: DisplayMessage[];
 }
 
 const HANDLED_BY_LABEL: Record<HandledBy, string> = {
@@ -24,29 +59,131 @@ function HandledByBadge({ handledBy }: { handledBy?: HandledBy }) {
   return <span className={`handled-by-badge handled-by-${handledBy}`}>{HANDLED_BY_LABEL[handledBy]}</span>;
 }
 
-interface ChatPanelProps {
-  sessionId: string | null;
-  onSessionId: (id: string) => void;
-  onTurnComplete: () => void;
+function truncate(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
-export function ChatPanel({ sessionId, onSessionId, onTurnComplete }: ChatPanelProps) {
+function readPreviousSessions(): PreviousSessionEntry[] {
+  try {
+    const raw = localStorage.getItem(PREVIOUS_SESSIONS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as PreviousSessionEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function appendPreviousSession(sessionId: string, firstMessage: string): PreviousSessionEntry[] {
+  const list = readPreviousSessions();
+  list.unshift({
+    session_id: sessionId,
+    started_at: new Date().toISOString(),
+    last_message_preview: truncate(firstMessage, PREVIEW_MAX_LEN),
+  });
+  try {
+    localStorage.setItem(PREVIOUS_SESSIONS_KEY, JSON.stringify(list));
+  } catch {
+    // localStorage full/unavailable — the previous-chats index is a
+    // nice-to-have, not something worth failing the send over.
+  }
+  return list;
+}
+
+function readCachedMessages(sessionId: string): DisplayMessage[] | null {
+  try {
+    const raw = sessionStorage.getItem(CACHED_MESSAGES_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as CachedMessages;
+    if (parsed.sessionId !== sessionId || !Array.isArray(parsed.messages)) return null;
+    return parsed.messages;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedMessages(sessionId: string, messages: DisplayMessage[]): void {
+  try {
+    sessionStorage.setItem(CACHED_MESSAGES_KEY, JSON.stringify({ sessionId, messages }));
+  } catch {
+    // sessionStorage full/unavailable — worst case a reload falls back to
+    // fetching /messages (without badges) instead of hard-failing here.
+  }
+}
+
+// Maps a raw AgentEvent (see backend/app/agent/graph.py for the event_type
+// values this switches on) to the short human status line shown while the
+// agent path is in flight. Kept as a pure function so Task D's tests can
+// exercise it directly against fixture events.
+function describeTraceEvent(e: AgentEvent): string {
+  switch (e.event_type) {
+    case "agent_invoked":
+      return "Invoking agent…";
+    case "tool_requested":
+      return e.tool_name ? `Running ${e.tool_name}…` : "Running tool…";
+    case "tool_executed":
+      return e.tool_name ? `Ran ${e.tool_name}` : "Tool finished";
+    case "llm_response":
+      return "Thinking…";
+    case "llm_timeout":
+      return "Retrying…";
+    case "max_rounds_exceeded":
+      return "Wrapping up…";
+    default:
+      return "Working…";
+  }
+}
+
+function summarizeToolCalls(newEvents: AgentEvent[]): string {
+  const toolCalls = newEvents.filter((e) => e.event_type === "tool_executed").length;
+  return toolCalls > 0 ? `✓ ${toolCalls} tool call${toolCalls === 1 ? "" : "s"}` : "✓ done";
+}
+
+interface ChatPanelProps {
+  sessionId: string | null;
+  onSessionId: (id: string | null) => void;
+  onTurnComplete: (touchedEntityCodes: string[]) => void;
+  // Compact in-chat progress indicator (Task D) reads from this instead of
+  // polling the trace endpoint through a second, independent path.
+  trace: TraceState;
+}
+
+export function ChatPanel({ sessionId, onSessionId, onTurnComplete, trace }: ChatPanelProps) {
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [previousSessions, setPreviousSessions] = useState<PreviousSessionEntry[]>(() =>
+    readPreviousSessions(),
+  );
+  const [liveStatus, setLiveStatus] = useState<string | null>(null);
   const restoredRef = useRef(false);
   const listEndRef = useRef<HTMLDivElement | null>(null);
+  // How many trace events already existed for this session before the
+  // in-flight turn started — everything after this index in a later
+  // /trace fetch belongs to *this* turn, not an earlier one.
+  const baselineEventCountRef = useRef(0);
 
-  // On mount: if a session_id is already stored from a previous page load,
-  // restore the transcript and let the trace panel know there's a session
-  // to fetch a trace for.
+  // On mount: sessionStorage only holds a session_id if this is the same
+  // tab reloading (see ACTIVE_SESSION_KEY's docs above) — a genuinely new
+  // tab/app-restart finds nothing here and starts empty, which is exactly
+  // the desired behavior. Prefer the cached message list (badges intact)
+  // and only fall back to the network when there's no cache to hydrate
+  // from, e.g. the pointer survived but the cache didn't.
   useEffect(() => {
     if (restoredRef.current) return;
     restoredRef.current = true;
-    const stored = localStorage.getItem(SESSION_STORAGE_KEY);
+    const stored = sessionStorage.getItem(ACTIVE_SESSION_KEY);
     if (!stored) return;
     onSessionId(stored);
+
+    const cached = readCachedMessages(stored);
+    if (cached) {
+      setMessages(cached);
+      onTurnComplete([]); // restoring history touches nothing new
+      return;
+    }
+
     api
       .getMessages(stored)
       .then((history) => {
@@ -56,23 +193,55 @@ export function ChatPanel({ sessionId, onSessionId, onTurnComplete }: ChatPanelP
             role: m.role === "USER" ? "user" : "assistant",
             content: m.content,
             // handled_by isn't part of stored conversation history — only
-            // known for messages sent in this browser session.
+            // known for messages sent/cached live in this browser tab.
           })),
         );
-        onTurnComplete();
+        onTurnComplete([]);
       })
       .catch((err) => {
         // Stored session no longer exists server-side (e.g. fresh DB) —
         // start clean rather than failing silently forever.
         console.warn("Could not restore session, starting fresh:", err);
-        localStorage.removeItem(SESSION_STORAGE_KEY);
+        sessionStorage.removeItem(ACTIVE_SESSION_KEY);
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Keep the cached message list in sync with the active session on every
+  // change, so a same-tab reload always has an up-to-date, badge-carrying
+  // snapshot to hydrate from.
+  useEffect(() => {
+    if (!sessionId) return;
+    writeCachedMessages(sessionId, messages);
+  }, [sessionId, messages]);
+
   useEffect(() => {
     listEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages]);
+
+  // While a request is in flight and we already know the session id (i.e.
+  // this isn't the very first message of a brand new session), poll the
+  // same trace endpoint TracePanel/useTrace uses so the compact status
+  // line below can show real intermediate progress — see useTrace.ts's
+  // docstring for why polling (not streaming) is the real mechanism here.
+  useEffect(() => {
+    if (!sending || !sessionId) return;
+    const activeSessionId = sessionId;
+    const baseline = baselineEventCountRef.current;
+    const interval = window.setInterval(() => {
+      api
+        .getTrace(activeSessionId)
+        .then((events) => {
+          const newEvents = events.slice(baseline);
+          if (newEvents.length === 0) return;
+          setLiveStatus(describeTraceEvent(newEvents[newEvents.length - 1]));
+        })
+        .catch(() => {
+          // Best-effort polling — a transient failure just skips this tick.
+        });
+    }, 700);
+    return () => window.clearInterval(interval);
+  }, [sending, sessionId]);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -83,13 +252,28 @@ export function ChatPanel({ sessionId, onSessionId, onTurnComplete }: ChatPanelP
     setInput("");
     setSending(true);
     setError(null);
+    setLiveStatus("Invoking agent…");
+    baselineEventCountRef.current = sessionId ? trace.events.length : 0;
 
     try {
       const res = await api.sendChat(text, sessionId ?? undefined);
       if (!sessionId) {
-        localStorage.setItem(SESSION_STORAGE_KEY, res.session_id);
+        sessionStorage.setItem(ACTIVE_SESSION_KEY, res.session_id);
         onSessionId(res.session_id);
+        setPreviousSessions(appendPreviousSession(res.session_id, text));
       }
+
+      let progressSummary: string | undefined;
+      if (res.handled_by === "agent") {
+        try {
+          const finalEvents = await api.getTrace(res.session_id);
+          progressSummary = summarizeToolCalls(finalEvents.slice(baselineEventCountRef.current));
+        } catch {
+          // Final trace refresh is a nice-to-have for the collapsed
+          // summary — don't let it block showing the actual answer.
+        }
+      }
+
       setMessages((prev) => [
         ...prev,
         {
@@ -98,19 +282,73 @@ export function ChatPanel({ sessionId, onSessionId, onTurnComplete }: ChatPanelP
           content: res.message,
           handledBy: res.handled_by,
           terminatedReason: res.terminated_reason,
+          progressSummary,
         },
       ]);
+      onTurnComplete(res.touched_entity_codes);
     } catch (err) {
       setError(String(err));
+      onTurnComplete([]); // a failed request touched nothing
     } finally {
       setSending(false);
-      onTurnComplete();
+      setLiveStatus(null);
+    }
+  }
+
+  function handleNewChat() {
+    sessionStorage.removeItem(ACTIVE_SESSION_KEY);
+    sessionStorage.removeItem(CACHED_MESSAGES_KEY);
+    setMessages([]);
+    setError(null);
+    onSessionId(null);
+    onTurnComplete([]);
+  }
+
+  async function handleLoadPreviousSession(id: string) {
+    setError(null);
+    try {
+      const history = await api.getMessages(id);
+      setMessages(
+        history.map((m, i) => ({
+          key: `restored-${i}-${m.created_at}`,
+          role: m.role === "USER" ? "user" : "assistant",
+          content: m.content,
+          // Same API limitation as the mount-time fallback above: this
+          // endpoint never had handled_by to give back, so older sessions
+          // loaded this way won't show badges. Pre-existing, not fixed here.
+        })),
+      );
+      sessionStorage.setItem(ACTIVE_SESSION_KEY, id);
+      onSessionId(id);
+      onTurnComplete([]);
+    } catch (err) {
+      setError(String(err));
     }
   }
 
   return (
     <div className="chat-panel">
-      <h2>Chat</h2>
+      <div className="chat-panel-header">
+        <h2>Chat</h2>
+        <button type="button" className="chat-new-button" onClick={handleNewChat}>
+          New chat
+        </button>
+      </div>
+      {previousSessions.length > 0 && (
+        <details className="chat-previous-sessions">
+          <summary>Previous chats ({previousSessions.length})</summary>
+          <ul>
+            {previousSessions.map((s) => (
+              <li key={s.session_id}>
+                <button type="button" onClick={() => handleLoadPreviousSession(s.session_id)}>
+                  <span className="chat-previous-preview">{s.last_message_preview}</span>
+                  <span className="chat-previous-date">{new Date(s.started_at).toLocaleString()}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
       <div className="chat-messages">
         {messages.length === 0 && (
           <p className="muted">
@@ -124,12 +362,27 @@ export function ChatPanel({ sessionId, onSessionId, onTurnComplete }: ChatPanelP
               <span className="chat-role">{m.role === "user" ? "You" : "Assistant"}</span>
               <HandledByBadge handledBy={m.handledBy} />
             </div>
-            <div className="chat-message-content">{m.content}</div>
+            {m.progressSummary && <div className="chat-progress-summary">{m.progressSummary}</div>}
+            <div className="chat-message-content">
+              {m.role === "assistant" ? (
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+              ) : (
+                m.content
+              )}
+            </div>
             {m.terminatedReason && (
               <div className="chat-terminated-reason">terminated: {m.terminatedReason}</div>
             )}
           </div>
         ))}
+        {sending && (
+          <div className="chat-message chat-message-assistant chat-message-pending">
+            <div className="chat-message-meta">
+              <span className="chat-role">Assistant</span>
+            </div>
+            <div className="chat-progress-line">{liveStatus ?? "Invoking agent…"}</div>
+          </div>
+        )}
         <div ref={listEndRef} />
       </div>
       {error && <p className="error">{error}</p>}
