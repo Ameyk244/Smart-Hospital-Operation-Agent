@@ -1,13 +1,9 @@
-import { useEffect, useState } from "react";
-import { api } from "../api/client";
 import type { AgentEvent } from "../api/types";
+import type { TraceState } from "../hooks/useTrace";
 
 interface TracePanelProps {
   sessionId: string | null;
-  // Bumped by the parent after every completed chat turn so this panel
-  // re-fetches — the backend's trace endpoint is polling-based by design
-  // (see backend/app/api/routes/sessions.py's module docstring).
-  refreshToken: number;
+  trace: TraceState;
 }
 
 function formatEvent(e: AgentEvent): string {
@@ -19,42 +15,11 @@ function formatEvent(e: AgentEvent): string {
   return parts.join(" · ");
 }
 
-export function TracePanel({ sessionId, refreshToken }: TracePanelProps) {
-  const [events, setEvents] = useState<AgentEvent[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [hasFetched, setHasFetched] = useState(false);
-
-  useEffect(() => {
-    if (!sessionId) {
-      setEvents([]);
-      setHasFetched(false);
-      return;
-    }
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    api
-      .getTrace(sessionId)
-      .then((data) => {
-        if (!cancelled) {
-          setEvents(data);
-          setHasFetched(true);
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) setError(String(err));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-    // refreshToken intentionally triggers a re-fetch even though it isn't
-    // read in the body — it changes once per completed chat turn.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, refreshToken]);
+// Purely a renderer now — the fetch/poll lives in ../hooks/useTrace, shared
+// with ChatPanel's compact in-chat progress indicator so there's exactly
+// one place this project talks to GET /api/sessions/{id}/trace.
+export function TracePanel({ sessionId, trace }: TracePanelProps) {
+  const { events, loading, error, hasFetched } = trace;
 
   return (
     <div className="trace-panel">

@@ -60,6 +60,10 @@ export interface ChatResponse {
   message: string;
   data: unknown | null;
   terminated_reason: string | null;
+  // Every entity code (appointment/scanner/patient/department) this turn's
+  // command or tool results touched — used to briefly highlight the
+  // corresponding rows in the Operations panel.
+  touched_entity_codes: string[];
 }
 
 // --- /api/sessions/{id}/messages ---
