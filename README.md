@@ -443,3 +443,23 @@ The expected result is:
 - The third request performs the validated rescheduling write.
 - The remaining questions are answered using conversation context.
 - No follow-up should be incorrectly rejected as off-topic.
+
+## Deploying to Render
+
+The included `render.yaml` provisions the complete application as a Render
+Blueprint: a FastAPI web service, a React static site, and managed PostgreSQL.
+
+1. Push this repository to GitHub.
+2. In Render, choose **New > Blueprint** and connect the repository.
+3. Enter `ANTHROPIC_API_KEY` when Render prompts for the secret value.
+4. Apply the Blueprint and open the `ameyk244-smart-hospital-web` URL.
+
+The backend applies Alembic migrations whenever it starts and seeds synthetic
+hospital data only when the database is empty. Restarts and later deployments
+therefore preserve existing records. If Render assigns a different frontend
+hostname, set the backend's `CORS_ORIGINS` variable to that exact HTTPS origin
+and redeploy the backend.
+
+This Blueprint uses Render's free plans for demonstration. The backend can
+sleep after 15 idle minutes, and the free PostgreSQL database expires after 30
+days; choose paid plans before treating the deployment as persistent.

@@ -27,11 +27,11 @@ from app.config import get_settings  # noqa: E402
 from app.observability.logging_config import configure_logging  # noqa: E402
 
 configure_logging()
+settings = get_settings()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    settings = get_settings()
     async with build_checkpointer(settings.database_url) as checkpointer:
         app.state.checkpointer = checkpointer
         yield
@@ -41,7 +41,7 @@ app = FastAPI(title="Smart Hospital Operations Agent", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=settings.allowed_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )

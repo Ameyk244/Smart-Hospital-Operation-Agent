@@ -10,8 +10,14 @@ import type {
 
 // Configurable via VITE_API_BASE_URL (see .env.example); defaults to the
 // backend's dev port per docs/ARCHITECTURE.md.
-const API_BASE_URL: string =
-  (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "http://localhost:8000";
+const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL as string | undefined;
+const API_BASE_URL: string = configuredApiBaseUrl
+  ? (
+      /^https?:\/\//i.test(configuredApiBaseUrl)
+        ? configuredApiBaseUrl
+        : `https://${configuredApiBaseUrl}`
+    ).replace(/\/$/, "")
+  : "http://localhost:8000";
 
 class ApiError extends Error {
   status: number;

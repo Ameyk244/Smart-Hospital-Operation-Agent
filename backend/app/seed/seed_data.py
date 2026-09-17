@@ -17,11 +17,12 @@ touches agent_sessions/conversation_messages/preferences/agent_events, which
 belong to a different lifecycle).
 """
 
+import argparse
 import asyncio
 import random
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import delete
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.hospital import (
@@ -268,13 +269,34 @@ async def seed(session: AsyncSession) -> dict[str, int]:
     }
 
 
-async def main() -> None:
+async def main(*, if_empty: bool = False) -> None:
     async with async_session_factory() as session:
-        async with session.begin():
-            counts = await seed(session)
-    print("Seeded:", counts)
+        if if_empty:
+            department_count = await session.scalar(
+                select(func.count()).select_from(Department)
+            )
+            await session.rollback()
+            if department_count:
+                print("Database already contains hospital data; seed skipped.")
+                counts = None
+            else:
+                async with session.begin():
+                    counts = await seed(session)
+        else:
+            async with session.begin():
+                counts = await seed(session)
+    if counts is not None:
+        print("Seeded:", counts)
     await engine.dispose()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(
+        description="Seed reproducible synthetic hospital data."
+    )
+    parser.add_argument(
+        "--if-empty",
+        action="store_true",
+        help="Seed only when no departments exist; suitable for service startup.",
+    )
+    asyncio.run(main(if_empty=parser.parse_args().if_empty))
