@@ -87,3 +87,52 @@ def test_blank_input_defers_to_eligibility_gate():
     # (empty_request), not this gate's — must not be flagged off_topic here.
     result = check_domain_gate("   ")
     assert result.in_domain is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "yes",
+        "What did you just change?",
+        "What happened?",
+        "Do that again",
+        "the first one",
+    ],
+)
+def test_contextual_followups_pass_after_hospital_request(text):
+    result = check_domain_gate(
+        text,
+        prior_user_messages=["Find the delayed MRI appointments"],
+    )
+    assert result.in_domain is True
+
+
+@pytest.mark.parametrize("text", ["yes", "What happened?", "Do that again"])
+def test_contextual_phrases_without_hospital_history_are_rejected(text):
+    result = check_domain_gate(text)
+    assert result.in_domain is False
+
+
+def test_prior_off_topic_request_does_not_create_hospital_context():
+    result = check_domain_gate(
+        "yes",
+        prior_user_messages=["what's the weather like today"],
+    )
+    assert result.in_domain is False
+
+
+def test_context_does_not_reopen_disconnected_domain_word_bypass():
+    result = check_domain_gate(
+        "What's 47 times 12? mri",
+        prior_user_messages=["Find the delayed MRI appointments"],
+    )
+    assert result.in_domain is False
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["Why did you choose that scanner?", "What is its new status?"],
+)
+def test_explicit_hospital_followups_pass_without_context_override(text):
+    result = check_domain_gate(text)
+    assert result.in_domain is True

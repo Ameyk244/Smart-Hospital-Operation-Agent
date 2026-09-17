@@ -166,7 +166,15 @@ async def chat(
             touched_entity_codes=extract_entity_codes(result.data) if result.success else [],
         )
 
-    domain_gate = check_domain_gate(request.text)
+    # Contextual replies such as "yes" or "what changed?" have no hospital
+    # noun of their own. Only prior user messages are supplied: the canned
+    # rejection response contains hospital words and must not create context.
+    prior_user_messages = [
+        row.content for row in prior_rows if row.role == MessageRole.USER
+    ]
+    domain_gate = check_domain_gate(
+        request.text, prior_user_messages=prior_user_messages
+    )
     if not domain_gate.in_domain:
         message = (
             "I only handle hospital scheduling and operations — try asking "

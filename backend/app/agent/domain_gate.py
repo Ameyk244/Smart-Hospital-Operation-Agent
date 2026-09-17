@@ -92,6 +92,29 @@ _WORD_RE = re.compile(r"[a-z]+")
 # tell "two separate thoughts" apart from "one thought with several words".
 _FRAGMENT_SPLIT_RE = re.compile(r"[.!?]+|\b(?:and|but)\b")
 
+# Short replies that only make sense in light of a recent turn. These are
+# intentionally narrow: context may admit a confirmation or a pronoun-based
+# follow-up, but it must not turn an unrelated new request into an agent call.
+_CONTEXT_FOLLOWUP_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^(?:yes|yep|yeah|sure|okay|ok|no|nope)(?:\s+please)?$"),
+    re.compile(r"^(?:please\s+)?(?:go ahead|do it|proceed|confirm|cancel|stop)$"),
+    re.compile(
+        r"^(?:what|why|how)(?:\s+\w+){0,6}\s+"
+        r"(?:happen|happened|change|changed|do|did|find|found)$"
+    ),
+    re.compile(r"^(?:why|how come)$"),
+    re.compile(r"^(?:do|try|run)\s+(?:it|that|this)(?:\s+again)?$"),
+    re.compile(r"^(?:explain|show|tell)\s+(?:it|that|this)(?:\s+again)?$"),
+    re.compile(
+        r"^(?:what|which)\s+(?:about\s+)?" r"(?:it|that|this|them|those|one|ones)$"
+    ),
+    re.compile(
+        r"^(?:(?:tell|show)\s+me\s+(?:more\s+)?about\s+)?(?:the\s+)?"
+        r"(?:first|second|third|last|next|previous)\s+one$"
+    ),
+    re.compile(r"^which\s+one\s+is\s+(?:first|second|third|last|next)$"),
+)
+
 # Domain nouns: the "what this is about" vocabulary — entities, statuses,
 # modalities, seeded department names and staff roles. Derived from (not
 # invented alongside) the actual command grammar and tool surface:
@@ -141,6 +164,8 @@ _DOMAIN_NOUNS: frozenset[str] = frozenset(
         "cancel",
         "busy",
         "availability",
+        "status",
+        "statuses",
         # Preference vocabulary (memory_tools.py) — subject matter, not an
         # action, even though it reads like a verb ("what do I prefer").
         "prefer",
@@ -202,6 +227,11 @@ _ACTION_WORDS: frozenset[str] = frozenset(
         "would",
         "when",
         "where",
+        "why",
+        "choose",
+        "chose",
+        "change",
+        "changed",
     }
 )
 
@@ -212,7 +242,14 @@ class DomainGateResult:
     reason: str | None = None
 
 
-def check_domain_gate(text: str) -> DomainGateResult:
+def _is_context_followup(text: str) -> bool:
+    normalized = " ".join(_WORD_RE.findall(text.lower()))
+    return any(pattern.fullmatch(normalized) for pattern in _CONTEXT_FOLLOWUP_PATTERNS)
+
+
+def check_domain_gate(
+    text: str, *, prior_user_messages: list[str] | None = None
+) -> DomainGateResult:
     """Cheap, synchronous relevance screen — no LLM call. Blank/whitespace
     input is deliberately let through here (`in_domain=True`): that's
     `check_eligibility`'s job to reject as `empty_request`, not this gate's;
@@ -243,6 +280,14 @@ def check_domain_gate(text: str) -> DomainGateResult:
 
     all_words = set(_WORD_RE.findall(normalized))
     if not (all_words & _DOMAIN_NOUNS):
+        # Context only admits narrow follow-up shapes, and only when a recent
+        # user turn independently passes this gate. Assistant messages are
+        # intentionally excluded by the caller because the canned rejection
+        # response itself contains hospital vocabulary.
+        if _is_context_followup(stripped):
+            recent_messages = (prior_user_messages or [])[-6:]
+            if any(check_domain_gate(message).in_domain for message in recent_messages):
+                return DomainGateResult(in_domain=True)
         return DomainGateResult(in_domain=False, reason="off_topic")
 
     for fragment in _FRAGMENT_SPLIT_RE.split(normalized):

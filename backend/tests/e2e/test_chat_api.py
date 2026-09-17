@@ -4,10 +4,11 @@ half offline (no LLM), plus one gated live-model round trip proving the
 conversation history persisted) with a real model.
 """
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from langchain_core.messages import AIMessage
 
 from app.api.routes.chat import get_checkpointer
 from app.db.session import get_db, get_session_factory
@@ -104,6 +105,32 @@ async def test_session_id_is_reused_across_turns(client):
         "/api/chat", json={"text": "list scanners", "session_id": session_id}
     )
     assert second.json()["session_id"] == session_id
+
+
+async def test_contextual_followup_reaches_agent_without_live_llm(client):
+    first = await client.post("/api/chat", json={"text": "list departments"})
+    session_id = first.json()["session_id"]
+    final_state = {
+        "messages": [AIMessage(content="I listed the hospital departments.")],
+        "terminated_reason": None,
+        "touched_entity_codes": [],
+    }
+
+    with (
+        patch("app.api.routes.chat.get_default_chat_model", return_value=object()),
+        patch(
+            "app.api.routes.chat.run_agent",
+            new=AsyncMock(return_value=final_state),
+        ) as run,
+    ):
+        response = await client.post(
+            "/api/chat",
+            json={"text": "What happened?", "session_id": session_id},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["handled_by"] == "agent"
+    run.assert_awaited_once()
 
 
 @pytest.mark.adversarial
