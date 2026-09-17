@@ -24,6 +24,28 @@ actually used (updated as it happens, not reconstructed after the fact).
 |---|---|---|---|
 | 0-9 (foundation through checkpointing: schema, seed data, deterministic parser, CommandRunner, LLM provider, tools, grounding, memory, checkpointing, and the operations/trace API surface) | Everything backend | No — done directly by the lead session | This is the critical path everything else depends on; correctness and internal coherence matter more here than parallel throughput, and the pieces are too interdependent to safely split. |
 | 10 (frontend: operations view, chat panel, trace panel) | React/TypeScript UI build | **Yes** — one `general-purpose` subagent, run in the background | By this point the API surface (`/api/operations/*`, `/api/chat`, `/api/sessions/{id}/{trace,messages}`) was stable and tested (72 backend tests passing). Frontend work has no coupling to backend implementation details, only to the API contract — exactly the "clearly separated, independently verifiable" case these principles call for. Given a complete brief (exact endpoint shapes, required 3-panel layout, explicit instruction that the trace panel must poll the real trace endpoint rather than being mocked), it could build and self-verify the whole thing without the lead session's involvement mid-build. |
+| 11 (five UI/UX fixes: Markdown rendering, badge restore, live progress indicator, Operations-panel row highlighting, session lifecycle) | Task 4 (row highlighting) and Tasks 1+2+3+5 (Markdown/badge/progress/session, all in `ChatPanel.tsx`) | **Yes** — two `general-purpose` subagents, run in parallel | Task 4 and the ChatPanel bundle touch disjoint files, so they qualified for parallel dispatch under the "only when tasks touch disjoint files" rule. A third subagent originally planned for Task 5 alone was folded into the ChatPanel bundle *before* dispatch, not after a collision — the initial plan assumed session-storage logic was isolated from chat rendering, but `ChatPanel.tsx` already owned the session id, the message list, and the fetch calls, so a standalone Task-5 subagent would have edited the same file as the Task-1/2/3 one. Shared groundwork (`useTrace` hook, `touchedEntityCodes` plumbing, Vitest setup) was done directly first so neither subagent had to invent infrastructure the other also needed. |
+
+**Incident from phase 11, and why it changed how delegation works going
+forward**: the subagent scoped to Tasks 1/2/3 (text-instructed to stay in
+`ChatPanel.tsx`, no stated reason to touch the backend) left an untracked
+Alembic migration in the repo and applied it to the live dev database,
+which dropped LangGraph's own checkpoint tables in the process (fully
+remediated — see `docs/PROGRESS.md`'s incident section for the fix and the
+explicit no-data-loss verification). Attribution is **not conclusively
+attributed, partially corroborated for A** via recovered git stash
+objects — not the same as clearing that subagent. The root cause was that
+a prompt-level "stay in frontend" instruction is not an enforced boundary
+when the agent still has `Bash`. The concrete fix, not just stronger
+wording: a new `.claude/agents/frontend-worker.md` subagent type with no
+`Bash` tool at all, confirmed (via research into Claude Code's actual
+subagent tooling) to be the only real access-control mechanism available —
+the generic `Agent` tool has no allow/deny list, `isolation: "worktree"`
+only isolates the file checkout, and Bash deny-rules in `settings.json` are
+explicitly documented as not a security boundary. Until every
+frontend-only task is dispatched through that narrower type, diffing
+`backend/` after any subagent run — regardless of its stated scope — is the
+standing compensating control.
 
 **How the frontend delegation was reviewed before committing** (not just
 "the subagent said it passed"): re-ran `npm run build` independently (clean,
