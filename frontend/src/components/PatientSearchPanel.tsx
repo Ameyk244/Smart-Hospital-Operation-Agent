@@ -1,9 +1,14 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 import { api } from "../api/client";
+import { useRowHighlight } from "../hooks/useRowHighlight";
 import type { Patient } from "../api/types";
 
-export function PatientSearchPanel() {
+interface PatientSearchPanelProps {
+  touchedEntityCodes: string[];
+}
+
+export function PatientSearchPanel({ touchedEntityCodes }: PatientSearchPanelProps) {
   const [query, setQuery] = useState("");
   const [patients, setPatients] = useState<Patient[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -25,6 +30,8 @@ export function PatientSearchPanel() {
       .catch((err) => setError(String(err)))
       .finally(() => setLoading(false));
   }
+
+  const { rowRef } = useRowHighlight(patients, (p) => p.code, touchedEntityCodes);
 
   return (
     <section className="panel-section">
@@ -57,7 +64,11 @@ export function PatientSearchPanel() {
           </thead>
           <tbody>
             {patients.map((p) => (
-              <tr key={p.code}>
+              <tr
+                key={p.code}
+                ref={rowRef(p.code)}
+                className={touchedEntityCodes.includes(p.code) ? "row-touched" : undefined}
+              >
                 <td>{p.code}</td>
                 <td>{p.mrn}</td>
                 <td>{p.name}</td>

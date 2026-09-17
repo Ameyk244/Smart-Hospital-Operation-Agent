@@ -1,11 +1,16 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
+import { useRowHighlight } from "../hooks/useRowHighlight";
 import type { Scanner } from "../api/types";
 
 const TYPES = ["", "MRI", "CT", "XRAY"] as const;
 const STATUSES = ["", "AVAILABLE", "IN_USE", "MAINTENANCE"] as const;
 
-export function ScannersPanel() {
+interface ScannersPanelProps {
+  touchedEntityCodes: string[];
+}
+
+export function ScannersPanel({ touchedEntityCodes }: ScannersPanelProps) {
   const [type, setType] = useState<string>("");
   const [status, setStatus] = useState<string>("");
   const [scanners, setScanners] = useState<Scanner[]>([]);
@@ -31,6 +36,8 @@ export function ScannersPanel() {
       cancelled = true;
     };
   }, [type, status]);
+
+  const { rowRef } = useRowHighlight(scanners, (s) => s.code, touchedEntityCodes);
 
   return (
     <section className="panel-section">
@@ -71,7 +78,11 @@ export function ScannersPanel() {
           </thead>
           <tbody>
             {scanners.map((s) => (
-              <tr key={s.code}>
+              <tr
+                key={s.code}
+                ref={rowRef(s.code)}
+                className={touchedEntityCodes.includes(s.code) ? "row-touched" : undefined}
+              >
                 <td>{s.code}</td>
                 <td>{s.name}</td>
                 <td>{s.type}</td>

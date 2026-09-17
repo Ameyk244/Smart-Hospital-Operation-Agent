@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
+import { useRowHighlight } from "../hooks/useRowHighlight";
 import type { Appointment } from "../api/types";
 
 const STATUSES = ["", "SCHEDULED", "DELAYED", "COMPLETED", "CANCELLED"] as const;
@@ -13,7 +14,11 @@ function formatDateTime(iso: string): string {
   }
 }
 
-export function AppointmentsPanel() {
+interface AppointmentsPanelProps {
+  touchedEntityCodes: string[];
+}
+
+export function AppointmentsPanel({ touchedEntityCodes }: AppointmentsPanelProps) {
   const [status, setStatus] = useState<string>("");
   const [appointmentType, setAppointmentType] = useState<string>("");
   const [patientCode, setPatientCode] = useState<string>("");
@@ -50,6 +55,8 @@ export function AppointmentsPanel() {
       clearTimeout(handle);
     };
   }, [status, appointmentType, patientCode, scannerCode]);
+
+  const { rowRef } = useRowHighlight(appointments, (a) => a.code, touchedEntityCodes);
 
   return (
     <section className="panel-section">
@@ -124,7 +131,11 @@ export function AppointmentsPanel() {
           </thead>
           <tbody>
             {appointments.map((a) => (
-              <tr key={a.code}>
+              <tr
+                key={a.code}
+                ref={rowRef(a.code)}
+                className={touchedEntityCodes.includes(a.code) ? "row-touched" : undefined}
+              >
                 <td>{a.code}</td>
                 <td>{a.patient.name}</td>
                 <td>{a.department.name}</td>

@@ -1,8 +1,13 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
+import { useRowHighlight } from "../hooks/useRowHighlight";
 import type { Department } from "../api/types";
 
-export function DepartmentsPanel() {
+interface DepartmentsPanelProps {
+  touchedEntityCodes: string[];
+}
+
+export function DepartmentsPanel({ touchedEntityCodes }: DepartmentsPanelProps) {
   const [departments, setDepartments] = useState<Department[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -26,6 +31,8 @@ export function DepartmentsPanel() {
     };
   }, []);
 
+  const { rowRef } = useRowHighlight(departments, (d) => d.code, touchedEntityCodes);
+
   return (
     <section className="panel-section">
       <h3>Departments</h3>
@@ -41,7 +48,11 @@ export function DepartmentsPanel() {
           </thead>
           <tbody>
             {departments.map((d) => (
-              <tr key={d.code}>
+              <tr
+                key={d.code}
+                ref={rowRef(d.code)}
+                className={touchedEntityCodes.includes(d.code) ? "row-touched" : undefined}
+              >
                 <td>{d.code}</td>
                 <td>{d.name}</td>
               </tr>

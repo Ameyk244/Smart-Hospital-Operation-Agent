@@ -170,6 +170,44 @@
   color: var(--error);
 }
 
+/* Briefly flashes a row whose entity code was touched by the most recent
+   chat turn (see OperationsView's touchedEntityCodes prop), then fades
+   back to normal. Re-triggered per turn by useRowHighlight forcing the
+   class off and back on, which restarts this animation. */
+.row-touched {
+  animation: row-touched-flash 3s ease-out;
+}
+
+@keyframes row-touched-flash {
+  0% {
+    background-color: rgba(107, 59, 255, 0.32);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  @keyframes row-touched-flash {
+    0% {
+      background-color: rgba(179, 155, 255, 0.28);
+    }
+    100% {
+      background-color: transparent;
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* No flash/fade motion: hold a flat highlight instead. It stays until
+     the next chat turn's touchedEntityCodes moves on (React then drops
+     the class), rather than timing itself out via animation. */
+  .row-touched {
+    animation: none;
+    background-color: rgba(107, 59, 255, 0.2);
+  }
+}
+
 @media (prefers-color-scheme: dark) {
   .status-available,
   .status-scheduled,
@@ -193,6 +231,68 @@
   flex-direction: column;
   min-height: 0;
   flex: 1;
+}
+
+.chat-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.chat-new-button {
+  padding: 4px 10px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--code-bg);
+  color: var(--text-h);
+  cursor: pointer;
+}
+
+.chat-previous-sessions {
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.chat-previous-sessions summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.chat-previous-sessions ul {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.chat-previous-sessions button {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--code-bg);
+  color: var(--text-h);
+  cursor: pointer;
+  text-align: left;
+}
+
+.chat-previous-preview {
+  font-size: 12px;
+}
+
+.chat-previous-date {
+  font-size: 10px;
+  color: var(--muted);
 }
 
 .chat-messages {
@@ -243,6 +343,67 @@
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--text-h);
+}
+
+/* Assistant content is rendered through react-markdown (see ChatPanel.tsx)
+   — these tighten up the default block spacing so a chat bubble doesn't
+   balloon, and style the GFM table/code elements it can now produce. */
+.chat-message-content p {
+  margin: 0 0 6px;
+}
+
+.chat-message-content p:last-child {
+  margin-bottom: 0;
+}
+
+.chat-message-content ul,
+.chat-message-content ol {
+  margin: 4px 0 6px 18px;
+  padding: 0;
+}
+
+.chat-message-content li {
+  margin-bottom: 2px;
+}
+
+.chat-message-content table {
+  border-collapse: collapse;
+  margin: 6px 0;
+  font-size: 12px;
+  width: 100%;
+}
+
+.chat-message-content th,
+.chat-message-content td {
+  border: 1px solid var(--border);
+  padding: 4px 6px;
+  text-align: left;
+}
+
+.chat-message-content code {
+  background: var(--panel-bg);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.chat-message-content pre {
+  background: var(--panel-bg);
+  padding: 6px 8px;
+  border-radius: 4px;
+  overflow-x: auto;
+}
+
+.chat-message-pending {
+  opacity: 0.75;
+}
+
+.chat-progress-line,
+.chat-progress-summary {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 4px;
 }
 
 .chat-terminated-reason {
