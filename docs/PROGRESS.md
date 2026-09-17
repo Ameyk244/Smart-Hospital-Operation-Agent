@@ -664,3 +664,60 @@ any database regardless of what any prompt tells it to do. Diffing
 `backend/` after any subagent run, regardless of what it was scoped to do,
 remains the compensating control for tasks that genuinely need Bash and
 therefore can't use this narrower type.
+
+## Status: CLAUDE.md added, domain-relevance gate (concept 44 extension)
+
+### CLAUDE.md
+Created `CLAUDE.md` at the repo root — the migration incident above was
+recorded after the fact in this file, but the actual standing rule it
+implies (no destructive DB/Alembic action without explicit in-turn
+approval, regardless of task brief; frontend-scoped work should use the
+`frontend-worker` subagent type and never touch `.py`/the database; live
+LLM calls minimized) hadn't been written anywhere a future session or
+subagent would automatically read. It now is. Kept short and durable —
+standing rules, not task-specific instructions. `SKILLS.md` was checked
+against the current commit history and was already current from the
+previous documentation pass.
+
+### Domain-relevance gate
+Off-topic requests (weather, poetry, math trivia, flight booking,
+chit-chat) that don't match the deterministic parser used to fall straight
+through to the agent eligibility gate (`app/agent/eligibility.py`), which
+only checks non-empty and under the length cap — meaning a request with
+zero chance of a useful answer would still trigger a real LLM call.
+
+Added `app/agent/domain_gate.py` (`check_domain_gate`): a small,
+synchronous keyword/word-boundary screen against this system's real domain
+vocabulary (derived from the parser's own grammar and the agent's tool
+descriptions, not invented separately), wired into `app/api/routes/chat.py`
+between the parser's unmatched branch and `check_eligibility`. Rejections
+short-circuit with the existing `handled_by="rejected"` response before
+`get_default_chat_model()` is ever called — proven by a test that patches
+that call site and asserts it's never invoked for an off-topic request,
+not just by checking the response shape.
+
+Deliberately biased toward false negatives over false positives: only
+requests sharing zero vocabulary with the domain are rejected, so anything
+ambiguous-but-plausibly-hospital-related still reaches the agent. Kept as
+its own component rather than folded into the regex parser, since the
+parser structures known commands into a `Command` and this only screens
+relevance — conflating the two would blur the "known commands are
+deterministic, everything else is the agent's job" line the architecture
+depends on. Documented in `docs/CONCEPT_COVERAGE.md` (concept 44,
+genuinely extended, not silently folded in) and `docs/ARCHITECTURE.md`
+(§1's pipeline diagram and a new rationale paragraph).
+
+### Process for this batch
+Dispatched as a single, tightly-scoped subagent (backend-only, explicit
+no-DB/no-migration-of-any-kind instruction, implementation and tests
+together as one unit of work) rather than split across multiple agents —
+there was no clean file boundary to split along, and splitting a single
+cohesive feature would only have reintroduced coordination risk for no
+speed benefit. Its diff was reviewed directly (not taken on its self-
+report) before committing: `git status`/diff confirmed only `backend/`
+plus the two named docs changed, nothing in `frontend/`, no new migration
+files, and the full backend suite (116 passed, 4 skipped) plus ruff were
+re-run independently rather than trusting the subagent's own reported
+numbers. Two commits: `CLAUDE.md` on its own (a process artifact, not part
+of the feature), then the domain gate feature (implementation, tests, and
+both doc updates together, since they're one coherent unit).
