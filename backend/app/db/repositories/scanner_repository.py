@@ -1,8 +1,8 @@
 """Scanner data access.
 
 Why it exists: scanner search/availability is used by both the deterministic
-`list scanners` command and the agent's `search_scanners` /
-`get_scanner_availability` tools — one query surface for both.
+`list scanners` command (also reachable through the agent's `execute_command`)
+and the `get_scanner_availability` tool — one query surface for both.
 
 What calls it: `app/execution/commands/*`, `app/agent/tools/search_tools.py`,
 `app/agent/tools/observation_tools.py`.

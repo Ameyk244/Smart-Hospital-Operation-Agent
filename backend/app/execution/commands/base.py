@@ -4,8 +4,8 @@ Why it exists: this is the *one* place both entrances in
 docs/ARCHITECTURE.md §1 converge. The deterministic parser builds a
 `Command` from recognized text; the agent's `execute_command` tool builds
 one from a natural-language fragment it decomposed; the agent's dedicated
-write tools (`reschedule_appointment`, `assign_scanner`) build one from
-already-grounded arguments. All three call the same
+write tool (`reschedule_appointment`) builds one from already-grounded
+arguments. All three call the same
 `CommandRunner.execute()`, which dispatches to the same handler function per
 `command.name` — there is no second implementation of any hospital
 operation anywhere else in the codebase.

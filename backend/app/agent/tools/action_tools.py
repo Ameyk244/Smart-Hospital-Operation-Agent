@@ -26,7 +26,7 @@ class RescheduleAppointmentArgs(BaseModel):
     scanner_code: str = Field(
         ...,
         description="A scanner code previously returned by search_appointments or "
-        "search_scanners, of the correct modality and currently AVAILABLE",
+        "execute_command, of the correct modality and currently AVAILABLE",
     )
     new_start: str | None = Field(
         None,
@@ -69,7 +69,7 @@ RESCHEDULE_APPOINTMENT_TOOL = register_tool(
         description=(
             "Move an appointment to a different scanner (and optionally a new start "
             "time). Both appointment_code and scanner_code MUST come from a prior "
-            "search_appointments (or search_scanners) result in this conversation — "
+            "search_appointments (or execute_command) result in this conversation — "
             "inventing a code will be rejected. The target scanner must match the "
             "appointment's modality and currently be AVAILABLE."
         ),

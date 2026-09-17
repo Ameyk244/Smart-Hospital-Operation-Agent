@@ -1,8 +1,9 @@
 """Read-only commands over reference data (departments, scanners).
 
 Why it exists: backs both the deterministic "list departments"/"list
-scanners" grammar and the agent's `search_scanners`/`get_scanner_availability`
-tools — one execution function per operation, per docs/ARCHITECTURE.md §2.
+scanners" grammar and the agent's `execute_command`/
+`get_scanner_availability` tools — one execution function per operation,
+per docs/ARCHITECTURE.md §2.
 """
 
 from typing import Any

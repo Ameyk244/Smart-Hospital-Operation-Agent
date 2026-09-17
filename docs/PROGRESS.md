@@ -109,8 +109,8 @@ the spec's §15 checkpoint format once that phase is reached.
   `get_scanner_availability`, `search_patients`, `list_patient_appointments`,
   `show_next_appointment`, `search_appointments`, `list_delayed_appointments`,
   and the one mutating command, `reassign_scanner` (enforces modality match +
-  AVAILABLE status; backs both the future `reschedule_appointment` and
-  `assign_scanner` agent tools from one implementation).
+  AVAILABLE status; later exposed to the agent as
+  `reschedule_appointment`).
 - Deterministic parser (`app/parser/parser.py`): 5 grammar rules (list
   departments/scanners, show patient, show next appointment, list delayed
   appointments), first-match-wins, case-insensitive. Deliberately kept small
@@ -784,3 +784,35 @@ domain word part of what's actually being asked".
   Alembic migration, DDL, or live LLM call of any kind was run to verify
   this — everything above is offline and mock/fixture-based, per
   `CLAUDE.md`'s standing rule on minimizing live API usage.
+
+## Status: Context-aware follow-ups and documentation synchronization
+
+### Context-aware domain routing
+
+The domain gate originally evaluated only the current message. That correctly
+blocked off-topic input, but it also rejected normal multi-turn replies such
+as `yes`, `What did you just change?`, `Why?`, and `Do that again` before the
+stateful agent could see them.
+
+`check_domain_gate()` now accepts a deliberately narrow contextual follow-up
+grammar only when one of the six most recent prior user messages independently
+contains connected hospital intent. `POST /api/chat` supplies user messages
+only; canned assistant rejection text cannot create valid context. Explicitly
+off-topic and disconnected-keyword bypass requests remain rejected.
+
+Verification used no live model calls: focused gate tests, a mocked HTTP
+routing regression, and the full `not live_llm` backend suite. Result: **140
+passed, 4 live-model tests deselected**, with Ruff clean.
+
+### Current documentation
+
+- `rulebook.md` is now tracked as the concise command/tool/grounding/manual
+  testing reference.
+- `AGENT.md` documents the complete runtime agent contract: activation,
+  domain, parser and command boundaries, all seven tools, grounding,
+  LangGraph execution, memory, safety, observability, and offline testing.
+- `docs/ARCHITECTURE.md` was reconciled with the implementation, including
+  the contextual domain gate, exact registered tools, eleven application
+  tables, polling-based trace transport, graph state, and current bounds.
+- `SKILLS.md` now records all five subagent runs: four coding and one
+  research-only.

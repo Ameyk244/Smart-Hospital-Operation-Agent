@@ -1,8 +1,8 @@
 """The action-level agent trace (concepts 48, 50).
 
-Why it exists: docs/ARCHITECTURE.md §9 requires an execution trace I can
-read after the fact — parser outcome, gate decision, each tool call's
-validation/grounding/execution outcome, round/limit terminations. This
+Why it exists: docs/ARCHITECTURE.md §11 requires an execution trace I can
+read after the fact — model rounds, each tool call's validation/grounding/
+execution outcome, and round/limit terminations. This
 module is the single place that trace is written, as both a DB row
 (`AgentEvent`, queryable later for the UI's trace panel) and a structured
 log line (for live tailing). It deliberately has no field for model

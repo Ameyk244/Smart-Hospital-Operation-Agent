@@ -7,9 +7,10 @@ instruction. `GroundingRepository` (the persistence layer) has no opinion on
 when to expose or require — this module is that policy, and it is the only
 caller of the repository (see that module's own docstring).
 
-What calls it: `app/agent/graph.py`'s tool_node — after a read tool
-succeeds, it calls `expose()`; before a write tool executes, it calls
-`require_grounded()`.
+What calls it: specific handlers in `app/agent/tools/` expose the typed
+codes they return and require the typed codes they consume. The graph's
+tool node catches `GroundingRejectedError` and returns it to the model as a
+rejected `ToolMessage`.
 
 Fails: `require_grounded` raises `GroundingRejectedError`, which the
 tool_node turns into a `ToolMessage` describing the rejection (so the model

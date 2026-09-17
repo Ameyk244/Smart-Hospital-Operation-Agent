@@ -3,8 +3,9 @@
 A learning project: a small, real, synthetic-data hospital-operations backend
 with a deterministic core, augmented by a LangGraph-orchestrated LLM agent
 that uses real structured tool calling and code-level grounding. See
-`docs/ARCHITECTURE.md` for the full design and `docs/PROGRESS.md` for
-current status. No real patient data is ever used.
+`docs/ARCHITECTURE.md` for the full design, `AGENT.md` for the complete
+runtime agent guide, and `docs/PROGRESS.md` for current status. No real
+patient data is ever used.
 
 ## Prerequisites
 

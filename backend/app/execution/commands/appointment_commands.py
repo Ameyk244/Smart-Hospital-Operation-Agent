@@ -1,10 +1,10 @@
 """Appointment search and the one mutating command in the system.
 
 Why it exists: `reassign_scanner` is the canonical implementation of "move
-an appointment to a (possibly new) scanner" — the operation both the
-`reschedule_appointment` and `assign_scanner` agent tools describe from the
-user's point of view. Neither tool re-implements this; both build a
-`Command("reassign_scanner", ...)` with different argument combinations
+an appointment to a (possibly new) scanner" — the operation the
+`reschedule_appointment` agent tool describes from the user's point of view.
+The tool does not re-implement this; it builds a
+`Command("reassign_scanner", ...)` with grounded arguments
 (see docs/ARCHITECTURE.md §2 and `app/agent/tools/action_tools.py`).
 
 Business rules enforced here (not by any caller):

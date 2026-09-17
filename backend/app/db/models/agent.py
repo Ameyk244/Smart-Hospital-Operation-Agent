@@ -106,8 +106,8 @@ class EventStatus(str, enum.Enum):
 
 class AgentEvent(Base, TimestampMixin):
     """The observability trace (concepts 48-50): one row per action-level
-    decision (parser outcome, gate decision, tool call, grounding check,
-    round/limit termination). Deliberately action-level only — never stores
+    decision inside the LangGraph run (model round, tool call, grounding
+    check, round/limit termination). Deliberately action-level only — never stores
     model chain-of-thought/private reasoning, only what was requested,
     validated, executed, and the outcome."""
 
