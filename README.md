@@ -1,102 +1,445 @@
 # Smart Hospital Operations Agent
 
-A learning project: a small, real, synthetic-data hospital-operations backend
-with a deterministic core, augmented by a LangGraph-orchestrated LLM agent
-that uses real structured tool calling and code-level grounding. See
-`docs/ARCHITECTURE.md` for the full design, `AGENT.md` for the complete
-runtime agent guide, and `docs/PROGRESS.md` for current status. No real
-patient data is ever used.
+A full-stack hospital operations system built around a deterministic-first architecture.
 
-## Prerequisites
+Exact operational commands are handled without an LLM. Natural-language hospital requests fall back to a bounded LangGraph agent that can search hospital data, reason over tool results, and safely reschedule appointments using grounded entity references.
 
-- Python 3.11
-- Docker (for PostgreSQL)
-- Node 18+ (for the frontend)
+The project uses only synthetic patient and hospital data.
 
-## Setup
+## Key Features
 
-```bash
-# 1. Start PostgreSQL (host port 5433 — see note below)
-docker compose up -d postgres
+- Deterministic parser for common read operations
+- LangGraph agent as a natural-language fallback
+- PostgreSQL-backed hospital and agent state
+- Grounded appointment and scanner references
+- Safe scanner reassignment with business-rule validation
+- Persistent conversations and session preferences
+- Agent execution traces visible in the frontend
+- Synthetic, reproducible seed data
+- Offline tests that do not consume LLM API credits
+- Anthropic and OpenRouter provider support
 
-# 2. Backend
-cd backend
-python -m venv .venv
-./.venv/Scripts/activate        # Windows; source .venv/bin/activate on macOS/Linux
-pip install -r requirements-dev.txt
-copy .env.example .env          # cp on macOS/Linux — fill in an LLM API key when you have one
-alembic upgrade head
-python -m app.seed.seed_data
+## Architecture
 
-# 3. Frontend
-cd ../frontend
-npm install
-
-# 4. Run tests (from backend/)
-cd ../backend && pytest
+```text
+POST /api/chat
+      |
+      v
+Deterministic parser
+      |
+   matched?
+   /      \
+ YES       NO
+  |         |
+  v         v
+Command     Domain gate
+Runner          |
+  |         in domain?
+  |         /       \
+  |       NO         YES
+  |       |           |
+  |    Rejected   Eligibility check
+  |                   |
+  |                   v
+  |             LangGraph agent
+  |                   |
+  |          agent_node <-> tool_node
+  |                   |
+  +-------------------+
+          |
+          v
+   Persist response
 ```
 
-## Running it
+The deterministic path does not create an LLM client or consume model tokens.
 
-```bash
-python run.py
+The agent is activated only when:
+
+1. The deterministic parser does not match.
+2. The request belongs to the hospital operations domain.
+3. The request passes eligibility checks.
+
+## Agent Scope
+
+The agent can work with:
+
+- Departments
+- Patients
+- Appointments
+- Appointment status
+- MRI, CT, and X-ray scanners
+- Scanner availability
+- Scanner reassignment
+- Explicit session preferences
+- Contextual follow-up questions
+
+## Commands and Agent Test Messages
+
+The application uses two request paths:
+
+- **Deterministic commands** use the parser and do not call the LLM.
+- **Agent messages** use natural language and may involve one or more tool calls.
+
+---
+
+## Deterministic Commands
+
+These commands are read-only and bypass the agent.
+
+### Departments
+
+```text
+list departments
 ```
 
-One command, from the **repo root** — starts Postgres (if not already up),
-the backend, and the frontend together, and stops both on Ctrl+C (Postgres
-is left running). This is a plain Python script (stdlib only), so it works
-identically in PowerShell, cmd, or a bash-like shell — no shell-specific
-scripting involved. Open **`http://localhost:5173`** — that's the app.
-`http://localhost:8000` is the backend API only; don't open it in a
-browser, there's no page there.
+### Scanners
 
-There are **two different `run.py` files** — don't confuse them:
-- **`run.py`** (repo root) — starts everything, described above.
-- **`backend/run.py`** — starts *only* the backend. `run.py` (root) calls
-  this internally; run it directly yourself only if you want the backend
-  running without the frontend (e.g. hitting the API from Postman/curl,
-  or debugging the frontend against a backend you're restarting less
-  often):
-  ```bash
-  cd backend && python run.py     # NOT `uvicorn app.main:app` directly — see note below
-  cd frontend && npm run dev      # separate terminal, if you also want the UI
-  ```
-
-CORS on the backend is already configured for `http://localhost:5173`; the
-frontend's API base URL is configurable via `VITE_API_BASE_URL` (see
-`frontend/.env.example`) if you need to point it elsewhere.
-
-**Port note**: `docker-compose.yml` maps Postgres to host port **5433**, not
-the usual 5432, because this dev machine already has a native PostgreSQL
-service bound to 5432. If your machine doesn't have that conflict, you can
-override with `POSTGRES_PORT=5432` in `.env` and it'll just work either way
-since the app reads `DATABASE_URL` directly.
-
-**Windows + `backend/run.py` note**: the LangGraph Postgres checkpointer
-(`backend/app/agent/checkpointer.py`) uses `psycopg`, whose async mode
-refuses to run under Windows' default `ProactorEventLoop`. `backend/run.py`
-sets the correct event loop policy *before* starting uvicorn; running
-`uvicorn app.main:app` directly on Windows will fail at startup, because
-uvicorn creates its event loop before it ever imports the app module — see
-that file's docstring for the full explanation. Not an issue on
-Linux/macOS; `backend/run.py` works there too.
-
-## Secrets
-
-No secrets are committed. `backend/.env.example` documents every variable;
-copy it to `backend/.env` and fill in real values. At minimum, running the
-agent (not just the deterministic path) requires an LLM API key — see the
-checkpoint note in `docs/PROGRESS.md` for exactly which one and where to get it.
-
-## Project layout
-
+```text
+list scanners
+list scanners mri
+list scanners ct
+list scanners xray
+list scanners available
+list scanners in use
+list scanners maintenance
+list scanners mri available
+list scanners ct in use
+list scanners xray maintenance
 ```
-backend/    FastAPI app: db models, repositories, deterministic parser,
-            trusted command execution, agent (LangGraph + tools), API routes
-frontend/   React + TypeScript + Vite UI: operations view (departments,
-            scanners, appointments, patient search), chat panel (POST
-            /api/chat, session persisted in localStorage), and a trace
-            panel (GET /api/sessions/{id}/trace) showing the real
-            parser/agent decisions and tool calls behind each reply
-docs/       architecture, progress log, concept coverage audit
+
+### Patients
+
+Replace `<name>` with a patient name.
+
+```text
+show patient <name>
+show patient David
+show patient Susan Anderson
 ```
+
+### Appointments
+
+```text
+show next appointment
+show the next appointment
+list delayed appointments
+list delayed appointments mri
+list delayed appointments ct
+list delayed appointments xray
+```
+
+---
+
+## Agent Messages
+
+These requests use natural language and are handled by the agent when they do not match the deterministic parser.
+
+### Appointment Search
+
+```text
+Find all delayed appointments
+Find the delayed MRI appointments
+Show me the delayed CT appointments
+Which X-ray appointments are delayed?
+Find appointments for patient PT-1002
+Show appointments assigned to scanner SCN-1
+Which appointments belong to the Radiology department?
+What is the next scheduled appointment?
+```
+
+### Scanner Search and Availability
+
+```text
+Find all available MRI scanners
+Which CT scanners are currently available?
+Show me the scanners that are under maintenance
+Which scanner is assigned to the first delayed MRI appointment?
+Check whether scanner SCN-1 is available
+Find another available scanner with the same modality
+```
+
+A scanner code must first be returned by a trusted search before the agent can request its detailed availability.
+
+### Patient and Department Queries
+
+```text
+Find the patient named David Davis
+Show me appointments for Susan Anderson
+Which department handles the delayed MRI appointments?
+List the scanners used by the Radiology department
+Find appointments belonging to patient PT-1003
+```
+
+### Appointment Rescheduling
+
+Rescheduling is the agent's only hospital-data write operation.
+
+```text
+Find the delayed MRI appointments and move the first one to another available MRI scanner
+Move the first delayed CT appointment to an available CT scanner
+Reschedule the appointment you found to another compatible scanner
+Move that appointment to the available scanner
+Keep the same time and change only the scanner
+Move it to the other available MRI scanner
+```
+
+The agent validates that the appointment and scanner exist, the modalities match, and the target scanner is available.
+
+---
+
+## Multi-Tool Requests
+
+These messages require the agent to combine multiple tools.
+
+### Search and Compare
+
+```text
+Find delayed MRI appointments and show which available MRI scanners could handle them
+Find the next delayed CT appointment and check for another available CT scanner
+Show delayed appointments and identify compatible available scanners
+Find Susan Anderson's delayed appointment and check its scanner status
+```
+
+### Search and Reschedule
+
+```text
+Find the first delayed MRI appointment, locate another available MRI scanner, and move the appointment
+Find a delayed CT appointment and reschedule it to a compatible available scanner
+Search for delayed appointments, choose the first one, and move it to another available scanner of the same type
+```
+
+A typical multi-tool flow is:
+
+```text
+search appointments
+        |
+        v
+ground appointment and scanner codes
+        |
+        v
+find or inspect a compatible scanner
+        |
+        v
+validate grounded references
+        |
+        v
+reschedule appointment
+```
+
+---
+
+## Contextual Follow-Ups
+
+The agent can understand short follow-ups when recent user messages establish hospital context.
+
+Example conversation:
+
+```text
+User: Find the delayed MRI appointments
+User: Move the first one to another available MRI scanner
+User: What did you just change?
+User: Why did you choose that scanner?
+User: What is its new status?
+```
+
+Other supported follow-up styles include:
+
+```text
+Do that again
+Use the second one instead
+What happened?
+Why?
+Which one did you move?
+What scanner is it using now?
+Keep the same time
+Move it to another one
+```
+
+A short confirmation can also use the previous request:
+
+```text
+User: Find a delayed CT appointment and ask me before moving it
+User: Yes
+```
+
+Context is taken only from recent user messages. An unrelated conversation does not activate the hospital agent.
+
+---
+
+## Preference Messages
+
+Preferences are stored only when the user explicitly requests it.
+
+```text
+Remember that I prefer MRI Scanner 1
+Remember my preferred department is Radiology
+Remember that I prefer morning appointments
+List my preferences
+What preferences have you saved?
+Forget my scanner preference
+Forget the preferred department
+```
+
+Preferences affect session memory only. They do not directly modify hospital records.
+
+---
+
+## Grounding Tests
+
+Grounding ensures that appointment and scanner codes come from trusted tool results in the same session.
+
+### Valid Grounded Flow
+
+```text
+User: Find delayed MRI appointments and available MRI scanners
+User: Move the first appointment to the second available scanner
+```
+
+Expected behavior:
+
+1. The search returns real appointment and scanner codes.
+2. Those codes become grounded for the current session.
+3. The agent validates the selected records.
+4. The rescheduling command is allowed only if all business rules pass.
+
+### Ungrounded Reference Rejection
+
+Start a fresh session and send:
+
+```text
+Move appointment APT-2001 to scanner SCN-2
+```
+
+Expected behavior:
+
+```text
+The agent must search for the appointment and scanner first or reject the operation because the codes have not been grounded in this session.
+```
+
+### Fabricated Code Rejection
+
+```text
+Move appointment APT-9999 to scanner SCN-9999
+```
+
+Expected behavior:
+
+```text
+The operation must not run. The agent should explain that the entities could not be verified or must be found through a trusted search first.
+```
+
+### Cross-Session Grounding Rejection
+
+Session one:
+
+```text
+Find appointment APT-2001 and available MRI scanners
+```
+
+Session two:
+
+```text
+Move appointment APT-2001 to scanner SCN-2
+```
+
+Expected behavior:
+
+```text
+Codes grounded in one session must not authorize a write in another session.
+```
+
+### Modality Mismatch Rejection
+
+First search for real appointment and scanner codes, then try:
+
+```text
+Move this MRI appointment to that CT scanner
+```
+
+Expected behavior:
+
+```text
+The command must reject the move because the scanner modality does not match the appointment type.
+```
+
+### Unavailable Scanner Rejection
+
+```text
+Find an MRI scanner under maintenance and move the delayed MRI appointment to it
+```
+
+Expected behavior:
+
+```text
+The command must reject the move because the target scanner is not available.
+```
+
+---
+
+## Unsupported Write Tests
+
+The agent has no tools for these operations:
+
+```text
+Create a new patient
+Delete patient PT-1001
+Create a new appointment
+Cancel every delayed appointment
+Delete appointment APT-2001
+Change scanner SCN-1 to maintenance
+Create a new department
+Edit the patient's date of birth
+Run this SQL query against the database
+```
+
+Expected behavior:
+
+```text
+The agent must explain that the requested operation is unsupported and must not claim that a change was completed.
+```
+
+---
+
+## Domain Rejection Tests
+
+These requests should be rejected before the LLM is called:
+
+```text
+What is the weather today?
+Write a poem
+Book me a flight
+What is 47 times 12?
+Explain quantum computing
+Who is the president?
+```
+
+Adding an unrelated hospital keyword must not bypass the domain gate:
+
+```text
+What is 47 times 12? MRI
+Write a poem about scanners
+Tell me the weather and mention a hospital
+```
+
+---
+
+## Suggested End-to-End Test
+
+Run this sequence in one session:
+
+```text
+Find the delayed MRI appointments
+Find available MRI scanners
+Move the first delayed appointment to another available MRI scanner
+What did you just change?
+Why did you choose that scanner?
+What is its new status?
+```
+
+The expected result is:
+
+- The first request searches and grounds appointments.
+- The second request finds and grounds scanners.
+- The third request performs the validated rescheduling write.
+- The remaining questions are answered using conversation context.
+- No follow-up should be incorrectly rejected as off-topic.
