@@ -30,6 +30,7 @@ async def test_deterministic_request_via_chat_endpoint(client):
     # named in the reply the user reads.
     for department in body["data"]:
         assert department["name"] in body["message"]
+    assert sorted(body["touched_entity_codes"]) == sorted(d["code"] for d in body["data"])
 
 
 async def test_deterministic_scanner_search_reply_names_real_scanners(client):

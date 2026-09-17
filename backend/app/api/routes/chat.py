@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.eligibility import check_eligibility
+from app.agent.entity_codes import extract_entity_codes
 from app.agent.graph import run_agent
 from app.agent.history import to_langchain_messages
 from app.agent.message_text import extract_text_content
@@ -49,6 +50,12 @@ class ChatResponse(BaseModel):
     message: str
     data: object | None = None
     terminated_reason: str | None = None
+    # Every entity `code` (appointment/scanner/patient/department) this
+    # turn's command or tool results touched — the frontend uses this to
+    # briefly highlight the corresponding rows in the Operations panel.
+    # Deliberately just codes, not full entities: the panel already has its
+    # own data for each row, this only says *which* rows to flash.
+    touched_entity_codes: list[str] = []
 
 
 def _plural(n: int, noun: str) -> str:
@@ -154,6 +161,7 @@ async def chat(
             handled_by="deterministic",
             message=message,
             data=result.data if result.success else None,
+            touched_entity_codes=extract_entity_codes(result.data) if result.success else [],
         )
 
     eligibility = check_eligibility(request.text)
@@ -190,4 +198,5 @@ async def chat(
         handled_by="agent",
         message=reply_text,
         terminated_reason=final_state["terminated_reason"],
+        touched_entity_codes=final_state.get("touched_entity_codes", []),
     )

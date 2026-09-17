@@ -88,6 +88,57 @@ async def test_multi_round_search_then_reschedule(agent_session_factory):
     assert "SCN-2" in tool_messages[1].content  # reschedule result confirms it
 
 
+async def test_touched_entity_codes_accumulate_across_a_multi_tool_turn(agent_session_factory):
+    """Task 4 (Operations panel row highlighting) reads this from the API
+    response — proves codes from *both* tool calls in one turn end up in
+    the final list, not just the last one, and includes codes nested in a
+    relation (the appointment's scanner), not only top-level ones."""
+    model = ScriptedChatModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "search_appointments",
+                        "args": {"appointment_type": "MRI", "status": "DELAYED"},
+                        "id": "call_1",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "reschedule_appointment",
+                        "args": {"appointment_code": "APT-2001", "scanner_code": "SCN-2"},
+                        "id": "call_2",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessage(content="Done — moved APT-2001 to SCN-2."),
+        ]
+    )
+
+    final_state = await run_agent(
+        session_id="test-touched-codes",
+        user_text="Find the first delayed MRI appointment and move it to an available scanner",
+        chat_model=model,
+        session_factory=agent_session_factory,
+        settings=_settings(),
+    )
+
+    touched = final_state["touched_entity_codes"]
+    # From the search: appointments (APT-2001..2004) and their scanners
+    # (SCN-1/2/3) and patients — from the reschedule: APT-2001 and SCN-2
+    # again (deduplicated, not doubled).
+    assert "APT-2001" in touched
+    assert "SCN-2" in touched
+    assert "SCN-3" in touched  # nested in a search result's scanner relation
+    assert len(touched) == len(set(touched))  # no duplicates despite APT-2001/SCN-2 appearing twice
+
+
 @pytest.mark.adversarial
 async def test_grounding_rejects_fabricated_appointment_code(agent_session_factory):
     """Adversarial (concept 56): the model tries to reschedule an

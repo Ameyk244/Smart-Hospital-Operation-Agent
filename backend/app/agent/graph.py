@@ -40,6 +40,7 @@ from langgraph.graph import END, StateGraph
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.agent.entity_codes import extract_entity_codes
 from app.agent.grounding import GroundingRejectedError
 from app.agent.state import AgentState
 from app.agent.tools import TOOL_REGISTRY, ToolExecutionError, all_tool_dicts
@@ -63,7 +64,10 @@ SYSTEM_PROMPT = (
     "remember_preference/forget_preference/list_preferences tools for this session's "
     "explicit preferences — use them only when the user actually asks you to "
     "remember, forget, or recall something; never save a preference on your own "
-    "initiative. Be concise."
+    "initiative. Be concise. Write in plain, readable sentences — use bold only for "
+    "something that genuinely needs emphasis, not on every entity name, and use a "
+    "table only when you're presenting several rows of comparable data (e.g. a list "
+    "of appointments), not for a single fact."
 )
 
 
@@ -156,6 +160,12 @@ def _make_tool_node(
         invalid_call_count = state["invalid_call_count"]
         terminated_reason: str | None = None
         round_num = state["round_count"]
+        # Carried forward across rounds *within this turn* (tool_node can
+        # run several times before the loop ends) but reset to [] fresh at
+        # the start of every new run_agent() call — see state.py's comment
+        # on why this deliberately isn't a reducer-merged field.
+        touched_entity_codes = list(state.get("touched_entity_codes", []))
+        touched_seen = set(touched_entity_codes)
 
         for call in last.tool_calls:
             # Every branch below funnels through the bottom of this loop
@@ -296,6 +306,10 @@ def _make_tool_node(
                         latency_ms=latency_ms,
                     )
                     await session.commit()
+                    for code in extract_entity_codes(result):
+                        if code not in touched_seen:
+                            touched_seen.add(code)
+                            touched_entity_codes.append(code)
                     new_messages.append(
                         ToolMessage(content=json.dumps(result, default=str), tool_call_id=call["id"])
                     )
@@ -308,6 +322,7 @@ def _make_tool_node(
             "tool_call_count": tool_call_count,
             "invalid_call_count": invalid_call_count,
             "terminated_reason": terminated_reason,
+            "touched_entity_codes": touched_entity_codes,
         }
 
     return tool_node
@@ -414,5 +429,6 @@ async def run_agent(
         "tool_call_count": 0,
         "invalid_call_count": 0,
         "terminated_reason": None,
+        "touched_entity_codes": [],
     }
     return await compiled.ainvoke(initial_state, config=config)

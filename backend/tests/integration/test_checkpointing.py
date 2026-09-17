@@ -72,6 +72,48 @@ async def test_bounds_reset_each_turn_despite_shared_thread(agent_session_factor
         assert state["terminated_reason"] is None
 
 
+async def test_touched_entity_codes_reset_each_turn_despite_shared_thread(
+    agent_session_factory, checkpointer
+):
+    """Same pitfall as round_count/tool_call_count, applied to Task 4's
+    touched_entity_codes: a turn that touches nothing must not inherit
+    codes a *previous* turn on the same thread touched."""
+    first_state = await run_agent(
+        session_id="test-checkpoint-touched-reset",
+        user_text="search for delayed MRI appointments",
+        chat_model=ScriptedChatModel(
+            responses=[
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "search_appointments",
+                            "args": {"appointment_type": "MRI", "status": "DELAYED"},
+                            "id": "call_1",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                AIMessage(content="Found them."),
+            ]
+        ),
+        session_factory=agent_session_factory,
+        settings=_settings(),
+        checkpointer=checkpointer,
+    )
+    assert "APT-2001" in first_state["touched_entity_codes"]
+
+    second_state = await run_agent(
+        session_id="test-checkpoint-touched-reset",
+        user_text="just say hello, don't call any tool",
+        chat_model=ScriptedChatModel(responses=[AIMessage(content="hello")]),
+        session_factory=agent_session_factory,
+        settings=_settings(),
+        checkpointer=checkpointer,
+    )
+    assert second_state["touched_entity_codes"] == []
+
+
 async def test_different_thread_ids_do_not_share_state(agent_session_factory, checkpointer):
     model_a = ScriptedChatModel(responses=[AIMessage(content="Answer for A.")])
     model_b = ScriptedChatModel(responses=[AIMessage(content="Answer for B.")])
