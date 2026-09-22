@@ -28,11 +28,19 @@ from app.agent.history import to_langchain_messages
 from app.agent.message_text import extract_text_content
 from app.agent.providers.factory import get_default_chat_model
 from app.config import get_settings
-from app.db.models.agent import MessageRole
+from app.db.models.agent import EventStatus, MessageRole
 from app.db.repositories.session_repository import SessionRepository
 from app.db.session import get_db, get_session_factory
 from app.execution.commands import Command, CommandRunner
+from app.observability.tracing import record_event
 from app.parser.parser import parse
+
+# The trace event type the Jev fast path writes, in all three of its
+# outcomes. The frontend's trace panel filters on this exact string and the
+# `/api/cost-comparison` endpoint aggregates on it — see
+# `app/api/routes/cost.py`. Defined here as a named constant so the contract
+# is greppable rather than a string literal repeated across modules.
+JEV_EVENT_TYPE = "jev_invoked"
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -48,7 +56,11 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     session_id: str
-    handled_by: Literal["deterministic", "agent", "rejected"]
+    # "jev": the parser missed, but the Jev fast path mapped the message to a
+    # known command with high confidence and it ran through the same
+    # `CommandRunner` the "deterministic" branch uses — no agent turn, no
+    # Sonnet call. See `app/agent/jev_fast_path.py`.
+    handled_by: Literal["deterministic", "agent", "rejected", "jev"]
     message: str
     data: object | None = None
     terminated_reason: str | None = None
@@ -192,6 +204,76 @@ async def chat(
         return ChatResponse(session_id=session_id, handled_by="rejected", message=message)
 
     settings = get_settings()
+
+    # The Jev fast path sits here and nowhere else: *after* the domain gate
+    # and the eligibility gate (so an off-topic or malformed message is still
+    # rejected for free, without spending a Jev call on it), and immediately
+    # *before* the agent would be invoked (so the only thing it can ever
+    # displace is a full Sonnet turn). It widens the deterministic entrance;
+    # it never weakens a gate. When the flag is off nothing below runs and no
+    # client is constructed — behavior is identical to `master`.
+    if settings.enable_jev_fast_path:
+        from app.agent.jev_fast_path import try_jev_fast_path
+
+        jev = await try_jev_fast_path(request.text, settings)
+        jev_arguments = {
+            "choice": jev.choice,
+            "confidence": jev.confidence,
+            "probabilities": jev.probabilities,
+            "threshold": settings.jev_confidence_threshold,
+            "input_tokens": jev.input_tokens,
+            "output_tokens": jev.output_tokens,
+            "model": jev.model,
+        }
+
+        if jev.matched:
+            command = jev.command
+            assert command is not None
+            # The *same* trusted chokepoint the deterministic branch above
+            # calls — deliberately not a second execution path.
+            result = await CommandRunner(db).execute(command)
+            message = _format_deterministic_message(
+                command, result.success, result.error, result.data
+            )
+            await record_event(
+                db,
+                session_id=session_id,
+                round_num=0,
+                event_type=JEV_EVENT_TYPE,
+                status=EventStatus.SUCCESS,
+                tool_name=command.name,
+                arguments=jev_arguments,
+                latency_ms=jev.latency_ms,
+            )
+            await session_repo.append_message(session_id, MessageRole.ASSISTANT, message)
+            await db.commit()
+            return ChatResponse(
+                session_id=session_id,
+                handled_by="jev",
+                message=message,
+                data=result.data if result.success else None,
+                touched_entity_codes=(
+                    extract_entity_codes(result.data) if result.success else []
+                ),
+            )
+
+        # No match: record that Jev *was* consulted (so the trace panel shows
+        # the consultation even when it changed nothing) and fall through to
+        # the agent exactly as today. FAILURE vs REJECTED distinguishes "the
+        # call didn't complete" from "it completed and declined".
+        await record_event(
+            db,
+            session_id=session_id,
+            round_num=0,
+            event_type=JEV_EVENT_TYPE,
+            status=EventStatus.FAILURE if jev.is_failure else EventStatus.REJECTED,
+            tool_name=None,
+            arguments=jev_arguments,
+            latency_ms=jev.latency_ms,
+            error_category=jev.failure_reason if jev.is_failure else None,
+        )
+        await db.commit()
+
     chat_model = get_default_chat_model()
     final_state = await run_agent(
         session_id=session_id,

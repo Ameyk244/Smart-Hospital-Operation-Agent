@@ -22,9 +22,11 @@ that requests the `db_session` or `seeded_session` fixture. Unit tests
 
 import asyncio
 import sys
+import types
 from collections.abc import AsyncGenerator
 
 import asyncpg
+import pytest
 import pytest_asyncio
 
 if sys.platform == "win32":
@@ -37,7 +39,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.agent.checkpointer import build_checkpointer
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.db import models  # noqa: F401  populates Base.metadata
 from app.db.base import Base
 from app.seed.seed_data import seed as seed_hospital_data
@@ -186,3 +188,158 @@ async def client(seeded_session) -> AsyncGenerator[AsyncClient, None]:
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
     app.dependency_overrides.clear()
+
+
+# --------------------------------------------------------------------------
+# Jev fast path (experimental, `jev-testing` branch) test doubles.
+#
+# `typesafe_sdk` is an optional dependency that may not be installed at all
+# (app/agent/jev_fast_path.py imports it lazily for exactly that reason), and
+# these tests must never make a live call. So every Jev test runs against a
+# fake module installed into `sys.modules` under the real package name: the
+# production code's own `from typesafe_sdk import ...` then resolves to this,
+# which means the module under test is exercised for real rather than
+# stubbed out wholesale.
+# --------------------------------------------------------------------------
+
+
+class FakeJevAnswer:
+    def __init__(self, choice: str, confidence: float, probabilities: dict | None = None):
+        self.choice = choice
+        self.confidence = confidence
+        self.probabilities = probabilities if probabilities is not None else {choice: confidence}
+
+
+class FakeJevUsage:
+    def __init__(self, input_tokens: int | None = 350, output_tokens: int | None = 5):
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+
+
+class FakeJevResponse:
+    def __init__(self, answers: dict, usage: FakeJevUsage | None = None, model: str = "jev-latest"):
+        self.answers = answers
+        self.usage = usage if usage is not None else FakeJevUsage()
+        self.model = model
+
+
+def _build_jev_response(
+    command: str,
+    confidence: float = 0.97,
+    *,
+    filters: dict[str, tuple[str, float]] | None = None,
+    null_usage: bool = False,
+    model: str = "jev-latest",
+) -> FakeJevResponse:
+    """Builds a whole `system_one` response from the command answer plus any
+    filter answers under test. Every filter question the production code asks
+    gets an answer, defaulting to a confident "unspecified" — matching the
+    real contract, where all four questions are always answered.
+
+    `null_usage=True` models the SDK's documented `int | None` token counts
+    coming back null, which the cost endpoint has to handle explicitly."""
+    usage = FakeJevUsage(None, None) if null_usage else None
+    answers = {
+        "command": FakeJevAnswer(command, confidence),
+        "scanner_type": FakeJevAnswer("unspecified", 0.99),
+        "scanner_status": FakeJevAnswer("unspecified", 0.99),
+        "appointment_type": FakeJevAnswer("unspecified", 0.99),
+    }
+    for question, (label, conf) in (filters or {}).items():
+        answers[question] = FakeJevAnswer(label, conf)
+    return FakeJevResponse(answers, usage=usage, model=model)
+
+
+class FakeTypeSafe:
+    """Handle for the installed fake SDK: set `behavior`, then inspect
+    `calls` and `client_constructions` afterwards. `client_constructions`
+    is what proves the flag-off path never even builds a client."""
+
+    def __init__(self, module: types.ModuleType):
+        self.module = module
+        self.behavior: object = None
+        self.calls: list[dict] = []
+        self.client_constructions = 0
+        self.accepts_model = True
+
+
+@pytest.fixture
+def fake_typesafe():
+    module = types.ModuleType("typesafe_sdk")
+    handle = FakeTypeSafe(module)
+
+    class TypeSafeError(Exception):
+        """Base class, mirroring the real SDK's hierarchy."""
+
+    class TypeSafeAPIError(TypeSafeError):
+        pass
+
+    class TypeSafeRateLimitError(TypeSafeAPIError):
+        retry_after_ms = 1000
+
+    class TypeSafeAPITimeoutError(TypeSafeAPIError):
+        pass
+
+    class Choice:
+        def __init__(self, *, instructions: str, criteria: dict):
+            self.instructions = instructions
+            self.criteria = criteria
+
+    class TypeSafeClient:
+        def __init__(self, **kwargs):
+            handle.client_constructions += 1
+
+        def system_one(self, *, state, questions, **kwargs):
+            if "model" in kwargs and not handle.accepts_model:
+                raise TypeError("system_one() got an unexpected keyword argument 'model'")
+            handle.calls.append({"state": state, "questions": questions, **kwargs})
+            behavior = handle.behavior
+            if isinstance(behavior, BaseException):
+                raise behavior
+            if callable(behavior):
+                return behavior(state, questions)
+            return behavior
+
+    module.Choice = Choice
+    module.TypeSafeClient = TypeSafeClient
+    module.TypeSafeError = TypeSafeError
+    module.TypeSafeAPIError = TypeSafeAPIError
+    module.TypeSafeRateLimitError = TypeSafeRateLimitError
+    module.TypeSafeAPITimeoutError = TypeSafeAPITimeoutError
+
+    previous = sys.modules.get("typesafe_sdk")
+    sys.modules["typesafe_sdk"] = module
+    try:
+        yield handle
+    finally:
+        if previous is None:
+            sys.modules.pop("typesafe_sdk", None)
+        else:
+            sys.modules["typesafe_sdk"] = previous
+
+
+def _build_jev_settings(**overrides) -> Settings:
+    """Settings with the fast path on and a dummy key. Every value is passed
+    explicitly so a developer's real `.env` can never leak a live key — or a
+    real `ENABLE_JEV_FAST_PATH=true` — into a test run."""
+    defaults = dict(
+        enable_jev_fast_path=True,
+        typesafe_api_key="test-key-not-real",
+        jev_model="jev-latest",
+        jev_confidence_threshold=0.9,
+        jev_timeout_seconds=5.0,
+    )
+    defaults.update(overrides)
+    return Settings(**defaults)
+
+
+# Exposed as fixtures (rather than imported from this module by name) so test
+# files never have to rely on `conftest` being importable on sys.path.
+@pytest.fixture
+def jev_settings():
+    return _build_jev_settings
+
+
+@pytest.fixture
+def jev_response():
+    return _build_jev_response

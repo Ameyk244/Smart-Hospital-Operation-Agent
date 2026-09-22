@@ -50,6 +50,25 @@ class Settings(BaseSettings):
     openrouter_api_key: str | None = None
     openrouter_model: str = "anthropic/claude-sonnet-5"
 
+    # --- Jev fast path (experimental, `jev-testing` branch only) ---
+    # Widens the deterministic fast path: when the regex parser returns
+    # UNKNOWN, ask TypeSafe AI's Jev ("System One") which known command the
+    # message maps to, and route a confident match through the existing
+    # CommandRunner instead of a full Sonnet agent turn. Off by default so
+    # `master` behavior is byte-for-byte unchanged — see
+    # `app/agent/jev_fast_path.py` for the design and its tradeoffs.
+    enable_jev_fast_path: bool = False
+    typesafe_api_key: str | None = None
+    jev_model: str = "jev-latest"
+    # TypeSafe's own docs recommend: <0.5 don't act, 0.5-0.9 proceed with
+    # caution, >0.9 act automatically. A match here triggers a real command
+    # execution, so we default to the "act automatically" band.
+    jev_confidence_threshold: float = 0.9
+    # Deliberately small: this call sits on the hot request path purely as an
+    # optimization. If Jev can't answer in a few seconds, falling through to
+    # the agent is cheaper than making the user wait.
+    jev_timeout_seconds: float = 5.0
+
     # --- Bounded agent execution (see docs/ARCHITECTURE.md §5) ---
     max_agent_rounds: int = 6
     max_tool_calls: int = 10

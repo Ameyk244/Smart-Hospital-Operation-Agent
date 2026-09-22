@@ -53,3 +53,21 @@ class EventRepository:
         )
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
+
+    async def list_by_event_type(
+        self, event_type: str, *, session_id: str | None = None
+    ) -> list[AgentEvent]:
+        """Every event of one type, optionally scoped to a single session.
+
+        Exists so callers that aggregate across sessions (the Jev cost
+        comparison in `app/api/routes/cost.py`) still go through this
+        repository instead of writing raw SQL in a route — the same reason
+        `list_for_session` exists. Ordered identically to `list_for_session`
+        so callers can rely on one stable ordering rule.
+        """
+        stmt = select(AgentEvent).where(AgentEvent.event_type == event_type)
+        if session_id is not None:
+            stmt = stmt.where(AgentEvent.session_id == session_id)
+        stmt = stmt.order_by(AgentEvent.created_at, AgentEvent.id)
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())

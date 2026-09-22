@@ -24,6 +24,15 @@ langgraph-checkpoint-postgres>=2.0.13,<3
 # prebuilt wheel so this works without a separate libpq install.
 psycopg[binary]>=3.2,<4
 
+# Jev fast path (experimental, `jev-testing` branch). Optional at runtime:
+# `app/agent/jev_fast_path.py` imports it lazily and treats its absence as an
+# ordinary fall-through, so the app and the test suite both work without it
+# installed as long as ENABLE_JEV_FAST_PATH stays false. Requires Python >=3.10.
+# Left unpinned on purpose: no version has been installed or verified against
+# this codebase yet, and a guessed range would be a fake constraint. Pin it
+# once the feature has been exercised against a real key.
+typesafe-sdk
+
 # Observability
 structlog>=24.4,<25
 
