@@ -43,8 +43,8 @@ actually produce *and* what `CommandRunner` accepts — not invented:
   - `show_next_appointment`       (no arguments in the parser's usage)
   - `list_delayed_appointments`   (optional `appointment_type`)
   - `search_patients`             — RECOGNIZED BUT NEVER EXECUTED
-  - `none`                        — the explicit no-match option TypeSafe's
-                                    docs recommend always including
+  - `none`                        — an explicit no-match option so unsupported
+                                    requests are never forced onto a command
 
 `search_patients` needs a free-text `query` (a patient's name). A `Choice`
 question fundamentally cannot produce free text — it returns one label from
@@ -78,12 +78,11 @@ is not.
 Failure handling: this must never be able to break a chat turn
 ---------------------------------------------------------------
 Every outcome of this function is a `JevFastPathResult`. It does not raise.
-`typesafe_sdk` is imported lazily, inside the call, so the package being
-absent is an ordinary non-match with `failure_reason="jev_sdk_missing"`
-rather than an import-time explosion — the existing test suite and a
-deployment that never enables the flag must not need the dependency
-installed at all. API errors, timeouts and a missing API key are handled the
-same way: return `matched=False`, record why, fall through to the agent.
+`typesafe_sdk` is imported lazily, inside the call, so an unexpectedly missing
+or broken installation is an ordinary non-match with
+`failure_reason="jev_sdk_missing"` rather than an import-time explosion. API
+errors, timeouts and a missing API key are handled the same way: return
+`matched=False`, record why, fall through to the agent.
 A Jev outage degrades this feature back to today's behavior and nothing else.
 
 What calls it: `app/api/routes/chat.py`, for requests that the parser did
@@ -108,9 +107,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime
 _logger = get_logger("agent.jev_fast_path")
 
 # The label Jev returns when the message maps to none of our commands.
-# TypeSafe's docs recommend always offering an explicit "none"-style option
-# in a Choice, so the model has somewhere honest to put a non-match instead
-# of being forced onto the least-bad real label.
+# An explicit "none" option gives the model somewhere honest to put a
+# non-match instead of forcing it onto the least-bad executable label.
 NONE_CHOICE = "none"
 
 # The question keys of the single `system_one` call. Kept as constants
@@ -369,8 +367,8 @@ async def try_jev_fast_path(text: str, settings: "Settings") -> JevFastPathResul
     try:
         from typesafe_sdk import Choice, TypeSafeClient, TypeSafeError
     except ImportError:
-        # The SDK is an optional dependency of this experimental branch. Its
-        # absence must behave exactly like any other Jev failure.
+        # Its absence must degrade like any other Jev integration failure
+        # rather than breaking chat.
         return JevFastPathResult(matched=False, failure_reason="jev_sdk_missing")
 
     threshold = settings.jev_confidence_threshold
@@ -384,19 +382,19 @@ async def try_jev_fast_path(text: str, settings: "Settings") -> JevFastPathResul
         # instantly with an auth error, even though the key is sitting right
         # there in settings. Caught on the first live call; see the
         # `jev_missing_api_key` guard above for the no-key-at-all case.
-        client = TypeSafeClient(api_key=settings.typesafe_api_key)
         questions = _build_questions(Choice)
-        try:
-            return client.system_one(
-                state=text, questions=questions, model=settings.jev_model
-            )
-        except TypeError:
-            # Defensive: SDK 0.7.1 does accept a `model` kwarg on
-            # `system_one` (verified by introspection), but if a future
-            # version drops it, fall back to the SDK's own default rather
-            # than hard-failing every call; `response.model` records what
-            # actually ran.
-            return client.system_one(state=text, questions=questions)
+        with TypeSafeClient(api_key=settings.typesafe_api_key) as client:
+            try:
+                return client.system_one(
+                    state=text, questions=questions, model=settings.jev_model
+                )
+            except TypeError:
+                # Defensive: SDK 0.7.1 does accept a `model` kwarg on
+                # `system_one` (verified by introspection), but if a future
+                # version drops it, fall back to the SDK's own default rather
+                # than hard-failing every call; `response.model` records what
+                # actually ran.
+                return client.system_one(state=text, questions=questions)
 
     started = time.perf_counter()
     try:

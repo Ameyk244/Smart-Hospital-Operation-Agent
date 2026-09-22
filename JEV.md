@@ -43,6 +43,37 @@ to the LangGraph agent. Jev cannot reschedule an appointment.
 free-form answer. All questions are included in one `system_one()` call with
 the original user text supplied as `state`.
 
+### Why This Project Uses Choice
+
+TypeSafe's System One API supports three primary question primitives:
+
+| Primitive | Meaning | Answer shape | Used by this project? |
+|---|---|---|---|
+| `Choice` | Select one option from a defined set | Winning label, confidence, and a probability per label | Yes, for all four Jev questions |
+| `Noul` | Decide whether one condition is true | Probability of yes from `0` to `1` | No |
+| `Score` | Rate the state against ordered rubric levels | Probability-weighted numeric score, confidence, legend, and level probabilities | No |
+
+`Choice` matches this routing problem because each decision needs one
+mutually exclusive categorical value: one command, one scanner modality, one
+scanner status, or one appointment modality. Its fixed criteria also prevent
+Jev from inventing arbitrary command names or arguments.
+
+`Noul` would fit an independent binary question such as "does this request
+mention urgency?" It is not used here because separate yes/no questions for
+every command or modality could overlap and would require additional conflict
+resolution before constructing one command.
+
+`Score` would fit an ordered rubric such as low, medium, and high urgency. It
+is not used because `MRI`, `CT`, and `XRAY`, or `list_scanners` and
+`list_departments`, have no meaningful numeric order.
+
+The `confidence` field returned with a `Choice` answer must not be confused
+with the `Score` primitive. This project compares `ChoiceAnswer.confidence`
+with `JEV_CONFIDENCE_THRESHOLD`; it never creates a `Score(...)` question or
+reads a `ScoreAnswer.score` value. Likewise, the explicit labels `none` and
+`unspecified` are ordinary `Choice` options defined by this application, not
+`Noul` answers from a separate binary question.
+
 ### Questions And Choices
 
 | Question key | Allowed labels | Used for |
@@ -122,6 +153,11 @@ Command("list_scanners", {"type": "MRI"})
 Every match uses the existing `CommandRunner`, so repositories, transactions,
 validation, and response formatting are shared with exact parser commands.
 Jev has no SQL or repository access of its own.
+
+The primitive behavior above follows TypeSafe's
+[Python SDK documentation](https://docs.typesafe.ai/sdk/python),
+[Python usage guide](https://docs.typesafe.ai/sdk/python/usage), and
+[official Python SDK source](https://github.com/typesafe-ai/typesafe-sdk-python).
 
 ## Failure And Safety Behavior
 

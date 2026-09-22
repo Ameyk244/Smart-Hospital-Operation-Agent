@@ -191,12 +191,12 @@ async def client(seeded_session) -> AsyncGenerator[AsyncClient, None]:
 
 
 # --------------------------------------------------------------------------
-# Jev fast path (experimental, `jev-testing` branch) test doubles.
+# Jev fast-path test doubles.
 #
-# `typesafe_sdk` is an optional dependency that may not be installed at all
-# (app/agent/jev_fast_path.py imports it lazily for exactly that reason), and
-# these tests must never make a live call. So every Jev test runs against a
-# fake module installed into `sys.modules` under the real package name: the
+# `typesafe_sdk` is imported lazily in production so a broken installation can
+# still fall through safely, and these tests must never make a live call. Every
+# Jev test therefore uses a fake module installed into `sys.modules` under the
+# real package name: the
 # production code's own `from typesafe_sdk import ...` then resolves to this,
 # which means the module under test is exercised for real rather than
 # stubbed out wholesale.
@@ -260,6 +260,7 @@ class FakeTypeSafe:
         self.behavior: object = None
         self.calls: list[dict] = []
         self.client_constructions = 0
+        self.client_closes = 0
         self.accepts_model = True
         # Kwargs each TypeSafeClient(...) was constructed with. Recorded so a
         # test can assert the API key is passed explicitly: the real SDK
@@ -296,6 +297,12 @@ def fake_typesafe():
         def __init__(self, **kwargs):
             handle.client_constructions += 1
             handle.client_kwargs.append(kwargs)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            handle.client_closes += 1
 
         def system_one(self, *, state, questions, **kwargs):
             if "model" in kwargs and not handle.accepts_model:

@@ -59,9 +59,9 @@ class Settings(BaseSettings):
     enable_jev_fast_path: bool = True
     typesafe_api_key: str | None = None
     jev_model: str = "jev-latest"
-    # TypeSafe's own docs recommend: <0.5 don't act, 0.5-0.9 proceed with
-    # caution, >0.9 act automatically. A match here triggers a real command
-    # execution, so we default to the "act automatically" band.
+    # Project policy: require a high-confidence decision because a match
+    # triggers command execution. This is intentionally configurable rather
+    # than presented as a universal provider-recommended cutoff.
     jev_confidence_threshold: float = 0.9
     # Deliberately small: this call sits on the hot request path purely as an
     # optimization. If Jev can't answer in a few seconds, falling through to

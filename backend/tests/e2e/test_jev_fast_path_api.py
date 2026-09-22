@@ -1,5 +1,5 @@
 """End-to-end tests for the Jev fast path through /api/chat, plus the
-/api/cost-comparison endpoint it feeds (experimental, `jev-testing` branch).
+/api/cost-comparison endpoint it feeds.
 
 No live calls: the `fake_typesafe` fixture (tests/conftest.py) installs a
 fake `typesafe_sdk` under the real package name, so the production module

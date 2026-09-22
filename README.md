@@ -163,10 +163,42 @@ Jev can route these operations:
 | `show_next_appointment` | Requests for the next appointment |
 | `list_delayed_appointments` | Optional MRI, CT, or X-ray modality |
 
+### Why This Project Uses Choice
+
+TypeSafe's System One API supports three primary question primitives:
+
+| Primitive | Meaning | Answer shape | Used by this project? |
+|---|---|---|---|
+| `Choice` | Select one option from a defined set | Winning label, confidence, and a probability per label | Yes, for all four Jev questions |
+| `Noul` | Decide whether one condition is true | Probability of yes from `0` to `1` | No |
+| `Score` | Rate the state against ordered rubric levels | Probability-weighted numeric score, confidence, legend, and level probabilities | No |
+
+`Choice` matches this routing problem because each decision needs one
+mutually exclusive categorical value: one command, one scanner modality, one
+scanner status, or one appointment modality. Its fixed criteria also prevent
+Jev from inventing arbitrary command names or arguments.
+
+`Noul` would fit an independent binary question such as "does this request
+mention urgency?" It is not used here because separate yes/no questions for
+every command or modality could overlap and would require additional conflict
+resolution before constructing one command.
+
+`Score` would fit an ordered rubric such as low, medium, and high urgency. It
+is not used because `MRI`, `CT`, and `XRAY`, or `list_scanners` and
+`list_departments`, have no meaningful numeric order.
+
+The `confidence` field returned with a `Choice` answer must not be confused
+with the `Score` primitive. This project compares `ChoiceAnswer.confidence`
+with `JEV_CONFIDENCE_THRESHOLD`; it never creates a `Score(...)` question or
+reads a `ScoreAnswer.score` value. Likewise, the explicit labels `none` and
+`unspecified` are ordinary `Choice` options defined by this application, not
+`Noul` answers from a separate binary question.
+
 ### How Jev Chooses
 
 The backend sends the user message as `state` in one `system_one()` request.
-That request contains four typed `Choice` questions:
+
+The request contains four typed `Choice` questions:
 
 | Question key | Choices | Purpose |
 |---|---|---|
@@ -203,6 +235,10 @@ final hospital data. The primary command's probability map is stored in the
 confidence scores.
 Low confidence, `none`, timeouts, provider errors, and unsupported choices all
 fall through to the LangGraph agent.
+
+This design follows TypeSafe's documented primitive semantics. See the
+[official Python SDK guide](https://docs.typesafe.ai/sdk/python) and
+[usage guide](https://docs.typesafe.ai/sdk/python/usage).
 
 Jev cannot reschedule appointments or perform any other hospital write. It
 also does not handle free-text patient searches, multi-step work, preferences,

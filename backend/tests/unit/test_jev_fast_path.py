@@ -1,4 +1,4 @@
-"""Unit tests for the Jev fast path (experimental, `jev-testing` branch).
+"""Unit tests for the Jev fast path.
 
 No database, no network, no real `typesafe_sdk` — the `fake_typesafe`
 fixture (tests/conftest.py) installs a fake module under the real package
@@ -74,6 +74,7 @@ async def test_the_api_key_is_passed_to_the_client_explicitly(
     await try_jev_fast_path("anything", jev_settings(typesafe_api_key="sentinel-key"))
 
     assert fake_typesafe.client_kwargs[0].get("api_key") == "sentinel-key"
+    assert fake_typesafe.client_closes == 1
 
 
 async def test_every_criteria_label_is_executable_or_deliberately_not(
@@ -114,8 +115,8 @@ def test_the_fast_path_can_only_ever_execute_read_commands():
 async def test_an_explicit_none_option_is_always_offered(
     fake_typesafe, jev_settings, jev_response
 ):
-    """TypeSafe's own guidance: a Choice should always include a "none"-style
-    option so the model isn't forced onto the least-bad real label."""
+    """The command Choice includes an explicit no-match option so the model
+    is not forced onto the least-bad executable label."""
     fake_typesafe.behavior = jev_response("list_departments")
 
     await try_jev_fast_path("anything", jev_settings())
@@ -352,9 +353,8 @@ async def test_an_unexpected_sdk_exception_falls_through_without_raising(
 
 
 async def test_missing_sdk_falls_through_without_raising(monkeypatch, jev_settings):
-    """The package is an optional dependency and may simply not be installed.
-    Note this test deliberately does *not* use `fake_typesafe` — it asserts
-    the behavior when no `typesafe_sdk` exists at all."""
+    """A broken deployment must degrade safely if the SDK cannot be imported.
+    This deliberately avoids `fake_typesafe` and simulates a missing package."""
     import builtins
     import sys
 

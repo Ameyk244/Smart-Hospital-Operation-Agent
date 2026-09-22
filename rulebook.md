@@ -347,8 +347,9 @@ any scanners under maintenance?                 0.84  list_scanners
 ```
 
 These are exactly the phrasings the fast path is *meant* to catch, and the
-0.9 threshold is what stops them. That threshold is TypeSafe's own
-"act automatically" band, chosen because a match executes a real command.
+0.9 threshold is what stops them. That threshold is this project's
+conservative policy because a match executes a real command; it is not a
+universal cutoff prescribed by the provider.
 Lowering `JEV_CONFIDENCE_THRESHOLD` to 0.8 would capture all three — at the
 cost of acting on weaker evidence. It's a genuine trade, not an oversight.
 

@@ -844,8 +844,8 @@ audit rejected.
 
 ### What it does
 When the regex parser returns UNKNOWN, Jev is asked which known command
-the message maps to. A confident match (default threshold 0.9, matching
-TypeSafe's own guidance for automatic action) executes through the **same
+the message maps to. A confident match (project default threshold 0.9)
+executes through the **same
 `CommandRunner`** the regex path uses. Anything else — unconfident, an
 explicit "none", an unsupported command, or any failure — falls through to
 the agent exactly as before.
