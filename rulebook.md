@@ -379,9 +379,10 @@ Causes, all in `backend/app/agent/domain_gate.py`:
 3. **`tell` is missing from `_ACTION_WORDS`**, so "tell me about patient X"
    has a domain noun and no action word.
 
-Note this contradicts §5 and §7 above, which assume
-`Move appointment APT-9999 to scanner SCN-9999` reaches the agent and is
-stopped by *grounding*. It is currently stopped earlier, by the domain gate,
-for the wrong reason. The grounding behaviour those sections describe is still
-correct — it just isn't what you'll observe from that particular message until
-this is fixed.
+This does **not** affect the grounding example in §5 and §7,
+`Move appointment APT-9999 to scanner SCN-9999`. That message contains the
+words "appointment" and "scanner", so it passes the domain gate, reaches the
+agent, and is stopped by grounding exactly as those sections describe. Only
+the *bare-code* phrasing — `move APT-9999 to SCN-9999`, with no "appointment"
+or "scanner" — is hit by this bug. (An earlier version of this note wrongly
+said the §5/§7 example was blocked by the gate too.)
