@@ -28,10 +28,12 @@ psycopg[binary]>=3.2,<4
 # `app/agent/jev_fast_path.py` imports it lazily and treats its absence as an
 # ordinary fall-through, so the app and the test suite both work without it
 # installed as long as ENABLE_JEV_FAST_PATH stays false. Requires Python >=3.10.
-# Left unpinned on purpose: no version has been installed or verified against
-# this codebase yet, and a guessed range would be a fake constraint. Pin it
-# once the feature has been exercised against a real key.
-typesafe-sdk
+# Pinned to a verified range now that the feature has been exercised against
+# a real key: 0.7.1 is the version these live calls actually ran on. Capped
+# below 1.0 because the vendor launched 2026-09-15 and a pre-1.0 SDK from a
+# weeks-old company should not be trusted to hold its surface across a minor
+# bump without re-testing.
+typesafe-sdk>=0.7.1,<1
 
 # Observability
 structlog>=24.4,<25
