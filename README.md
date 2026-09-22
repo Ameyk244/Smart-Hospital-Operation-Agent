@@ -84,33 +84,24 @@ The agent can work with:
 
 ## Commands and Agent Test Messages
 
-The application reports four routing outcomes:
+Requests move through three execution layers in order, with rejection handled
+before either model when the request is outside the hospital domain or fails
+eligibility checks:
 
-- **Deterministic commands** use the parser and do not call the LLM.
-- **Jev messages** use natural phrasing for supported read commands and may be routed through `CommandRunner` after a confident typed decision.
-- **Agent messages** use natural language and may involve one or more tool calls.
-- **Rejected messages** fail the domain or eligibility policy before either model is called.
-
-### Jev Fast-Path Messages
-
-These are useful examples of natural language that misses the exact parser but can resolve to a supported read command:
-
-```text
-show me all the departments
-can you pull up the department list for me?
-which appointments are running late?
-how many delayed MRI appointments are there?
-which MRI scanners are available?
-what is the next scheduled appointment?
-```
-
-Jev does not perform hospital writes. Rescheduling, multi-step work, free-text patient search, preferences, and contextual follow-ups remain agent responsibilities. See `JEV.md` for the complete contract.
+- **Deterministic parser:** exact read commands, no model call.
+- **Jev fast path:** natural variations of supported reads, using one typed
+  routing decision.
+- **LangGraph agent:** richer, contextual, multi-tool, preference, and
+  rescheduling requests.
+- **Rejected:** off-topic or ineligible input stopped before Jev or the agent.
 
 ---
 
 ## Deterministic Commands
 
-These commands are read-only and bypass the agent.
+The regex parser handles these exact, case-insensitive command shapes. They
+are read-only, execute through `CommandRunner`, return
+`handled_by="deterministic"`, and consume no model tokens.
 
 ### Departments
 
@@ -156,9 +147,58 @@ list delayed appointments xray
 
 ---
 
+## Jev Fast Path
+
+Jev handles natural-language variations of known read commands that miss the
+strict parser. After the domain and eligibility gates pass, the backend uses
+TypeSafe AI's `typesafe-sdk` and its `system_one` API to request a typed,
+confidence-scored command choice instead of a free-form response.
+
+Jev can route these operations:
+
+| Operation | What Jev can identify |
+|---|---|
+| `list_departments` | Department-list requests |
+| `list_scanners` | Optional MRI, CT, or X-ray modality and scanner status |
+| `show_next_appointment` | Requests for the next appointment |
+| `list_delayed_appointments` | Optional MRI, CT, or X-ray modality |
+
+A choice at or above the configured confidence threshold (`0.9` by default)
+is converted into the same typed `Command` used by the parser and executed by
+the same `CommandRunner`. Jev never queries the database directly and does not
+generate the final hospital data. Low-confidence decisions, `none`, timeouts,
+provider errors, and unsupported commands safely fall through to the agent.
+
+Jev cannot reschedule appointments or perform any other hospital write. It
+also does not handle free-text patient searches, multi-step work, preferences,
+or contextual follow-ups. Those remain agent responsibilities.
+
+### Jev Fast-Path Messages
+
+These are useful examples of natural language that misses the exact parser but can resolve to a supported read command:
+
+```text
+show me all the departments
+can you pull up the department list for me?
+which appointments are running late?
+how many delayed MRI appointments are there?
+which MRI scanners are available?
+what is the next scheduled appointment?
+```
+
+Successful responses return `handled_by="jev"` and display the `jev` badge.
+Each consultation records a `jev_invoked` trace event. See `JEV.md` for the
+full decision, fallback, configuration, and observability contract.
+
+---
+
 ## Agent Messages
 
-These requests use natural language and are handled by the agent when they do not match the deterministic parser.
+The LangGraph agent is the final fallback for eligible hospital requests that
+the parser and Jev do not resolve. It uses the configured Anthropic or
+OpenRouter chat model, can reason over conversation context, and may call one
+or more of the seven registered tools. Its hospital operations still pass
+through `CommandRunner`, and rescheduling is its only hospital-data write.
 
 ### Appointment Search
 
