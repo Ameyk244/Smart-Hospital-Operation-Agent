@@ -162,6 +162,7 @@ Move appointment APT-9999 to scanner SCN-9999.
 | Contextual follow-up after hospital context | `agent` | Yes |
 | Empty, invalid, or off-topic request | `rejected` | None |
 | Disconnected bypass such as `What is 47 times 12? MRI` | `rejected` | None |
+| Creative ask naming a hospital thing, e.g. `tell me a joke about patients` | `rejected` | None |
 | Near-miss phrasing of a known command, on `jev-testing` only | `jev` | No Claude call |
 
 Tool-call count is not model-call count. A tool-free agent answer normally uses
@@ -189,6 +190,53 @@ written even when it declines, so the trace shows it was consulted.
 Every read/write boundary above is unchanged: this path adds no new way to
 mutate data, and the only hospital-data write in the system is still
 `reschedule_appointment`, which the agent alone can call.
+
+### How the domain gate decides "hospital request"
+
+A message reaches the agent when at least one clause (split on `. ? ! , ;`
+and on `and`/`but`) contains:
+
+- a hospital word **and** a request word. Entity codes (`APT-2001`, `SCN-1`,
+  `PT-1001`, `STF-3`, `RM-2`, `DEPT-RAD`) count as hospital words, e.g.
+  `reschedule APT-2001 to SCN-1`, `tell me about the radiology department`,
+  `compare MRI and CT delays`, `anything delayed on CT today?`.
+
+A code still needs a request word: `delete APT-2001`, `cancel APT-2001` and
+`mark SCN-4 as available` are rejected, because nothing in this system can do
+them and they shouldn't cost a model call. A hospital word or code standing
+alone in its own clause does not count either, which keeps
+`What's 47 times 12? APT-2001` and `Tell me a joke, scanner` rejected.
+
+A clause containing `joke`, `poem`, `haiku`, `song`, `riddle`, `essay`,
+`recipe`, `weather`, `password`, `credentials` or `sql` never counts — but
+another clause in the same message still can, so
+`tell me about MRI delays and write a poem` reaches the agent, which answers
+the MRI part and declines the poem.
+
+Reaching the agent grants nothing. The gate only decides whether a model is
+asked; grounding, `CommandRunner` validation and the tool list decide what can
+actually happen. `reschedule APT-9999 to SCN-1` reaches the agent and is then
+refused, because those codes were never grounded and don't exist.
+
+These now reach the agent; before this fix the gate wrongly rejected them:
+
+```text
+reschedule APT-2001 to SCN-1
+move APT-2001 to SCN-5
+is SCN-1 free?
+tell me about patient David Davis
+tell me about the radiology department
+give me a table of all scanners with their type and status
+describe the cardiology department
+anything delayed on CT today?
+look up patient Anthony
+help me with the MRI backlog
+```
+
+Known limit: a keyword gate cannot read intent. `what is 47 times 12 for the MRI
+appointment?` passes, because "what" and "MRI appointment" share a clause and
+"times" is also a real scheduling word. The agent's system prompt declines the
+arithmetic, but that still costs one model call.
 
 ## 7. Minimal Manual Check
 
@@ -354,35 +402,28 @@ What's 47 times 12? mri          <- disconnected-keyword bypass, still rejected
 Write me a poem. patient         <- same shape
 ```
 
-### 9.5 ⚠ Known bug — legitimate messages currently rejected
+### 9.5 Formerly rejected — now fixed
 
-These are **hospital requests that the domain gate wrongly rejects today**.
-Measured, on `master` as well as this branch — this is not a Jev issue. Listed
-here so this rulebook documents real behaviour rather than intended behaviour:
+These hospital requests used to be **wrongly rejected** by the domain gate. They
+now reach the agent (or, with the flag on, Jev first), because entity codes
+count as hospital words and common request verbs (`tell`, `give`, `describe`,
+`compare`, `look`, `help`, `anything`, ...) are recognised:
 
 ```text
-reschedule APT-2001 to SCN-1     -> rejected (should reach the agent)
-move APT-2001 to SCN-5           -> rejected (should reach the agent)
-tell me about patient David Davis -> rejected (should reach the agent)
-anything delayed on CT today?    -> rejected (should reach the agent)
+reschedule APT-2001 to SCN-1
+move APT-2001 to SCN-5
+tell me about patient David Davis
+tell me about the radiology department
+anything delayed on CT today?
+what imaging machines do we have?
 ```
 
-Causes, all in `backend/app/agent/domain_gate.py`:
+The fix did not loosen safety. Requests nothing in this system can do stay
+rejected — `delete APT-2001`, `cancel APT-2001`, `mark SCN-4 as available` —
+and so do credential and SQL asks. See §6's "How the domain gate decides" for
+the full rule, and `docs/PROGRESS.md` for the old-vs-new safety comparison.
 
-1. **Entity codes are not domain vocabulary.** `APT-2001` tokenises to `apt`
-   and `SCN-1` to `scn`, neither of which is in `_DOMAIN_NOUNS`. So
-   `reschedule APT-2001 to SCN-1` contains an action word but *no* domain
-   noun and is rejected at the first stage. This blocks the system's only
-   write operation when phrased with bare codes.
-2. **`anything` is not `any`.** `_ACTION_WORDS` has `any` but not `anything`,
-   so "anything delayed on CT today?" has two domain nouns and no action word.
-3. **`tell` is missing from `_ACTION_WORDS`**, so "tell me about patient X"
-   has a domain noun and no action word.
-
-This does **not** affect the grounding example in §5 and §7,
-`Move appointment APT-9999 to scanner SCN-9999`. That message contains the
-words "appointment" and "scanner", so it passes the domain gate, reaches the
-agent, and is stopped by grounding exactly as those sections describe. Only
-the *bare-code* phrasing — `move APT-9999 to SCN-9999`, with no "appointment"
-or "scanner" — is hit by this bug. (An earlier version of this note wrongly
-said the §5/§7 example was blocked by the gate too.)
+`Move appointment APT-9999 to scanner SCN-9999`, the grounding example in §5
+and §7, was never affected: it always contained "appointment" and "scanner",
+reached the agent, and was stopped by grounding. (An earlier version of this
+section wrongly said it was blocked by the gate.)

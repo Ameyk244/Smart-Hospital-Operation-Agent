@@ -91,6 +91,26 @@ async def test_every_criteria_label_is_executable_or_deliberately_not(
     assert labels == EXECUTABLE_COMMANDS | {NONE_CHOICE, "search_patients"}
 
 
+@pytest.mark.adversarial
+def test_the_fast_path_can_only_ever_execute_read_commands():
+    """The safety ceiling of the whole Jev path, pinned. Whatever Jev answers —
+    including a confident misclassification of a write request like
+    "reschedule APT-2001 to SCN-1", which the domain gate now lets through
+    to it — the only commands it can hand to CommandRunner are reads from the
+    deterministic parser's own grammar, which has no write rule at all. The
+    one hospital-data write, `reassign_scanner`, stays reachable only through
+    the agent's grounded `reschedule_appointment` tool."""
+    parser_read_commands = {
+        "list_departments",
+        "list_scanners",
+        "search_patients",
+        "show_next_appointment",
+        "list_delayed_appointments",
+    }
+    assert EXECUTABLE_COMMANDS <= parser_read_commands
+    assert "reassign_scanner" not in EXECUTABLE_COMMANDS
+
+
 async def test_an_explicit_none_option_is_always_offered(
     fake_typesafe, jev_settings, jev_response
 ):

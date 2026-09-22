@@ -907,3 +907,59 @@ installed into `sys.modules`, so no live call has been made. The absolute
 saving at this project's scale is small — the originating audit said so,
 and the cost page is built to show that honestly rather than flatter the
 feature.
+
+## Status: domain gate false positives fixed
+
+The gate had drifted too strict. A probe of 28 ordinary hospital phrasings
+found **17 wrongly rejected**, while all 14 off-topic probes were correctly
+blocked — so the failure was entirely false positives, which the gate's own
+docstring names as the costlier kind (a rejected hospital request gets a
+canned refusal instead of an answer). It surfaced during manual testing on
+the `jev-testing` branch, but the gate is identical on `master`, so the fix
+was made on a branch off `master`.
+
+Three causes, all in `backend/app/agent/domain_gate.py`:
+1. **Entity codes were invisible.** Tokenizing turned `APT-2001` into `apt`,
+   so `reschedule APT-2001 to SCN-1` held no domain word and was refused —
+   the system's only write operation, phrased the most direct way, never
+   reached the agent. Codes in the seeded formats are now swapped for a
+   placeholder domain token before tokenizing, and count as a domain noun —
+   still requiring a request word in the same clause. A looser first
+   attempt ("a code beside *any* word counts") was dropped after a
+   side-by-side safety probe of old vs new gate showed it let `delete
+   APT-2001`, `cancel APT-2001` and `mark SCN-4 as available` through.
+2. **Ordinary request verbs were missing** — `tell`, `give`, `get`,
+   `describe`, `compare`, `look`, `help` and others — plus `anything`
+   (only `any` was listed).
+3. Fixing (2) alone would have reopened the bypass, so **commas and
+   semicolons now split clauses** (`Tell me a joke, scanner` stays rejected),
+   and a clause containing an unmistakably creative word (`joke`, `poem`,
+   `haiku`, ...) never counts as the in-domain clause. Without that guard,
+   the new verbs let `tell me a joke about patients` through — a regression
+   caught by probing what the fix loosened, not only what it repaired.
+
+### Safety check: what the fix lets through that the old gate didn't
+The gate only decides whether a model is asked; it grants nothing. The fix
+touches no safety layer — grounding, `CommandRunner`, the tool list, the agent
+graph, the parser and the eligibility gate are all unchanged (verified by
+`git diff --name-only`). Beyond that, 21 risky messages (SQL, deletes,
+prompt injection, fabricated codes, credential and data-export asks) were run
+through the old and new gate side by side. Only two newly reach the agent:
+- `reschedule APT-9999 to SCN-1` — deliberately: it is a reschedule request,
+  and grounding refuses the fabricated codes, as it already did for the worded
+  form `Move appointment APT-9999 to scanner SCN-9999`.
+- `show me PT-1001's social security number` — the patient schema holds only
+  code, MRN, name and date of birth (the same fields `show patient <name>`
+  returns deterministically), so there is nothing further to expose.
+
+And one pre-existing gap closed: `run SQL: DELETE FROM appointments ...`
+passed the *old* gate and is now rejected. Seven unserviceable/unsafe requests
+are pinned as `adversarial` tests so a future change can't quietly reopen them.
+
+Result: every probe message routes as intended. 167+ tests pass, ruff clean.
+No model call was needed to verify any of it.
+
+Honest limit: `what is 47 times 12 for the MRI appointment?` passes, as it did
+before this change — "times" is also a scheduling word, and a keyword gate
+cannot read intent. The system prompt's refusal instruction is what declines
+it, at the cost of one model call.
