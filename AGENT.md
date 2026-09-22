@@ -35,15 +35,24 @@ Every `POST /api/chat` request follows this order:
    constructed.
 6. If the parser misses, run the context-aware domain gate.
 7. If the request is in-domain, run the eligibility gate.
-8. Only then create the configured model and start LangGraph.
+8. If enabled, ask Jev whether the request confidently maps to a supported
+   read command. A match runs through `CommandRunner` and stops.
+9. If Jev declines, lacks confidence, is unavailable, or cannot represent the
+   request, create the configured agent model and start LangGraph.
 
 The response identifies the selected route:
 
 | `handled_by` | Meaning |
 |---|---|
 | `deterministic` | Exact parser command; no LLM call |
+| `jev` | Confident typed decision routed to a read command |
 | `agent` | LangGraph/model path ran |
 | `rejected` | Domain or eligibility policy stopped the request before the model |
+
+Jev is a routing fast path, not an eighth agent tool. It runs before
+LangGraph, cannot perform a hospital write, and never bypasses the domain,
+eligibility, grounding, or command-validation layers. Its full contract is in
+`JEV.md`.
 
 ## 3. Domain Gate
 

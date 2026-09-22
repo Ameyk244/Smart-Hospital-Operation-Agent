@@ -2,13 +2,14 @@
 
 A full-stack hospital operations system built around a deterministic-first architecture.
 
-Exact operational commands are handled without an LLM. Natural-language hospital requests fall back to a bounded LangGraph agent that can search hospital data, reason over tool results, and safely reschedule appointments using grounded entity references.
+Exact operational commands are handled without an LLM. Natural-language read requests can take a confidence-gated Jev fast path into the same command layer, while richer requests fall back to a bounded LangGraph agent that can search hospital data, reason over tool results, and safely reschedule appointments using grounded entity references.
 
 The project uses only synthetic patient and hospital data.
 
 ## Key Features
 
 - Deterministic parser for common read operations
+- Jev typed-decision fast path for near-miss read commands
 - LangGraph agent as a natural-language fallback
 - PostgreSQL-backed hospital and agent state
 - Grounded appointment and scanner references
@@ -40,24 +41,32 @@ Runner          |
   |       |           |
   |    Rejected   Eligibility check
   |                   |
-  |                   v
-  |             LangGraph agent
-  |                   |
-  |          agent_node <-> tool_node
-  |                   |
-  +-------------------+
+  |               eligible?
+  |               /      \
+  |             NO        YES
+  |             |          |
+  |         Rejected   Jev fast path
+  |                    /          \
+  |             confident       decline/error
+  |                 |               |
+  |                 v               v
+  |          CommandRunner     LangGraph agent
+  |                              agent <-> tools
+  |                                   |
+  +-----------------------------------+
           |
           v
    Persist response
 ```
 
-The deterministic path does not create an LLM client or consume model tokens.
+The exact deterministic path does not create a model client or consume model tokens. Jev is consulted only after the parser misses and both gates pass; a confident match runs a read command, while every decline or integration failure falls through to the agent.
 
 The agent is activated only when:
 
 1. The deterministic parser does not match.
 2. The request belongs to the hospital operations domain.
 3. The request passes eligibility checks.
+4. Jev declines, is not confident, is disabled, or cannot handle the request.
 
 ## Agent Scope
 
@@ -75,10 +84,27 @@ The agent can work with:
 
 ## Commands and Agent Test Messages
 
-The application uses two request paths:
+The application reports four routing outcomes:
 
 - **Deterministic commands** use the parser and do not call the LLM.
+- **Jev messages** use natural phrasing for supported read commands and may be routed through `CommandRunner` after a confident typed decision.
 - **Agent messages** use natural language and may involve one or more tool calls.
+- **Rejected messages** fail the domain or eligibility policy before either model is called.
+
+### Jev Fast-Path Messages
+
+These are useful examples of natural language that misses the exact parser but can resolve to a supported read command:
+
+```text
+show me all the departments
+can you pull up the department list for me?
+which appointments are running late?
+how many delayed MRI appointments are there?
+which MRI scanners are available?
+what is the next scheduled appointment?
+```
+
+Jev does not perform hospital writes. Rescheduling, multi-step work, free-text patient search, preferences, and contextual follow-ups remain agent responsibilities. See `JEV.md` for the complete contract.
 
 ---
 
@@ -451,7 +477,8 @@ Blueprint: a FastAPI web service, a React static site, and managed PostgreSQL.
 
 1. Push this repository to GitHub.
 2. In Render, choose **New > Blueprint** and connect the repository.
-3. Enter `ANTHROPIC_API_KEY` when Render prompts for the secret value.
+3. Enter `ANTHROPIC_API_KEY` and `TYPESAFE_API_KEY` when Render prompts for
+   the secret values.
 4. Apply the Blueprint and open the `ameyk244-agentic-smart-hospital-web` URL.
 
 The backend applies Alembic migrations whenever it starts and seeds synthetic
@@ -459,6 +486,11 @@ hospital data only when the database is empty. Restarts and later deployments
 therefore preserve existing records. If Render assigns a different frontend
 hostname, set the backend's `CORS_ORIGINS` variable to that exact HTTPS origin
 and redeploy the backend.
+
+For an existing Blueprint, push the commit and let Render sync the same
+services; do not create a second Blueprint. If the new `TYPESAFE_API_KEY`
+secret is not prompted during sync, add it under the backend web service's
+Environment settings and redeploy that service.
 
 This Blueprint uses Render's free plans for demonstration. The backend can
 sleep after 15 idle minutes, and the free PostgreSQL database expires after 30

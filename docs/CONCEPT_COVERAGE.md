@@ -186,22 +186,21 @@ polling-based, not streaming/SSE, by deliberate scope decision (see
 
 ---
 
-## Experimental additions beyond the original 58 (branch `jev-testing`)
+## Additions beyond the original 58
 
 Deliberately numbered separately. These are **not** part of the 58-concept
 brief and are not retrofitted into any existing concept number — the
-original set is complete on `master` without them, and this branch is not
-merged.
+original set remains independently complete without them. E1 and E2 are now
+enabled on `master`; their historical implementation detail remains below.
 
 | # | Addition | Why | Location | Test(s) | Status |
 |---|---|---|---|---|---|
-| E1 | Model routing / fast-path widening with a typed-decision model | A prior audit of TypeSafe AI's Jev (see `docs/PROGRESS.md`) found it a poor fit for replacing the domain gate — that gate's whole job is avoiding paid calls, so making it paid is self-defeating — but a genuinely good fit *one step later*: when the regex parser misses, a cheap typed `Choice` can often recognise a known command that the deliberately-strict grammar didn't match, routing it through the existing `CommandRunner` instead of a full Sonnet turn. This is a routing concept, not an agent concept: it adds a second, cheaper way *into* the deterministic path rather than changing what the agent does. | `backend/app/agent/jev_fast_path.py`, wired in `backend/app/api/routes/chat.py` after both gates and immediately before the agent | `tests/unit/test_jev_fast_path.py` (25), `tests/e2e/test_jev_fast_path_api.py` (16 offline + 2 live-gated) | **Experimental** — flag-off by default, not merged to `master` |
-| E2 | Cost observability for a routing decision | Having added a cheaper path, the honest question is whether it actually saves anything. `GET /api/cost-comparison` aggregates the `jev_invoked` trace events into a with-vs-without tally, and the UI page echoes the assumptions rather than presenting a single unexplained number. Jev's own token usage is measured from its responses; the avoided Sonnet cost is explicitly an estimate, since the displaced turns never ran. | `backend/app/api/routes/cost.py`, `frontend/src/components/CostComparisonPage.tsx` | `tests/e2e/test_jev_fast_path_api.py` (cost section), `CostComparisonPage.test.tsx` | **Experimental** |
+| E1 | Model routing / fast-path widening with a typed-decision model | A prior audit of TypeSafe AI's Jev (see `docs/PROGRESS.md`) found it a poor fit for replacing the domain gate — that gate's whole job is avoiding paid calls, so making it paid is self-defeating — but a genuinely good fit *one step later*: when the regex parser misses, a cheap typed `Choice` can often recognise a known command that the deliberately-strict grammar didn't match, routing it through the existing `CommandRunner` instead of a full Sonnet turn. This is a routing concept, not an agent concept: it adds a second, cheaper way *into* the deterministic path rather than changing what the agent does. | `backend/app/agent/jev_fast_path.py`, wired in `backend/app/api/routes/chat.py` after both gates and immediately before the agent | `tests/unit/test_jev_fast_path.py` (25), `tests/e2e/test_jev_fast_path_api.py` (16 offline + 2 live-gated) | **Done** — enabled by default on `master` with an operator switch |
+| E2 | Cost observability for a routing decision | Having added a cheaper path, the honest question is whether it actually saves anything. `GET /api/cost-comparison` aggregates the `jev_invoked` trace events into a with-vs-without tally, and the UI page echoes the assumptions rather than presenting a single unexplained number. Jev's own token usage is measured from its responses; the avoided Sonnet cost is explicitly an estimate, since the displaced turns never ran. | `backend/app/api/routes/cost.py`, `frontend/src/components/CostComparisonPage.tsx` | `tests/e2e/test_jev_fast_path_api.py` (cost section), `CostComparisonPage.test.tsx` | **Done** |
 
-**Honest caveats on these two.** The vendor is one week old at time of
-writing, so the SDK contract is taken from its published docs rather than
-from experience, and `typesafe-sdk` is left unpinned in `requirements.txt`
-because no version has been verified against this codebase. The fast path
+**Operational caveats on these two.** The integration is intentionally
+isolated behind a feature switch, and `typesafe-sdk` is pinned to the verified
+`>=0.7.1,<1` range. The fast path
 can only ever produce commands whose arguments a fixed `Choice` can supply,
 which is why `search_patients` is recognised but never executed. And the
 cost saving is real but small in absolute terms at this project's scale —

@@ -28,6 +28,16 @@ services:
         sync: false
       - key: ANTHROPIC_MODEL
         value: claude-sonnet-5
+      - key: ENABLE_JEV_FAST_PATH
+        value: true
+      - key: TYPESAFE_API_KEY
+        sync: false
+      - key: JEV_MODEL
+        value: jev-latest
+      - key: JEV_CONFIDENCE_THRESHOLD
+        value: 0.9
+      - key: JEV_TIMEOUT_SECONDS
+        value: 5.0
       - key: MAX_AGENT_ROUNDS
         value: 6
       - key: MAX_TOOL_CALLS

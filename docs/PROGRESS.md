@@ -817,10 +817,11 @@ passed, 4 live-model tests deselected**, with Ruff clean.
 - `SKILLS.md` now records all five subagent runs: four coding and one
   research-only.
 
-## Status: `jev-testing` branch — Jev-assisted fast path (experimental)
+## Status: Jev-assisted fast path merged and enabled
 
-Not merged to `master`. Feature-flagged off by default
-(`ENABLE_JEV_FAST_PATH=false`), so `master` behavior is unchanged.
+Merged to `master` and enabled by default (`ENABLE_JEV_FAST_PATH=true`). It
+remains feature-switchable, and any decline or integration failure preserves
+the existing fallback to the LangGraph agent.
 
 ### Where this came from
 A prior audit evaluated TypeSafe AI's Jev — a "System One" model returning
@@ -838,7 +839,8 @@ plenty of ordinary phrasings ("can you pull up the department list?") miss
 it and cost a full Sonnet turn to answer something the deterministic path
 could have handled. Asking a cheap typed `Choice` "which known command is
 this, if any?" widens that entrance without loosening the grammar itself.
-This branch implements that, not the domain-gate idea the audit rejected.
+The implementation uses that routing placement, not the domain-gate idea the
+audit rejected.
 
 ### What it does
 When the regex parser returns UNKNOWN, Jev is asked which known command
@@ -899,11 +901,10 @@ bug the subagent's own tests missed:
 Both fixed with tests covering the previously-unexercised cases.
 
 ### Honest limits
-The vendor launched 2026-09-15, so the SDK contract here comes from
-published docs, not experience; `typesafe-sdk` is unpinned in
-`requirements.txt` on purpose, because no version has been verified against
-this codebase yet. The offline suite runs entirely against a fake SDK
-installed into `sys.modules`, so no live call has been made. The absolute
+The vendor launched 2026-09-15, so the integration remains isolated and
+fail-open-to-agent. Version 0.7.1 was verified with a live call and the SDK is
+bounded to `>=0.7.1,<1`; normal tests still use a fake SDK and consume no
+credits. The absolute
 saving at this project's scale is small — the originating audit said so,
 and the cost page is built to show that honestly rather than flatter the
 feature.

@@ -1,8 +1,9 @@
 # Architecture - Smart Hospital Operations Agent
 
 This is a learning project built over synthetic hospital data. Its core design
-is deterministic-first: exact commands avoid the LLM, while normal hospital
-language falls through to a bounded, grounded LangGraph agent.
+is deterministic-first: exact commands avoid model calls, near-miss read
+requests can use a typed Jev routing decision, and richer hospital language
+falls through to a bounded, grounded LangGraph agent.
 
 ## 1. Current Request Flow
 
@@ -34,18 +35,30 @@ CommandRunner    check_domain_gate(text, recent user messages)
   |                             NO        YES
   |                             |          |
   |                             v          v
-  |                          rejected  create LLM client lazily
-  |                                        |
-  |                                        v
-  |                                   run_agent()
-  |                                        |
-  |                                        v
-  |                     build_graph(): agent_node <-> tool_node
-  |                                        |
-  +---------------------> persist assistant response
-                                           |
-                                           v
-                                      ChatResponse
+  |                          rejected  Jev enabled?
+  |                                    /          \
+  |                                  NO            YES
+  |                                  |              |
+  |                                  |        try_jev_fast_path()
+  |                                  |         /             \
+  |                                  |   confident match   decline/failure
+  |                                  |         |               |
+  |                                  |         v               |
+  |                                  |   CommandRunner          |
+  |                                  |                         |
+  |                                  +-------------------------+
+  |                                            |
+  |                                  create agent model lazily
+  |                                            |
+  |                                            v
+  |                                       run_agent()
+  |                                            |
+  |                         build_graph(): agent_node <-> tool_node
+  |                                            |
+  +------------------------> persist assistant response
+                                               |
+                                               v
+                                          ChatResponse
 ```
 
 The route is implemented in `backend/app/api/routes/chat.py`.
@@ -69,10 +82,16 @@ A parser miss does not automatically invoke the LLM:
 4. Disconnected bypasses such as `What is 47 times 12? MRI` remain rejected.
 5. `check_eligibility()` then rejects empty input and input over 2,000
    characters.
-6. The model client is created only after both gates pass.
+6. If enabled, Jev makes one typed decision about the supported read commands.
+   A confident match executes through `CommandRunner` and returns
+   `handled_by="jev"`.
+7. Jev declines, low confidence, unsupported arguments, timeouts, and
+   integration failures all fall through to the agent.
+8. The configured agent model is created lazily only when the request still
+   needs LangGraph.
 
-This keeps three responsibilities separate: parser grammar, domain policy,
-and generic eligibility policy.
+This keeps parser grammar, domain policy, generic eligibility policy, cheap
+read routing, and agent reasoning separate.
 
 ## 2. One Trusted Hospital Execution Layer
 
@@ -99,6 +118,7 @@ business rules.
 | Database | PostgreSQL 16 in Docker Compose |
 | Data layer | Async SQLAlchemy 2.0 + Alembic |
 | Agent | LangChain messages/models + explicit LangGraph `StateGraph` |
+| Read routing | TypeSafe Jev typed decisions behind a feature switch |
 | LLM providers | Anthropic or OpenRouter through a provider factory |
 | Validation | Pydantic v2 |
 | Frontend | React + TypeScript + Vite |
@@ -285,14 +305,16 @@ them through `GET /api/sessions/{session_id}/trace`. The transport is polling,
 including short-interval polling during an active turn; it is not SSE or a
 WebSocket.
 
-Deterministic and pre-agent rejection paths persist conversation messages but
-do not create LangGraph tool traces.
+Jev consultations record `jev_invoked` with the selected command, confidence,
+token counts, latency, and outcome. Deterministic and pre-model rejection paths
+persist conversation messages but do not create LangGraph tool traces.
 
 ## 12. API Surface
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /api/chat` | Unified deterministic/rejected/agent request path |
+| `POST /api/chat` | Unified deterministic/Jev/rejected/agent request path |
+| `GET /api/cost-comparison` | Aggregate measured Jev use and estimated avoided agent cost |
 | `GET /api/operations/departments` | Read departments through `CommandRunner` |
 | `GET /api/operations/scanners` | Read/filter scanners through `CommandRunner` |
 | `GET /api/operations/appointments` | Read/filter appointments through `CommandRunner` |
@@ -310,6 +332,7 @@ Normal verification is offline and does not consume model API quota:
 - scripted/fake-model LangGraph tests;
 - grounding and adversarial tests;
 - mocked HTTP tests for routing and contextual follow-ups;
+- fake-SDK Jev decision, fallback, gate-order, and cost endpoint tests;
 - frontend unit/build/lint checks.
 
 Live-provider tests are explicitly marked `live_llm` and run only when

@@ -3,25 +3,24 @@
 Smart Hospital Operations Agent — a modular monolith. `backend/`
 (Python/FastAPI/PostgreSQL/LangGraph) and `frontend/` (React/TypeScript/
 Vite) are separate concerns. See `docs/ARCHITECTURE.md` for the full
-design, `AGENT.md` for the runtime agent contract, `docs/PROGRESS.md` for
+design, `AGENT.md` for the runtime agent contract, `JEV.md` for the read-only
+fast path, `docs/PROGRESS.md` for
 the implementation timeline, and `rulebook.md` for the current command,
 tool, routing, grounding, and manual verification reference.
 
-## Experimental branch: `jev-testing`
-The `jev-testing` branch is an isolated experiment, not part of the core
-architecture. It may add a third-party dependency (TypeSafe AI's Jev, the
-`typesafe-sdk` package) and a `TYPESAFE_API_KEY` env var, used to widen the
+## Jev read-only fast path
+The main request flow includes TypeSafe AI's Jev (`typesafe-sdk`) and a
+`TYPESAFE_API_KEY` env var, used to widen the
 deterministic fast path: when the regex parser returns UNKNOWN, Jev is asked
 which known command (if any) the message maps to, and a confident match is
 routed through the existing `CommandRunner` instead of a full Sonnet agent
-turn. It is feature-flagged off by default (`ENABLE_JEV_FAST_PATH=false`),
-so `master` behavior is unchanged.
+turn. It is enabled by default (`ENABLE_JEV_FAST_PATH=true`) but remains
+operator-configurable and must fail through to the agent when unavailable.
 
-Everything below applies on that branch unchanged — an experiment is not a
-reason to relax the destructive-action rule or subagent scoping. The Jev
-path must never bypass or weaken grounding, the domain gate, or any other
-existing safety mechanism; it only ever hands off to the same trusted
-`CommandRunner` an exact regex match would have used.
+The Jev path must remain after the domain and eligibility gates, stay
+read-only, and never bypass or weaken grounding or another safety mechanism.
+It only hands off to the same trusted `CommandRunner` an exact regex match
+would have used.
 
 ## Destructive/DB actions require explicit approval, every time
 No subagent or session may run Alembic migrations, `DROP`/`ALTER`

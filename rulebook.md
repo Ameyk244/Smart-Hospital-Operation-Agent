@@ -1,14 +1,12 @@
 # Smart Hospital Operations Rulebook
 
-Hospital operations have two input paths but one shared execution layer:
+Hospital operations have four routing outcomes and one shared execution layer:
 
 ```text
 Exact command  -> deterministic parser -> CommandRunner -> database
-Normal message -> domain gate -> agent -> optional tool -> CommandRunner -> database
-Off-topic msg  -> rejected before the agent
-
-# branch jev-testing only, off by default:
-Near-miss msg  -> domain gate -> jev -> CommandRunner -> database
+Near-miss read -> domain + eligibility gates -> Jev -> CommandRunner -> database
+Normal message -> domain + eligibility gates -> agent -> optional tool -> database
+Off-topic msg  -> rejected before either model
 ```
 
 The parser is intentionally strict. Normal hospital-related messages are
@@ -163,16 +161,16 @@ Move appointment APT-9999 to scanner SCN-9999.
 | Empty, invalid, or off-topic request | `rejected` | None |
 | Disconnected bypass such as `What is 47 times 12? MRI` | `rejected` | None |
 | Creative ask naming a hospital thing, e.g. `tell me a joke about patients` | `rejected` | None |
-| Near-miss phrasing of a known command, on `jev-testing` only | `jev` | No Claude call |
+| Near-miss phrasing of a supported read command | `jev` | Jev call; no Claude call |
 
 Tool-call count is not model-call count. A tool-free agent answer normally uses
 one model call. A tool action commonly uses one model call to request the tool
 and another to interpret its result.
 
-### The `jev` path (experimental, branch `jev-testing` only)
+### The `jev` path
 
-Not on `master`, and off by default even on that branch
-(`ENABLE_JEV_FAST_PATH=false`). When on, a message that misses the strict
+Jev is on `master` and enabled by default (`ENABLE_JEV_FAST_PATH=true`). A
+message that misses the strict
 parser is shown to a typed-decision model, which picks which known command
 it maps to — or `none`. A confident match (>= 0.9) runs through the same
 `CommandRunner` as an exact parser match, so a near-miss like
@@ -285,9 +283,8 @@ Rescheduling changes this data, so later results may differ from the clean seed.
 Every routing result below was **measured, not guessed**: each message was run
 through the real parser, the real domain gate, and (where it got that far) a
 real Jev call on `jev-1.13.0`. Confidence figures are what Jev actually
-returned. Jev results assume `ENABLE_JEV_FAST_PATH=true` on the `jev-testing`
-branch; with the flag off (the default, and all of `master`) every `jev` row
-below becomes an `agent` row instead.
+returned. Jev results assume `ENABLE_JEV_FAST_PATH=true`; with the flag off,
+every `jev` row below becomes an `agent` row instead.
 
 Jev is non-deterministic, so confidences will wobble a little run to run.
 Anything in the 0.85–0.95 band can land on either side of the 0.9 threshold.
