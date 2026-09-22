@@ -3,6 +3,7 @@ import type {
   Appointment,
   ChatResponse,
   ConversationMessage,
+  CostComparison,
   Department,
   Patient,
   Scanner,
@@ -100,6 +101,12 @@ export const api = {
 
   getMessages(sessionId: string): Promise<ConversationMessage[]> {
     return request(`/api/sessions/${encodeURIComponent(sessionId)}/messages`);
+  },
+
+  // With-Jev vs. without-Jev cost tally. Omitting sessionId asks for the
+  // all-sessions total; passing one scopes it to that session.
+  getCostComparison(sessionId?: string): Promise<CostComparison> {
+    return request(`/api/cost-comparison${buildQuery({ session_id: sessionId })}`);
   },
 };
 

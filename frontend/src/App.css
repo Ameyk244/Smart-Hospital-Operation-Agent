@@ -437,6 +437,14 @@
   color: var(--error);
 }
 
+/* Typed-decision fast path. Teal: distinct from the deterministic green
+   and the agent purple, while reading as a "this was cheap and local"
+   sibling of the green rather than an LLM-flavored one. */
+.handled-by-jev {
+  background: rgba(13, 148, 163, 0.16);
+  color: #0e7490;
+}
+
 @media (prefers-color-scheme: dark) {
   .handled-by-deterministic {
     color: #6fd99a;
@@ -446,6 +454,9 @@
   }
   .handled-by-rejected {
     color: #ff8983;
+  }
+  .handled-by-jev {
+    color: #5fd4e4;
   }
 }
 
@@ -540,4 +551,78 @@
   font-size: 11px;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Second line under a jev_invoked row (choice/confidence/threshold) —
+   subordinate to the standard event line above it. */
+.trace-event-detail {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--muted);
+  word-break: break-word;
+}
+
+/* --- Cost comparison page --- */
+
+.app-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.app-main-single {
+  display: block;
+}
+
+.cost-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 760px;
+}
+
+.cost-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cost-page-header h2 {
+  font-size: 18px;
+}
+
+.cost-page .data-table th[scope="row"] {
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: 13px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* Numbers (always the last cell in both tables here) get the mono
+   treatment; label cells stay in the body font. */
+.cost-page .data-table td:last-child {
+  font-family: var(--mono);
+  text-align: right;
+}
+
+.cost-net-row th[scope="row"],
+.cost-net-row td {
+  font-weight: 700;
+}
+
+.cost-empty-state {
+  font-size: 13px;
+  color: var(--muted);
+  background: var(--code-bg);
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.cost-caveat {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
 }

@@ -236,6 +236,30 @@ describe("ChatPanel handled-by badge (Task B)", () => {
 
     expect(await screen.findByText("agent")).toBeInTheDocument();
   });
+
+  // The typed-decision fast path: the parser missed, Jev mapped the
+  // message onto a known command, and CommandRunner executed it with no
+  // Claude call — so the turn reports itself as "jev", not "agent".
+  it("shows the jev badge for a typed-decision fast-path response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      createFetchMock({
+        chat: () => ({
+          session_id: "sess-jev",
+          handled_by: "jev",
+          message: "3 departments",
+          touched_entity_codes: ["DEP-01"],
+        }),
+      }),
+    );
+    render(<ChatPanel sessionId={null} onSessionId={vi.fn()} onTurnComplete={vi.fn()} trace={emptyTrace} />);
+
+    sendMessage("show me the departments please");
+
+    expect(await screen.findByText("jev")).toBeInTheDocument();
+    // Fast-path turns are not agent turns: no tool-call summary line.
+    expect(screen.queryByText(/tool call/)).not.toBeInTheDocument();
+  });
 });
 
 describe("ChatPanel Markdown rendering (Task C)", () => {

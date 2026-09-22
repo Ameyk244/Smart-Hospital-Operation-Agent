@@ -52,6 +52,7 @@ const HANDLED_BY_LABEL: Record<HandledBy, string> = {
   deterministic: "deterministic",
   agent: "agent",
   rejected: "rejected",
+  jev: "jev",
 };
 
 function HandledByBadge({ handledBy }: { handledBy?: HandledBy }) {
@@ -123,6 +124,16 @@ function describeTraceEvent(e: AgentEvent): string {
       return e.tool_name ? `Running ${e.tool_name}…` : "Running tool…";
     case "tool_executed":
       return e.tool_name ? `Ran ${e.tool_name}` : "Tool finished";
+    // The typed-decision fast path runs *before* the agent, so this is
+    // usually the first line a jev-routed turn ever shows. A REJECTED or
+    // FAILURE jev event isn't an error for the user — it just means the
+    // turn carries on to the agent, so word it as "falling back".
+    case "jev_invoked":
+      if (e.status === "SUCCESS") {
+        return e.tool_name ? `Jev matched ${e.tool_name}…` : "Jev matched a command…";
+      }
+      if (e.status === "FAILURE") return "Jev unavailable — falling back to the agent…";
+      return "Jev wasn't confident — falling back to the agent…";
     case "llm_response":
       return "Thinking…";
     case "llm_timeout":
