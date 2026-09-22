@@ -163,11 +163,46 @@ Jev can route these operations:
 | `show_next_appointment` | Requests for the next appointment |
 | `list_delayed_appointments` | Optional MRI, CT, or X-ray modality |
 
-A choice at or above the configured confidence threshold (`0.9` by default)
-is converted into the same typed `Command` used by the parser and executed by
-the same `CommandRunner`. Jev never queries the database directly and does not
-generate the final hospital data. Low-confidence decisions, `none`, timeouts,
-provider errors, and unsupported commands safely fall through to the agent.
+### How Jev Chooses
+
+The backend sends the user message as `state` in one `system_one()` request.
+That request contains four typed `Choice` questions:
+
+| Question key | Choices | Purpose |
+|---|---|---|
+| `command` | `list_departments`, `list_scanners`, `show_next_appointment`, `list_delayed_appointments`, `search_patients`, `none` | Identify one requested operation |
+| `scanner_type` | `MRI`, `CT`, `XRAY`, `unspecified` | Optional `list_scanners` modality |
+| `scanner_status` | `AVAILABLE`, `IN_USE`, `MAINTENANCE`, `unspecified` | Optional `list_scanners` status |
+| `appointment_type` | `MRI`, `CT`, `XRAY`, `unspecified` | Optional delayed-appointment modality |
+
+Jev returns a selected label, a confidence score, and optionally the
+probability distribution for each question. The selected `command` must score
+at least `JEV_CONFIDENCE_THRESHOLD` (`0.9` by default), must not be `none`, and
+must be one of the four executable read operations. `search_patients` is
+recognized so Jev can classify it honestly, but it falls through to the agent
+because a fixed choice cannot safely provide the required patient name.
+
+Optional filters are evaluated independently using the same threshold. A
+filter is included only when its own answer is confident and not
+`unspecified`; otherwise it is omitted rather than guessed. For example:
+
+```text
+User message: "which available MRI scanners are there?"
+
+command:        list_scanners  confidence: 0.98
+scanner_type:   MRI            confidence: 0.97
+scanner_status: AVAILABLE      confidence: 0.96
+
+Command("list_scanners", {"type": "MRI", "status": "AVAILABLE"})
+```
+
+The resulting typed `Command` is executed by the same `CommandRunner` used by
+the parser. Jev never queries the database directly and does not generate the
+final hospital data. The primary command's probability map is stored in the
+`jev_invoked` trace for inspection; routing uses the selected labels and
+confidence scores.
+Low confidence, `none`, timeouts, provider errors, and unsupported choices all
+fall through to the LangGraph agent.
 
 Jev cannot reschedule appointments or perform any other hospital write. It
 also does not handle free-text patient searches, multi-step work, preferences,

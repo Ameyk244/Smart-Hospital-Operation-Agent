@@ -40,10 +40,84 @@ to the LangGraph agent. Jev cannot reschedule an appointment.
 ## Decision Contract
 
 `backend/app/agent/jev_fast_path.py` asks Jev for typed choices rather than a
-free-form answer. The main choice selects a known command or `none`; additional
-choices represent scanner modality and status where needed. A command runs
-only when the command confidence reaches `JEV_CONFIDENCE_THRESHOLD`, which is
-`0.9` by default. Uncertain optional filters are omitted instead of guessed.
+free-form answer. All questions are included in one `system_one()` call with
+the original user text supplied as `state`.
+
+### Questions And Choices
+
+| Question key | Allowed labels | Used for |
+|---|---|---|
+| `command` | `list_departments`, `list_scanners`, `show_next_appointment`, `list_delayed_appointments`, `search_patients`, `none` | Primary routing decision |
+| `scanner_type` | `MRI`, `CT`, `XRAY`, `unspecified` | `list_scanners.type` |
+| `scanner_status` | `AVAILABLE`, `IN_USE`, `MAINTENANCE`, `unspecified` | `list_scanners.status` |
+| `appointment_type` | `MRI`, `CT`, `XRAY`, `unspecified` | `list_delayed_appointments.appointment_type` |
+
+Each `Choice` includes written criteria describing what every label means.
+The explicit `none` command prevents conversational, ambiguous, multi-step,
+or write requests from being forced onto the nearest read command. Similarly,
+`unspecified` prevents an absent or ambiguous filter from being guessed.
+
+`search_patients` appears in the command choices but is intentionally absent
+from the executable command set. Recognizing it produces an honest routing
+decision, but execution falls through to the agent because the fixed-choice
+schema cannot return the required free-text patient name.
+
+### Scoring Rules
+
+Jev returns a selected label and confidence score for each question, plus an
+optional probability map. The routing algorithm applies these rules:
+
+1. Read the `command` answer.
+2. If its confidence is below `JEV_CONFIDENCE_THRESHOLD` (`0.9` by default),
+   return `low_confidence` and continue to the agent.
+3. If it selected `none`, return `no_command_match` and continue to the agent.
+4. If it selected a recognized but non-executable operation such as
+   `search_patients`, continue to the agent.
+5. For an executable operation, inspect only the filter questions mapped to
+   that command.
+6. Include a filter only when its own confidence reaches the same threshold
+   and its label is not `unspecified`.
+7. Construct a typed `Command` and pass it to `CommandRunner`.
+
+The primary command's probability map is recorded in the `jev_invoked` trace
+for debugging and evaluation. Filter confidence scores are used while building
+the command but are not currently persisted. The scores are not combined into
+a second custom score; the implementation uses each selected answer's
+confidence directly.
+
+### Worked Example
+
+For this message:
+
+```text
+which available MRI scanners are there?
+```
+
+a successful response may look like:
+
+```text
+command:          list_scanners  confidence: 0.98
+scanner_type:     MRI            confidence: 0.97
+scanner_status:   AVAILABLE      confidence: 0.96
+appointment_type: unspecified    confidence: 0.99
+```
+
+Only the filters mapped to `list_scanners` are read, so the appointment answer
+is ignored. The backend constructs:
+
+```python
+Command(
+    "list_scanners",
+    {"type": "MRI", "status": "AVAILABLE"},
+)
+```
+
+If `scanner_status` scored `0.72`, the command could still run, but without
+the uncertain status filter:
+
+```python
+Command("list_scanners", {"type": "MRI"})
+```
 
 Every match uses the existing `CommandRunner`, so repositories, transactions,
 validation, and response formatting are shared with exact parser commands.
