@@ -261,6 +261,13 @@ class FakeTypeSafe:
         self.calls: list[dict] = []
         self.client_constructions = 0
         self.accepts_model = True
+        # Kwargs each TypeSafeClient(...) was constructed with. Recorded so a
+        # test can assert the API key is passed explicitly: the real SDK
+        # would otherwise fall back to reading TYPESAFE_API_KEY from the
+        # environment, which this project never exports (pydantic-settings
+        # loads .env into Settings, not into os.environ) — a bug that only
+        # shows up on a live call, so the fake has to make it assertable.
+        self.client_kwargs: list[dict] = []
 
 
 @pytest.fixture
@@ -288,6 +295,7 @@ def fake_typesafe():
     class TypeSafeClient:
         def __init__(self, **kwargs):
             handle.client_constructions += 1
+            handle.client_kwargs.append(kwargs)
 
         def system_one(self, *, state, questions, **kwargs):
             if "model" in kwargs and not handle.accepts_model:

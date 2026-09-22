@@ -376,17 +376,26 @@ async def try_jev_fast_path(text: str, settings: "Settings") -> JevFastPathResul
     threshold = settings.jev_confidence_threshold
 
     def _call() -> Any:
-        client = TypeSafeClient()
+        # The key is passed explicitly rather than letting the SDK read
+        # TYPESAFE_API_KEY from the environment itself. That default would
+        # silently never work here: this project loads .env through
+        # pydantic-settings into `Settings`, which does *not* export anything
+        # into os.environ — so a bare TypeSafeClient() finds no key and fails
+        # instantly with an auth error, even though the key is sitting right
+        # there in settings. Caught on the first live call; see the
+        # `jev_missing_api_key` guard above for the no-key-at-all case.
+        client = TypeSafeClient(api_key=settings.typesafe_api_key)
         questions = _build_questions(Choice)
         try:
             return client.system_one(
                 state=text, questions=questions, model=settings.jev_model
             )
         except TypeError:
-            # The SDK contract we were given documents a default model
-            # ("jev-latest") but not a `model` kwarg on `system_one`. Rather
-            # than guess wrong and hard-fail every call, fall back to the
-            # SDK's own default; `response.model` records what actually ran.
+            # Defensive: SDK 0.7.1 does accept a `model` kwarg on
+            # `system_one` (verified by introspection), but if a future
+            # version drops it, fall back to the SDK's own default rather
+            # than hard-failing every call; `response.model` records what
+            # actually ran.
             return client.system_one(state=text, questions=questions)
 
     started = time.perf_counter()

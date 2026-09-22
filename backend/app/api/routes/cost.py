@@ -65,12 +65,17 @@ JEV_INPUT_USD_PER_MTOK = 0.042
 JEV_OUTPUT_USD_PER_MTOK = 0.0
 
 # Fallback used only when a completed Jev call recorded a null
-# `input_tokens` (the SDK types usage as `int | None`). Sized from the
-# criteria payload `jev_fast_path.py` actually sends — four Choice questions
-# and their label descriptions — plus a short user message. An ESTIMATE.
-# Deliberately NOT applied to failed calls: a call that errored or timed out
-# is not assumed to have consumed tokens.
-ESTIMATED_JEV_INPUT_TOKENS_PER_CALL = 400
+# `input_tokens` (the SDK types usage as `int | None`). Deliberately NOT
+# applied to failed calls: a call that errored or timed out is not assumed
+# to have consumed tokens.
+#
+# No longer a guess. This was originally estimated at 400 from reading the
+# criteria payload; the first real call against jev-1.13.0 reported 1,008
+# input tokens for a short message, so the estimate was ~2.5x low — the four
+# Choice questions and all their label descriptions cost more than they look
+# like they should. Rounded to 1,000 from that single measurement, which is
+# one data point, not a distribution.
+ESTIMATED_JEV_INPUT_TOKENS_PER_CALL = 1_000
 
 
 class CostComparisonAssumptions(BaseModel):

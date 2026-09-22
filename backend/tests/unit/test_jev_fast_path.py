@@ -58,6 +58,24 @@ async def test_the_message_text_is_what_gets_sent_as_state(
     assert fake_typesafe.calls[0]["state"] == "what departments do you have?"
 
 
+async def test_the_api_key_is_passed_to_the_client_explicitly(
+    fake_typesafe, jev_settings, jev_response
+):
+    """Regression test for a bug the mocked suite originally missed and the
+    first live call caught. The SDK falls back to reading TYPESAFE_API_KEY
+    from the environment when none is passed — but this project loads .env
+    through pydantic-settings into `Settings`, which never exports anything
+    into os.environ. So a bare TypeSafeClient() authenticates with nothing
+    and fails instantly, while every mocked test still passes because the
+    fake client doesn't care about credentials. The key must be handed over
+    explicitly, and that is only assertable here."""
+    fake_typesafe.behavior = jev_response("list_departments")
+
+    await try_jev_fast_path("anything", jev_settings(typesafe_api_key="sentinel-key"))
+
+    assert fake_typesafe.client_kwargs[0].get("api_key") == "sentinel-key"
+
+
 async def test_every_criteria_label_is_executable_or_deliberately_not(
     fake_typesafe, jev_settings, jev_response
 ):
