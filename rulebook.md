@@ -3,9 +3,12 @@
 Hospital operations have two input paths but one shared execution layer:
 
 ```text
-Exact command -> deterministic parser -> CommandRunner -> database
+Exact command  -> deterministic parser -> CommandRunner -> database
 Normal message -> domain gate -> agent -> optional tool -> CommandRunner -> database
-Off-topic message -> rejected before the agent
+Off-topic msg  -> rejected before the agent
+
+# branch jev-testing only, off by default:
+Near-miss msg  -> domain gate -> jev -> CommandRunner -> database
 ```
 
 The parser is intentionally strict. Normal hospital-related messages are
@@ -159,10 +162,33 @@ Move appointment APT-9999 to scanner SCN-9999.
 | Contextual follow-up after hospital context | `agent` | Yes |
 | Empty, invalid, or off-topic request | `rejected` | None |
 | Disconnected bypass such as `What is 47 times 12? MRI` | `rejected` | None |
+| Near-miss phrasing of a known command, on `jev-testing` only | `jev` | No Claude call |
 
 Tool-call count is not model-call count. A tool-free agent answer normally uses
 one model call. A tool action commonly uses one model call to request the tool
 and another to interpret its result.
+
+### The `jev` path (experimental, branch `jev-testing` only)
+
+Not on `master`, and off by default even on that branch
+(`ENABLE_JEV_FAST_PATH=false`). When on, a message that misses the strict
+parser is shown to a typed-decision model, which picks which known command
+it maps to — or `none`. A confident match (>= 0.9) runs through the same
+`CommandRunner` as an exact parser match, so a near-miss like
+`can you pull up the department list?` can be answered with no Claude call
+at all. It shows a `jev` badge and writes a `jev_invoked` trace row.
+
+It sits **after** the domain gate, so off-topic messages are still rejected
+for free and never reach it. It cannot reach anything `CommandRunner` won't
+already accept, it never invents a command argument, and it never executes
+`search_patients` (a fixed choice can't produce a free-text name). Anything
+unconfident, unrecognised, or failing falls through to the agent unchanged —
+so the worst case is the behavior you already had. A `jev_invoked` row is
+written even when it declines, so the trace shows it was consulted.
+
+Every read/write boundary above is unchanged: this path adds no new way to
+mutate data, and the only hospital-data write in the system is still
+`reschedule_appointment`, which the agent alone can call.
 
 ## 7. Minimal Manual Check
 

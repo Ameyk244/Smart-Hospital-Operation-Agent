@@ -816,3 +816,94 @@ passed, 4 live-model tests deselected**, with Ruff clean.
   tables, polling-based trace transport, graph state, and current bounds.
 - `SKILLS.md` now records all five subagent runs: four coding and one
   research-only.
+
+## Status: `jev-testing` branch — Jev-assisted fast path (experimental)
+
+Not merged to `master`. Feature-flagged off by default
+(`ENABLE_JEV_FAST_PATH=false`), so `master` behavior is unchanged.
+
+### Where this came from
+A prior audit evaluated TypeSafe AI's Jev — a "System One" model returning
+typed, calibrated decisions instead of text — for this codebase. Its
+conclusion was mostly negative: the one place with the right *shape* (the
+domain gate) was the worst place to put it, because that gate exists
+specifically to avoid paid calls, and replacing free regex with a paid
+call there is self-defeating. Everything else was either too trivial, a
+hard security boundary that must not be probabilistic (grounding), or the
+one genuinely chat-shaped Sonnet call that Jev's own docs rule out.
+
+What the audit *did* surface was a better fit one step later in the
+pipeline: **model routing**. The regex parser is deliberately strict, so
+plenty of ordinary phrasings ("can you pull up the department list?") miss
+it and cost a full Sonnet turn to answer something the deterministic path
+could have handled. Asking a cheap typed `Choice` "which known command is
+this, if any?" widens that entrance without loosening the grammar itself.
+This branch implements that, not the domain-gate idea the audit rejected.
+
+### What it does
+When the regex parser returns UNKNOWN, Jev is asked which known command
+the message maps to. A confident match (default threshold 0.9, matching
+TypeSafe's own guidance for automatic action) executes through the **same
+`CommandRunner`** the regex path uses. Anything else — unconfident, an
+explicit "none", an unsupported command, or any failure — falls through to
+the agent exactly as before.
+
+Placement is the safety-critical detail: the fast path sits **after** the
+domain gate and eligibility gate and **immediately before** the agent. So
+an off-topic message is still rejected for free rather than spending a Jev
+call on it, and the only thing the fast path can ever displace is a full
+Sonnet turn. It widens the deterministic entrance; it never weakens a
+gate, and two e2e tests assert both gates still run first.
+
+Arguments are never fabricated: filter answers (modality, scanner status)
+come from extra `Choice` questions in the same single call, and are applied
+only when they clear the same confidence threshold. An unconfident filter
+is *omitted*, which is safe by construction — an unfiltered list is wider
+but still correct, where a guessed filter would confidently return the
+wrong answer. `search_patients` is recognised but never executed, since a
+`Choice` cannot produce a free-text query.
+
+A new `jev_invoked` trace event is written in all three outcomes (match,
+decline, failure), so the trace panel shows the consultation even when it
+changed nothing. `GET /api/cost-comparison` aggregates those events into a
+with-vs-without tally, and a new UI page renders it.
+
+### No schema change was needed
+`AgentEvent.event_type` is already a free `String(60)`, `arguments_json` a
+nullable `JSON` column, `latency_ms` a nullable `Integer` — the new event
+fits the existing table exactly. Alembic is untouched, and that was
+verified rather than assumed, given this project's earlier migration
+incident.
+
+### Process
+Two subagents in parallel (backend, and the restricted `frontend-worker`
+type for the UI). Parallel was only safe because the contract between them
+— the `handled_by` value, the exact `jev_invoked` event shape, the cost
+endpoint's response — was researched and frozen by the lead session *before*
+dispatch and written verbatim into both briefs, rather than left for two
+agents to negotiate across a boundary neither could see. See `SKILLS.md`.
+
+Both diffs were reviewed rather than trusted, and each review found a real
+bug the subagent's own tests missed:
+- **Frontend**: the trace panel rendered "matched &lt;command&gt;" whenever
+  Jev's answer named a command, including below-threshold answers where the
+  turn actually went on to the agent — claiming an execution that never
+  happened, in the one component whose job is accurate reporting.
+- **Backend**: `jev_malformed_response` was missing from the failure-reason
+  set, so a response shaped differently from the documented contract would
+  trace as a *decline* with no error category — reading as "Jev wasn't
+  confident" when the integration is in fact broken. That is the single most
+  likely failure on first contact with a real key, given the SDK is a week
+  old.
+
+Both fixed with tests covering the previously-unexercised cases.
+
+### Honest limits
+The vendor launched 2026-09-15, so the SDK contract here comes from
+published docs, not experience; `typesafe-sdk` is unpinned in
+`requirements.txt` on purpose, because no version has been verified against
+this codebase yet. The offline suite runs entirely against a fake SDK
+installed into `sys.modules`, so no live call has been made. The absolute
+saving at this project's scale is small — the originating audit said so,
+and the cost page is built to show that honestly rather than flatter the
+feature.
