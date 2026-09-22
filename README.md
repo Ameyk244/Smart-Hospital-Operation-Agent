@@ -581,28 +581,4 @@ The expected result is:
 - The remaining questions are answered using conversation context.
 - No follow-up should be incorrectly rejected as off-topic.
 
-## Deploying to Render
 
-The included `render.yaml` provisions the complete application as a Render
-Blueprint: a FastAPI web service, a React static site, and managed PostgreSQL.
-
-1. Push this repository to GitHub.
-2. In Render, choose **New > Blueprint** and connect the repository.
-3. Enter `ANTHROPIC_API_KEY` and `TYPESAFE_API_KEY` when Render prompts for
-   the secret values.
-4. Apply the Blueprint and open the `ameyk244-agentic-smart-hospital-web` URL.
-
-The backend applies Alembic migrations whenever it starts and seeds synthetic
-hospital data only when the database is empty. Restarts and later deployments
-therefore preserve existing records. If Render assigns a different frontend
-hostname, set the backend's `CORS_ORIGINS` variable to that exact HTTPS origin
-and redeploy the backend.
-
-For an existing Blueprint, push the commit and let Render sync the same
-services; do not create a second Blueprint. If the new `TYPESAFE_API_KEY`
-secret is not prompted during sync, add it under the backend web service's
-Environment settings and redeploy that service.
-
-This Blueprint uses Render's free plans for demonstration. The backend can
-sleep after 15 idle minutes, and the free PostgreSQL database expires after 30
-days; choose paid plans before treating the deployment as persistent.
