@@ -231,3 +231,157 @@ After a clean reseed:
 - Delayed CT appointments: `APT-2005` through `APT-2007`
 
 Rescheduling changes this data, so later results may differ from the clean seed.
+
+## 9. Message Bank — which path actually handles what
+
+Every routing result below was **measured, not guessed**: each message was run
+through the real parser, the real domain gate, and (where it got that far) a
+real Jev call on `jev-1.13.0`. Confidence figures are what Jev actually
+returned. Jev results assume `ENABLE_JEV_FAST_PATH=true` on the `jev-testing`
+branch; with the flag off (the default, and all of `master`) every `jev` row
+below becomes an `agent` row instead.
+
+Jev is non-deterministic, so confidences will wobble a little run to run.
+Anything in the 0.85–0.95 band can land on either side of the 0.9 threshold.
+
+### 9.1 Deterministic — exact grammar, no model call, no cost
+
+```text
+list departments
+list scanners
+list scanners mri
+list scanners ct
+list scanners xray
+list scanners available
+list scanners mri available
+list scanners ct available
+list scanners mri maintenance
+list scanners in use
+show patient David Davis
+show patient Anthony
+show next appointment
+show the next appointment
+list delayed appointments
+list delayed appointments mri
+list delayed appointments ct
+LIST DEPARTMENTS
+   list departments
+```
+
+Case and surrounding whitespace don't matter; nothing else does. Add a
+please, a "me", or an "all" and you leave this path entirely.
+
+### 9.2 Jev fast path — parser missed, Jev recognised it anyway
+
+Verified matches, with the confidence Jev returned and the command it built:
+
+```text
+show me all the departments                     0.98  list_departments
+which appointments are running late?            0.99  list_delayed_appointments
+how many delayed MRI appointments are there?    0.97  list_delayed_appointments {appointment_type: MRI}
+which MRI scanners are available?               0.96  list_scanners {type: MRI, status: AVAILABLE}
+can you pull up the department list for me?     0.95  list_departments
+what departments do you have?                   0.95  list_departments
+are any CT scanners free right now?             0.95  list_scanners {type: CT, status: AVAILABLE}
+which departments exist here?                   0.93  list_departments
+what scanners do we have?                       0.90  list_scanners
+```
+
+Note the argument extraction: "which MRI scanners are available?" becomes
+`list_scanners` with **both** a type and a status filter, pulled from separate
+`Choice` questions in the same call. A filter is only applied when it clears
+the same 0.9 threshold — otherwise it's omitted, never guessed, so you get a
+wider-but-correct answer rather than a confidently wrong one.
+
+**Near-misses that fell just short of 0.9 and went to the agent instead:**
+
+```text
+what's the next appointment?                    0.87  show_next_appointment
+when is the next appointment scheduled?         0.84  show_next_appointment
+any scanners under maintenance?                 0.84  list_scanners
+```
+
+These are exactly the phrasings the fast path is *meant* to catch, and the
+0.9 threshold is what stops them. That threshold is TypeSafe's own
+"act automatically" band, chosen because a match executes a real command.
+Lowering `JEV_CONFIDENCE_THRESHOLD` to 0.8 would capture all three — at the
+cost of acting on weaker evidence. It's a genuine trade, not an oversight.
+
+### 9.3 Agent — Jev correctly declines, or the request genuinely needs it
+
+Verified: Jev returned `none` with high confidence on each of these, i.e. it
+actively recognised these as not-a-known-command rather than failing to
+understand them.
+
+```text
+move the first delayed MRI appointment to an available scanner   none @ 1.00
+what do I prefer?                                                none @ 1.00
+find delayed MRI appointments and then move the first one        none @ 0.99
+remember that I prefer MRI scanners                              none @ 0.99
+is radiology or cardiology more backed up?                       none @ 0.82
+```
+
+The first and third are the important ones: a **write** request and a
+**multi-step** request both declined rather than being mangled onto a
+read-only command. That's the safety property, working.
+
+Other things that always need the agent:
+
+```text
+forget my scanner preference
+what did you just change?
+why did you choose that scanner?
+compare MRI and CT delays
+which patients have appointments on a maintenance scanner?
+give me a table of all scanners with their type and status
+```
+
+Patient lookups by name reach the agent even though `search_patients` exists
+as a deterministic command: a fixed `Choice` cannot produce a free-text name,
+so the fast path recognises the intent but deliberately refuses to execute it
+and hands off to the agent's real search tool.
+
+### 9.4 Rejected — never reaches any model
+
+```text
+what's the weather like today?
+write me a poem about the ocean
+what is 47 times 12?
+book me a flight to Chicago
+tell me a joke
+how are you?
+What's 47 times 12? mri          <- disconnected-keyword bypass, still rejected
+Write me a poem. patient         <- same shape
+```
+
+### 9.5 ⚠ Known bug — legitimate messages currently rejected
+
+These are **hospital requests that the domain gate wrongly rejects today**.
+Measured, on `master` as well as this branch — this is not a Jev issue. Listed
+here so this rulebook documents real behaviour rather than intended behaviour:
+
+```text
+reschedule APT-2001 to SCN-1     -> rejected (should reach the agent)
+move APT-2001 to SCN-5           -> rejected (should reach the agent)
+tell me about patient David Davis -> rejected (should reach the agent)
+anything delayed on CT today?    -> rejected (should reach the agent)
+```
+
+Causes, all in `backend/app/agent/domain_gate.py`:
+
+1. **Entity codes are not domain vocabulary.** `APT-2001` tokenises to `apt`
+   and `SCN-1` to `scn`, neither of which is in `_DOMAIN_NOUNS`. So
+   `reschedule APT-2001 to SCN-1` contains an action word but *no* domain
+   noun and is rejected at the first stage. This blocks the system's only
+   write operation when phrased with bare codes.
+2. **`anything` is not `any`.** `_ACTION_WORDS` has `any` but not `anything`,
+   so "anything delayed on CT today?" has two domain nouns and no action word.
+3. **`tell` is missing from `_ACTION_WORDS`**, so "tell me about patient X"
+   has a domain noun and no action word.
+
+Note this contradicts §5 and §7 above, which assume
+`Move appointment APT-9999 to scanner SCN-9999` reaches the agent and is
+stopped by *grounding*. It is currently stopped earlier, by the domain gate,
+for the wrong reason. The grounding behaviour those sections describe is still
+correct — it just isn't what you'll observe from that particular message until
+this is fixed.
