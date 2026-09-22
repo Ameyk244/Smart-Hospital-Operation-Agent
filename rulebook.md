@@ -159,10 +159,58 @@ Move appointment APT-9999 to scanner SCN-9999.
 | Contextual follow-up after hospital context | `agent` | Yes |
 | Empty, invalid, or off-topic request | `rejected` | None |
 | Disconnected bypass such as `What is 47 times 12? MRI` | `rejected` | None |
+| Creative ask naming a hospital thing, e.g. `tell me a joke about patients` | `rejected` | None |
 
 Tool-call count is not model-call count. A tool-free agent answer normally uses
 one model call. A tool action commonly uses one model call to request the tool
 and another to interpret its result.
+
+### How the domain gate decides "hospital request"
+
+A message reaches the agent when at least one clause (split on `. ? ! , ;`
+and on `and`/`but`) contains:
+
+- a hospital word **and** a request word. Entity codes (`APT-2001`, `SCN-1`,
+  `PT-1001`, `STF-3`, `RM-2`, `DEPT-RAD`) count as hospital words, e.g.
+  `reschedule APT-2001 to SCN-1`, `tell me about the radiology department`,
+  `compare MRI and CT delays`, `anything delayed on CT today?`.
+
+A code still needs a request word: `delete APT-2001`, `cancel APT-2001` and
+`mark SCN-4 as available` are rejected, because nothing in this system can do
+them and they shouldn't cost a model call. A hospital word or code standing
+alone in its own clause does not count either, which keeps
+`What's 47 times 12? APT-2001` and `Tell me a joke, scanner` rejected.
+
+A clause containing `joke`, `poem`, `haiku`, `song`, `riddle`, `essay`,
+`recipe`, `weather`, `password`, `credentials` or `sql` never counts — but
+another clause in the same message still can, so
+`tell me about MRI delays and write a poem` reaches the agent, which answers
+the MRI part and declines the poem.
+
+Reaching the agent grants nothing. The gate only decides whether a model is
+asked; grounding, `CommandRunner` validation and the tool list decide what can
+actually happen. `reschedule APT-9999 to SCN-1` reaches the agent and is then
+refused, because those codes were never grounded and don't exist.
+
+These now reach the agent; before this fix the gate wrongly rejected them:
+
+```text
+reschedule APT-2001 to SCN-1
+move APT-2001 to SCN-5
+is SCN-1 free?
+tell me about patient David Davis
+tell me about the radiology department
+give me a table of all scanners with their type and status
+describe the cardiology department
+anything delayed on CT today?
+look up patient Anthony
+help me with the MRI backlog
+```
+
+Known limit: a keyword gate cannot read intent. `what is 47 times 12 for the MRI
+appointment?` passes, because "what" and "MRI appointment" share a clause and
+"times" is also a real scheduling word. The agent's system prompt declines the
+arithmetic, but that still costs one model call.
 
 ## 7. Minimal Manual Check
 

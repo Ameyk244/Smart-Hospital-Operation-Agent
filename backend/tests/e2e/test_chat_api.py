@@ -133,6 +133,34 @@ async def test_contextual_followup_reaches_agent_without_live_llm(client):
     run.assert_awaited_once()
 
 
+async def test_a_bare_code_reschedule_reaches_the_agent(client):
+    """Regression test: "reschedule APT-2001 to SCN-1" used to be refused by
+    the domain gate, because entity codes tokenized to meaningless fragments
+    and left no domain word behind — so the system's only write operation,
+    phrased the most direct way, never reached the agent at all. It must now
+    get there, where grounding decides whether those codes may be used."""
+    final_state = {
+        "messages": [AIMessage(content="I need to look those codes up first.")],
+        "terminated_reason": None,
+        "touched_entity_codes": [],
+    }
+
+    with (
+        patch("app.api.routes.chat.get_default_chat_model", return_value=object()),
+        patch(
+            "app.api.routes.chat.run_agent",
+            new=AsyncMock(return_value=final_state),
+        ) as run,
+    ):
+        response = await client.post(
+            "/api/chat", json={"text": "reschedule APT-2001 to SCN-1"}
+        )
+
+    assert response.status_code == 200
+    assert response.json()["handled_by"] == "agent"
+    run.assert_awaited_once()
+
+
 @pytest.mark.adversarial
 async def test_oversized_session_id_is_rejected_with_a_clean_422(client):
     """AgentSession.id is sized for a UUID (36 chars). A client-supplied

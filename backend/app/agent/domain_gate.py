@@ -86,11 +86,25 @@ from dataclasses import dataclass
 
 _WORD_RE = re.compile(r"[a-z]+")
 
-# Splits a message into clause-ish fragments: sentence-ending punctuation
-# runs, or a standalone coordinating conjunction ("and"/"but"). Deliberately
-# simple — this is not sentence-boundary detection, just enough structure to
-# tell "two separate thoughts" apart from "one thought with several words".
-_FRAGMENT_SPLIT_RE = re.compile(r"[.!?]+|\b(?:and|but)\b")
+# Entity codes in the seeded formats (app/seed/seed_data.py): APT-2001,
+# SCN-1, PT-1001, STF-3, RM-2, DEPT-RAD. Word tokenizing alone throws these
+# away — "APT-2001" becomes the meaningless "apt" — which made a bare
+# "reschedule APT-2001 to SCN-1" look like it contained no domain word at
+# all and get rejected, blocking the system's only write operation. Each
+# code is swapped for one placeholder token that counts as a domain noun.
+_ENTITY_CODE_RE = re.compile(
+    r"\b(?:APT|SCN|PT|STF|RM)-\d+\b|\bDEPT-[A-Z]+\b", re.IGNORECASE
+)
+_ENTITY_TOKEN = "entitycode"
+
+# Splits a message into clause-ish fragments: punctuation runs (commas and
+# semicolons included), or a standalone coordinating conjunction
+# ("and"/"but"). Deliberately simple — this is not sentence-boundary
+# detection, just enough structure to tell "two separate thoughts" apart
+# from "one thought with several words". Commas matter because a request
+# verb like "tell" is in _ACTION_WORDS: without a comma split,
+# "Tell me a joke, scanner" would pair "tell" with the tacked-on "scanner".
+_FRAGMENT_SPLIT_RE = re.compile(r"[.!?,;]+|\b(?:and|but)\b")
 
 # Short replies that only make sense in light of a recent turn. These are
 # intentionally narrow: context may admit a confirmation or a pronoun-based
@@ -184,6 +198,17 @@ _DOMAIN_NOUNS: frozenset[str] = frozenset(
         "technologist",
         "nurse",
         "physician",
+        # Ordinary ways staff name the same things ("MRI delays", "the
+        # backlog", "which machines") that the singular forms above miss.
+        "delays",
+        "backlog",
+        "scan",
+        "scans",
+        "imaging",
+        "machine",
+        "machines",
+        # Stands in for any entity code; see _ENTITY_CODE_RE.
+        _ENTITY_TOKEN,
     }
 )
 
@@ -232,6 +257,66 @@ _ACTION_WORDS: frozenset[str] = frozenset(
         "chose",
         "change",
         "changed",
+        "anything",
+        # Plain request verbs. Their absence rejected ordinary requests like
+        # "tell me about the radiology department" or "give me a table of
+        # all scanners". Adding generic verbs is safe for the same reason
+        # the question words are: they only count alongside a domain noun
+        # in the same fragment, so a noun tacked on after a comma or full
+        # stop still fails.
+        "tell",
+        "give",
+        "get",
+        "describe",
+        "explain",
+        "compare",
+        "look",
+        "pull",
+        "put",
+        "swap",
+        "help",
+        "need",
+        "display",
+        "view",
+        "fetch",
+        "book",
+        "transfer",
+        "update",
+    }
+)
+
+
+# Words that mark a clause as out of scope no matter which domain noun sits
+# in it: creative or general-purpose asks, and requests for system access
+# (credentials, raw SQL) that no tool here can or should serve. Needed
+# because a keyword gate cannot tell "tell me about patient X" from "tell me
+# a joke about patients" by verb alone — adding "tell"/"give" to
+# _ACTION_WORDS would otherwise let the second through to a paid agent call,
+# and "give me the admin password for the hospital" with it. Kept to words
+# with no plausible hospital-operations reading; a clause containing one
+# never counts as the in-domain clause, but another clause in the same
+# message still can.
+_OFF_TOPIC_WORDS: frozenset[str] = frozenset(
+    {
+        "password",
+        "passwords",
+        "credential",
+        "credentials",
+        "sql",
+        "joke",
+        "jokes",
+        "poem",
+        "poems",
+        "poetry",
+        "haiku",
+        "limerick",
+        "riddle",
+        "lyrics",
+        "song",
+        "songs",
+        "essay",
+        "recipe",
+        "weather",
     }
 )
 
@@ -262,9 +347,10 @@ def check_domain_gate(
          behavior, and still the common case (weather/poetry/math/flight
          requests share zero vocabulary with the domain).
       2. Otherwise, split the message into clause fragments and require at
-         least one fragment to contain both a domain noun *and* an action/
-         question word. A domain noun sitting alone in its own fragment,
-         disconnected from the actual (off-topic) request, fails this stage
+         least one fragment to contain both a domain noun (entity codes
+         included) *and* an action/question word. A domain noun or code
+         sitting alone in its own fragment, disconnected from the actual
+         (off-topic) request, fails this stage
          (`reason="off_topic_disconnected"`) — this is what closes the
          `"What's 47 times 12? mri"`-style bypass.
     """
@@ -272,11 +358,14 @@ def check_domain_gate(
     if not stripped:
         return DomainGateResult(in_domain=True)
 
-    # Hyphens stripped (not turned into spaces) so a term like "x-ray" folds
+    # Entity codes are swapped for a placeholder *before* hyphens go, or
+    # "APT-2001" would collapse into the meaningless token "apt". Hyphens are
+    # then stripped (not turned into spaces) so a term like "x-ray" folds
     # into "xray" and still matches the vocabulary, instead of splitting into
-    # two unrelated words ("x", "ray"). Other punctuation (.?!,) is left
-    # alone here since fragment splitting below depends on some of it.
-    normalized = stripped.lower().replace("-", "")
+    # two unrelated words ("x", "ray"). Other punctuation is left alone here
+    # since fragment splitting below depends on it.
+    with_codes = _ENTITY_CODE_RE.sub(f" {_ENTITY_TOKEN} ", stripped)
+    normalized = with_codes.lower().replace("-", "")
 
     all_words = set(_WORD_RE.findall(normalized))
     if not (all_words & _DOMAIN_NOUNS):
@@ -292,6 +381,15 @@ def check_domain_gate(
 
     for fragment in _FRAGMENT_SPLIT_RE.split(normalized):
         words = set(_WORD_RE.findall(fragment))
+        if words & _OFF_TOPIC_WORDS:
+            continue
+        # An entity code counts as a domain noun, but — like any other noun —
+        # only alongside a recognised request word in the same clause. A
+        # looser "code plus any word" rule was tried and dropped: it let
+        # "delete APT-2001", "cancel APT-2001" and "mark SCN-4 as available"
+        # through to the agent, whose tool surface can't do any of those,
+        # but a request the system can't serve belongs at the gate, not in a
+        # paid agent turn.
         if (words & _DOMAIN_NOUNS) and (words & _ACTION_WORDS):
             return DomainGateResult(in_domain=True)
 
