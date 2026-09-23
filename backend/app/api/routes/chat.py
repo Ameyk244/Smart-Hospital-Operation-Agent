@@ -25,9 +25,10 @@ it has a final transcript; `tests/e2e/*`.
 import uuid
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.requests import HTTPConnection
 
 from app.agent.domain_gate import check_domain_gate
 from app.agent.eligibility import check_eligibility
@@ -143,10 +144,24 @@ def _format_deterministic_message(command: Command, success: bool, error: str | 
     return f"OK — ran {command.name}."  # safety net; see docstring
 
 
-def get_checkpointer(request: Request):
+def get_checkpointer(request: HTTPConnection):
     """The long-lived LangGraph checkpointer built once at process startup
     (see app/main.py's `lifespan`). A FastAPI dependency, like `get_db` and
-    `get_session_factory`, so tests can override it the same way."""
+    `get_session_factory`, so tests can override it the same way.
+
+    Typed as `HTTPConnection` (the common base of `Request` and
+    `WebSocket`), not `Request`, so this same function also works as a
+    `Depends()` for app/api/routes/voice.py's WebSocket route -- verified
+    directly against FastAPI's dependency resolution
+    (fastapi/dependencies/utils.py's `solve_dependencies`): a param typed
+    `Request` is only ever populated when the connection is an actual
+    `Request` instance, which a WebSocket connection never is, so a
+    `Request`-typed version of this dependency raises
+    "missing 1 required positional argument" under a WebSocket route. Both
+    `Request` and `WebSocket` expose `.app` via `HTTPConnection`, so the
+    body is unchanged and every existing HTTP-side caller/override
+    (`app.dependency_overrides[get_checkpointer] = ...` in tests/conftest.py)
+    keeps working exactly as before."""
     return request.app.state.checkpointer
 
 

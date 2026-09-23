@@ -40,6 +40,7 @@ has decided an utterance ended) and the Phase 2 fixed-file proof in
 import asyncio
 from functools import lru_cache
 
+import numpy as np
 from faster_whisper import WhisperModel
 
 
@@ -70,3 +71,24 @@ async def transcribe(audio_path: str, model_size: str) -> str:
     this function is meant to be awaited from inside an async FastAPI
     request/WebSocket handler."""
     return await asyncio.to_thread(_transcribe_sync, model_size, audio_path)
+
+
+def _transcribe_array_sync(model_size: str, samples: np.ndarray) -> str:
+    model = _load_model(model_size)
+    # faster-whisper accepts a float32 numpy array directly (no temp file
+    # needed) -- exactly what app/api/routes/voice.py's VAD hands over once
+    # an utterance is finalized. Same beam_size as the file-based path, same
+    # lazy-generator-joining rationale (see _transcribe_sync above).
+    segments, _info = model.transcribe(samples, beam_size=5)
+    return " ".join(segment.text.strip() for segment in segments).strip()
+
+
+async def transcribe_array(samples: np.ndarray, model_size: str) -> str:
+    """Sibling to `transcribe()` for an in-memory utterance instead of a WAV
+    file on disk: `samples` is float32 PCM normalized to [-1, 1] (divide by
+    32768.0), the VAD-finalized buffer from `app/api/routes/voice.py`.
+    Reuses the same cached `_load_model` loader and the same
+    thread-offload pattern as `transcribe()` -- does not touch `transcribe`
+    or `_transcribe_sync` at all, so Phase 2's file-based test keeps
+    exercising exactly the code path it always has."""
+    return await asyncio.to_thread(_transcribe_array_sync, model_size, samples)

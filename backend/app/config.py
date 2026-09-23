@@ -79,6 +79,32 @@ class Settings(BaseSettings):
     # instinct as max_agent_rounds/max_tool_calls above, applied to a
     # WebSocket connection whose client might never signal end-of-speech.
     voice_max_utterance_seconds: float = 15.0
+    # Energy-based (RMS) VAD (Phase 3) -- deliberately not Silero, see
+    # docs/voice.md. RMS is computed on int16 samples normalized to
+    # [-1, 1] (divide by 32768.0, the same normalization transcribe_array
+    # uses), not on raw int16 magnitudes -- so this threshold means the same
+    # thing regardless of how a sample is represented downstream. Measured
+    # against this project's own fixture
+    # (tests/fixtures/audio/list_delayed_mri_appointments.wav): its silent
+    # gaps sit at ~0.0 normalized RMS and its in-speech 20ms windows range
+    # ~0.04-0.24. 0.02 sits comfortably above that noise floor and well
+    # below typical speech energy, leaving headroom for a quieter speaker or
+    # mic gain than this project's own synthesized fixture. There is no
+    # universally "correct" threshold -- this is a starting point to tune
+    # against real usage, not a measured constant like voice_stt_model was.
+    voice_vad_speech_rms_threshold: float = 0.02
+    # How long RMS must stay below the threshold, once speech has started,
+    # before the utterance is considered ended. 700-1000ms is the typical
+    # range for command-style speech: long enough to survive a natural pause
+    # between words (this project's own fixture's inter-word gaps are tens
+    # of milliseconds, well under this) without making the user wait
+    # noticeably after they've actually finished talking.
+    voice_vad_silence_ms: float = 800.0
+    # Minimum duration RMS must stay above threshold before speech_started is
+    # declared at all, so a single loud click/pop doesn't trigger a false
+    # utterance. Short relative to voice_vad_silence_ms on purpose -- this
+    # guards utterance *start*, not end.
+    voice_vad_min_speech_ms: float = 200.0
 
     # --- Bounded agent execution (see docs/ARCHITECTURE.md §5) ---
     max_agent_rounds: int = 6

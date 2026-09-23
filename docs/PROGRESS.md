@@ -1000,8 +1000,57 @@ confident Jev match executing through the real `CommandRunner`, and a Jev
 decline reaching a scripted agent. 218 passed (216 + 2), 6 skipped, ruff
 clean; no live API call was made to verify any of it.
 
-Phases 3 (WebSocket + energy-based VAD, with the flagged failure modes —
-dropped connections, unbounded utterances, invisible buffer loss — handled
-explicitly) and 4 (frontend mic control) remain, each as its own commit,
-delegated to scoped subagents once the WebSocket message contract is
-settled.
+**Phase 3** added the WebSocket endpoint itself
+(`app/api/routes/voice.py`) and the energy-based RMS VAD state machine
+(`app/voice/vad.py`) — chunk-level and duration-based, not wall-clock, so
+a test can stream chunks as fast as it wants and still get deterministic
+transitions. All three flagged failure modes from the pre-build audit are
+handled explicitly: an empty/blank transcript never reaches
+`handle_chat_message`; an STT exception degrades to `error: stt_failed`
+without killing the connection; a connection dropped genuinely
+mid-utterance discards the buffer and records a `voice_connection_dropped`
+trace event (status `FAILURE`, `arguments.buffered_ms`) so that loss isn't
+silent, while a drop while idle records nothing, since nothing was lost.
+The max-utterance-duration cutoff is explicitly *not* treated as a
+failure — same transcription and routing, only `speech_ended`'s `reason`
+differs.
+
+One existing file needed a small, deliberate change: `chat.py`'s
+`get_checkpointer` is now typed `HTTPConnection` instead of `Request`.
+This wasn't a style choice — verified directly against FastAPI's own
+dependency resolution that the *unmodified* `Request`-typed version raises
+`missing 1 required positional argument` under a WebSocket route, since a
+`Request`-typed `Depends()` parameter is only ever populated for an actual
+`Request` instance. `HTTPConnection` is the base both `Request` and
+`WebSocket` share, so the fix is type-only; the function body and every
+existing HTTP-side override are unchanged.
+
+RMS thresholds were measured against this project's own fixture audio
+(silent gaps ~0.0 normalized RMS, in-speech windows ~0.04-0.24), not
+picked blind — `voice_vad_speech_rms_threshold=0.02` sits above the noise
+floor and below typical speech energy, with an explicit note in
+`config.py` that, unlike `voice_stt_model`, there is no universally
+"correct" value here.
+
+Testing this required solving a real problem, not just writing assertions:
+`TestClient.websocket_connect()` runs the app inside its own background
+thread with its own event loop, and an async engine built inside
+pytest-asyncio's loop (every other fixture's pattern) fails with asyncpg's
+"attached to a different loop" error when reused there — reproduced
+directly against this project's own Postgres before working around it,
+not assumed. `test_voice_websocket.py` uses plain sync test functions with
+a lazily-constructed, per-test DB engine instead. A second harness quirk
+(the test client cancels its portal task shortly after disconnecting,
+without waiting for the server's cleanup coroutine to finish) meant the
+dropped-connection test polls for its DB row explicitly rather than
+trusting the client's own teardown timing. Both are documented in
+`test_voice_websocket.py`'s module docstring and `docs/voice.md`'s Testing
+section.
+
+Result: 223 passed (218 + 5 new WebSocket tests), 6 skipped, ruff clean. No
+live LLM/Jev API call, no Alembic or schema-affecting command, and no file
+outside `backend/` (plus these two docs) was touched to build or verify
+any of it.
+
+Phase 4 (frontend mic control, built against Phase 3's exact WS message
+contract) remains, delegated to a scoped subagent once reviewed.

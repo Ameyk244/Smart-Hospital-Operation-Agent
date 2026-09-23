@@ -165,7 +165,77 @@ Jev extracted from the transcript) executing through the real
 response. Both pass; full suite 218 passed (216 + 2), 6 skipped, ruff
 clean.
 
-### Phase 3 — WebSocket + live VAD `(pending)`
+### Phase 3 — WebSocket + energy-based VAD ✅
+`backend/app/api/routes/voice.py` adds `@router.websocket("/api/voice/{session_id}")`,
+included in `app/main.py` alongside the existing routers. Binary WS frames
+(raw 16-bit PCM, mono, 16kHz, no envelope) accumulate into
+`app/voice/vad.py`'s `UtteranceDetector` — a chunk-level, duration-based
+(not wall-clock) RMS state machine: IDLE, buffering a candidate run once
+RMS crosses `voice_vad_speech_rms_threshold`, confirmed as SPEECH once that
+run reaches `voice_vad_min_speech_ms`, finalized once a silence run reaches
+`voice_vad_silence_ms` or total duration reaches `voice_max_utterance_seconds`
+(the latter is a successful completion forced by duration, `reason:
+"max_duration"`, not a failure). A finalized utterance is converted to a
+normalized float32 array and transcribed via `app/voice/stt.py`'s new
+`transcribe_array()` (a sibling to Phase 2's file-based `transcribe()`,
+same cached model loader, same thread-offload pattern, file-based path
+untouched) and routed through the exact same `handle_chat_message()` Phase
+1 extracted — no reimplemented routing.
+
+All three named failure modes are handled explicitly: an empty/blank
+transcript never reaches `handle_chat_message`; an STT exception is caught
+and reported as `error: stt_failed` without killing the connection; a
+connection dropped while genuinely mid-utterance (SPEECH state) discards
+the in-memory buffer and records a `voice_connection_dropped` `AgentEvent`
+(status `FAILURE`, `error_category="connection_dropped_mid_utterance"`,
+`arguments={"buffered_ms": ...}`) so that loss is visible rather than
+silent — a drop while idle needs no event, since nothing was lost. Any
+other unexpected exception degrades to `error: internal_error` and returns
+to `ready` rather than crashing the socket, the same principle
+`jev_fast_path.py` already follows for its own third-party call. One WS
+connection handles multiple sequential voice turns; it never closes itself
+after one.
+
+`get_session_factory`/`get_checkpointer` are resolved once per connection
+and a fresh `session_factory()` session is opened per discrete unit of
+work (once per `handle_chat_message()` call, once for a drop event) — never
+one session held for the connection's whole, potentially long-lived,
+lifetime. This required one small, deliberate change to the *existing*
+`get_checkpointer` in `app/api/routes/chat.py`: its `request` parameter is
+now typed `HTTPConnection` (the common base of `Request` and `WebSocket`)
+instead of `Request`. This was not optional — verified directly against
+FastAPI's own dependency resolution (`fastapi/dependencies/utils.py`'s
+`solve_dependencies`): a `Request`-typed `Depends()` parameter is only ever
+populated when the connection is an actual `Request` instance, which a
+WebSocket connection never is, so the *unmodified* function raised `missing
+1 required positional argument: 'request'` under this WebSocket route. The
+function body, and every existing HTTP-side call/override, is unchanged.
+
+RMS thresholds (`voice_vad_speech_rms_threshold=0.02`,
+`voice_vad_silence_ms=800.0`, `voice_vad_min_speech_ms=200.0`) were chosen
+against this project's own fixture, not picked blind: its silent gaps
+measure ~0.0 normalized RMS and its in-speech 20ms windows range
+~0.04-0.24, so 0.02 sits comfortably above the noise floor and well below
+typical speech energy. There is no universally "correct" threshold — this
+is a starting point to tune against real usage, unlike `voice_stt_model`'s
+measured choice.
+
+New tests: `backend/tests/integration/test_voice_websocket.py`, 5 tests —
+a full utterance streamed in chunks through the real Jev fast path to a
+real `CommandRunner` result; near-silence never triggering `speech_started`
+(asserted indirectly via DB absence, described in the Testing section
+below); the max-duration cutoff completing normally, not erroring; a
+mid-utterance drop recording exactly one `voice_connection_dropped` event;
+and an STT failure returning `error: stt_failed` while the connection
+survives to handle a second utterance. Full suite: 223 passed (218 + 5), 6
+skipped, ruff clean. No live LLM/Jev API call and no Alembic/schema command
+were used to verify any of it — Jev is mocked via the existing
+`fake_typesafe`/`jev_settings`/`jev_response` fixtures, and STT is real
+local `faster-whisper` only where Phase 2's precedent already established
+that as free and deterministic-enough (the full-utterance test); the
+VAD-focused tests mock `transcribe_array` or use synthetic audio instead of
+depending on real STT output content.
+
 ### Phase 4 — Frontend mic control `(pending)`
 
 ## Testing
@@ -176,16 +246,56 @@ Two idioms now exist in `backend/tests/`:
   model download) against a checked-in fixture audio file; Jev and the
   agent model are mocked exactly like every other test in this project,
   per the live-API-minimization policy.
-- **WebSocket testing** `(pending — Phase 3 records the
-  `TestClient.websocket_connect()` pattern here, a new idiom for this
-  repo; nothing else in `backend/tests/` currently tests a WebSocket
-  endpoint.)`
+- **WebSocket testing** (Phase 3, established):
+  `starlette.testclient.TestClient.websocket_connect()` — a new idiom for
+  this repo; nothing else in `backend/tests/` tests a WebSocket endpoint.
+  `test_voice_websocket.py` builds its WS test audio by reading the
+  checked-in fixture WAV's raw PCM via Python's `wave` module and sending
+  it to the test client across several chunks, simulating streaming,
+  rather than adding a new fixture.
+
+  This idiom needed its own DB plumbing, deliberately different from every
+  other integration test's `db_session`/`seeded_session`/
+  `agent_session_factory` fixtures, for a concrete, verified reason:
+  `TestClient.websocket_connect()` runs the ASGI app inside its own
+  background thread with its own event loop (an anyio "blocking portal").
+  An async SQLAlchemy engine created inside pytest-asyncio's loop (what
+  every other fixture does) and then used from inside that portal thread
+  fails every time with asyncpg's "attached to a different loop" error —
+  reproduced directly against this project's own Postgres while building
+  this file, not assumed from documentation. `test_voice_websocket.py`
+  therefore uses plain sync `def test_...` functions (pytest-asyncio only
+  manages `async def` tests), never `with TestClient(app) as client:`
+  (which would also run `app.main`'s real `lifespan`, building a real
+  LangGraph checkpointer against the *dev* database — avoided entirely),
+  and overrides `get_session_factory` with a callable that builds its
+  engine lazily, on first actual use from inside the portal thread.
+
+  A second harness quirk, also verified rather than assumed:
+  `WebSocketTestSession.__exit__` sends the client-side disconnect and then
+  cancels the portal's task shortly after, without waiting for the
+  server's disconnect-handling coroutine to finish — so the
+  dropped-connection test calls `ws.close()` itself and polls briefly for
+  the resulting DB row *before* letting the `with` block exit, rather than
+  relying on that automatic cleanup for timing.
+
+  Because these tests' DB writes are genuinely committed (not the
+  rolled-back-per-test transaction every other integration test uses),
+  `test_voice_websocket.py` also cleans up its own `AgentEvent`/
+  `ConversationMessage`/`AgentSession` rows per test (`voice_session_id`
+  fixture) — otherwise a committed `jev_invoked` row would permanently
+  leak into `test_jev_fast_path_api.py`'s unscoped cost-comparison
+  assertions, which happened once while building this file before that
+  cleanup existed.
 
 ## Configuration
 
 ```dotenv
 VOICE_STT_MODEL=tiny.en
 VOICE_MAX_UTTERANCE_SECONDS=15.0
+VOICE_VAD_SPEECH_RMS_THRESHOLD=0.02
+VOICE_VAD_SILENCE_MS=800.0
+VOICE_VAD_MIN_SPEECH_MS=200.0
 ```
 
 No new secret or paid API for this phase — local STT only.
@@ -195,9 +305,11 @@ No new secret or paid API for this phase — local STT only.
 | Concern | File |
 |---|---|
 | Shared routing implementation | `backend/app/api/routes/chat.py` (`handle_chat_message`) |
-| Local speech-to-text | `backend/app/voice/stt.py` |
-| Settings | `backend/app/config.py` (`voice_stt_model`, `voice_max_utterance_seconds`) |
+| Local speech-to-text | `backend/app/voice/stt.py` (`transcribe`, `transcribe_array`) |
+| Energy-based VAD state machine | `backend/app/voice/vad.py` (`UtteranceDetector`) |
+| Settings | `backend/app/config.py` (`voice_stt_model`, `voice_max_utterance_seconds`, `voice_vad_speech_rms_threshold`, `voice_vad_silence_ms`, `voice_vad_min_speech_ms`) |
 | Fixed-file pipeline proof | `backend/tests/integration/test_voice_stt_pipeline.py` |
 | Test fixture audio | `backend/tests/fixtures/audio/list_delayed_mri_appointments.wav` |
-| WebSocket endpoint | `(pending — Phase 3)` |
+| WebSocket endpoint | `backend/app/api/routes/voice.py` |
+| WebSocket tests | `backend/tests/integration/test_voice_websocket.py` |
 | Frontend mic control | `(pending — Phase 4)` |
