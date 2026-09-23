@@ -236,7 +236,83 @@ that as free and deterministic-enough (the full-utterance test); the
 VAD-focused tests mock `transcribe_array` or use synthetic audio instead of
 depending on real STT output content.
 
-### Phase 4 — Frontend mic control `(pending)`
+### Phase 4 — Frontend mic control ✅
+A mic button in `ChatPanel`'s input row opens the `/api/voice/{session_id}`
+WebSocket (`src/hooks/useVoiceInput.ts`), streams captured mic audio
+(`src/audio/pcmCapture.ts`), and renders the resulting turn through the
+exact same message-list/badge rendering a typed turn uses — no new visual
+language, no new badge component.
+
+`useVoiceInput` owns only the WebSocket connection and audio capture;
+`ChatPanel` keeps owning the message list and the "first message of a new
+session" bookkeeping, wiring the two together via three callbacks
+(`onTranscript`, `onChatResponse`, `onError`) — the same split `useTrace`
+already established for trace polling. Session id: the WebSocket path
+requires one up front (unlike `POST /api/chat`, which can assign one), so
+the frontend generates it client-side (`crypto.randomUUID()`) when there
+isn't one yet and applies it the moment the response confirms it, mirroring
+`handleSubmit`'s existing new-session bookkeeping with the transcript as
+the preview text in place of the typed message.
+
+**Audio capture**: `ScriptProcessorNode` (not `AudioWorkletNode` — deprecated
+but simpler, and this project already prefers simple-and-sufficient over the
+more complex correct-successor where the difference doesn't matter at this
+scale, the same tradeoff as energy-based VAD over Silero on the backend),
+routed through a zero-gain node into the destination so it fires without
+audible echo.
+
+**Downsampling — corrected during review, not shipped as first written**:
+initial nearest-integer-ratio decimation (`keep every Nth sample, N =
+round(sourceRate/16000)`) only produces genuinely-16kHz audio when the
+browser's native rate happens to be an exact multiple of 16000 (48000,
+96000). At the other extremely common native rate, 44100Hz, that ratio
+rounds to 3, silently producing audio at an *effective* 14700Hz mislabeled
+as 16000Hz — an 8.8% speed/pitch distortion fed straight into Whisper,
+confirmed by computing the actual effective rate for common browser sample
+rates rather than assumed. Replaced with continuous-phase linear
+interpolation resampling (a running fractional source index, carried across
+`onaudioprocess` chunk boundaries so the phase doesn't reset and drift every
+~4096 samples) — still simple, but correct for any source rate, not only
+exact multiples of 16000.
+
+Full teardown (processor/source/gain disconnected, every `MediaStreamTrack`
+stopped, `AudioContext` closed, WebSocket closed) runs on explicit stop,
+component unmount, and an unrecoverable capture error alike, so the
+browser's mic-in-use indicator never stays lit after the user is done.
+
+**Errors while voice is active**: a server `{"type":"error"}` event (e.g.
+`empty_transcript`) does not tear down the connection — the backend
+contract already returns to `ready` and keeps listening, so recording
+continues and the error is just surfaced, rather than forcing the user to
+click the mic again for a transient per-turn failure. A `startCapture()`
+returning `null` (no `getUserMedia`/`AudioContext` in this browser, or an
+insecure context blocking mic access) is treated as a real error and tears
+the connection down — the alternative, silently sitting at "Listening..."
+forever with no audio ever sent, was worse than a clear message.
+
+New tests: `ChatPanel.test.tsx`, 4 — a full transcript→chat_response turn
+renders user-then-assistant messages with the correct badge, in the
+verified order (checked via bubble container `textContent`, not
+`getByText`, since the assistant bubble renders through `ReactMarkdown`'s
+nested `<p>` while the user bubble is plain text — an asymmetry that made a
+single selector-scoped text query unreliable); a server error surfaces
+without losing prior chat history; the mic button and typed-input/Send are
+mutually disabled while the other input method is active; unmount closes
+the WebSocket. A small controllable `FakeWebSocket` test double (same
+spirit as this file's existing `createFetchMock`) makes this possible with
+no real microphone — `getUserMedia`/`AudioContext` don't exist in jsdom,
+but `pcmCapture.ts` feature-detects and no-ops cleanly, and none of these
+tests trigger real capture regardless. Full suite: 33 passed, ruff/build/
+lint all clean.
+
+**Not verified, and can't be from this environment**: real browser mic
+permission prompts, actual audio quality end-to-end against the live
+backend, and that clicking "stop" genuinely clears the browser's
+mic-in-use indicator — all real-hardware/real-browser behavior outside
+what a headless review or a jsdom test can exercise. Needs a manual check
+in an actual browser against a running backend before this is trusted
+beyond "the code is correct by inspection and passes what can be
+automated."
 
 ## Testing
 
@@ -312,4 +388,4 @@ No new secret or paid API for this phase — local STT only.
 | Test fixture audio | `backend/tests/fixtures/audio/list_delayed_mri_appointments.wav` |
 | WebSocket endpoint | `backend/app/api/routes/voice.py` |
 | WebSocket tests | `backend/tests/integration/test_voice_websocket.py` |
-| Frontend mic control | `(pending — Phase 4)` |
+| Frontend mic control | `frontend/src/hooks/useVoiceInput.ts`, `frontend/src/audio/pcmCapture.ts`, `frontend/src/components/ChatPanel.tsx` |

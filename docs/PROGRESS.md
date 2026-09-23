@@ -1052,5 +1052,49 @@ live LLM/Jev API call, no Alembic or schema-affecting command, and no file
 outside `backend/` (plus these two docs) was touched to build or verify
 any of it.
 
-Phase 4 (frontend mic control, built against Phase 3's exact WS message
-contract) remains, delegated to a scoped subagent once reviewed.
+## Status: `voice` branch — Phase 4, frontend mic control (experimental)
+
+Dispatched to the restricted `frontend-worker` subagent type (no `Bash`)
+against Phase 3's WS message contract, frozen and reviewed before dispatch.
+A mic button in `ChatPanel` streams captured mic audio over
+`/api/voice/{session_id}` and renders the resulting turn through the exact
+same message list and badge rendering a typed turn already uses — no new
+UI language for voice. Full writeup in `docs/voice.md`'s Phase 4 section.
+
+Reviewing the diff (not just trusting the report) found one real
+correctness bug and fixed it directly: the audio downsampling used
+nearest-integer-ratio decimation, which is only actually correct when the
+browser's native sample rate happens to be an exact multiple of 16000. At
+the very common 44100Hz native rate, the rounded ratio (3) silently
+produces audio at an effective 14700Hz mislabeled as 16000Hz -- an 8.8%
+speed/pitch distortion into Whisper, confirmed by computing the actual
+effective rate for common browser sample rates rather than assumed.
+Replaced with continuous-phase linear interpolation resampling -- still a
+deliberately simple technique, not a full resampling filter, but correct
+for any source rate rather than only exact multiples of 16000. Also added
+a small fix so an unsupported-browser capture failure surfaces as an
+explicit error instead of leaving the UI silently stuck at "Listening..."
+forever with no audio ever sent.
+
+Running the tests independently (not just trusting "should pass") also
+surfaced two real test failures the subagent's own report didn't catch --
+both a test-assertion problem, not a production bug: the "first message of
+a new session" bookkeeping (pre-existing, unrelated to voice) writes the
+same text into the "Previous chats" preview list, so an unscoped text query
+matched two elements. Fixed by scoping the queries to the actual message
+bubbles; one of the two also needed reading bubble `textContent` directly
+rather than `getByText`, since the assistant bubble renders through
+`ReactMarkdown`'s nested `<p>` while the user bubble is plain text -- an
+asymmetry a single selector-scoped query couldn't handle uniformly.
+
+Full suite after fixes: 33 passed, build clean, lint clean (only the same
+pre-existing `set-state-in-effect` warnings already present before this
+phase). Honest limit, stated plainly rather than implied as covered: real
+browser mic permission prompts, actual audio quality against the live
+backend, and that "stop" genuinely releases the mic-in-use indicator are
+real-hardware/real-browser behavior no headless review or jsdom test can
+exercise -- verified by code inspection and what automation can cover, not
+by hand in an actual browser yet.
+
+All four phases of the `voice` branch are now complete. Not merged to
+`master`; left for review per the build's own instruction.
