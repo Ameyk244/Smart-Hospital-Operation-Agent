@@ -10,7 +10,16 @@ Every branch appends to `ConversationMessage` (concept 35) so the next
 request in the same session has continuity regardless of which path
 handled it.
 
-What calls it: the frontend's chat UI; `tests/e2e/*`.
+The actual routing logic lives in `handle_chat_message()`, a plain
+function with no FastAPI/HTTP dependency in its signature — deliberately
+extracted (see docs/voice.md, Phase 1) so the streaming voice pipeline
+(`app/api/routes/voice.py`) can call the exact same routing a typed
+message goes through, the same one-trusted-implementation discipline as
+`CommandRunner`. `POST /api/chat` is a thin wrapper around it; it must
+never grow routing logic of its own again.
+
+What calls it: the frontend's chat UI; the voice WebSocket handler once
+it has a final transcript; `tests/e2e/*`.
 """
 
 import uuid
@@ -141,14 +150,20 @@ def get_checkpointer(request: Request):
     return request.app.state.checkpointer
 
 
-@router.post("", response_model=ChatResponse)
-async def chat(
-    request: ChatRequest,
-    db: AsyncSession = Depends(get_db),
-    session_factory=Depends(get_session_factory),
-    checkpointer=Depends(get_checkpointer),
+async def handle_chat_message(
+    text: str,
+    session_id: str | None,
+    db: AsyncSession,
+    session_factory,
+    checkpointer,
 ) -> ChatResponse:
-    session_id = request.session_id or str(uuid.uuid4())
+    """The one routing implementation for a text message, regardless of
+    which transport produced that text. Byte-for-byte the same logic the
+    inlined `chat()` route body used to contain — extracted, not rewritten,
+    so this refactor's own test coverage is "nothing changed", not "the new
+    behavior is also correct". See this module's docstring and
+    docs/voice.md."""
+    session_id = session_id or str(uuid.uuid4())
     session_repo = SessionRepository(db)
     await session_repo.get_or_create(session_id)
 
@@ -159,10 +174,10 @@ async def chat(
     prior_rows = await session_repo.get_recent_messages(session_id, limit=20)
     history = to_langchain_messages(prior_rows)
 
-    await session_repo.append_message(session_id, MessageRole.USER, request.text)
+    await session_repo.append_message(session_id, MessageRole.USER, text)
     await db.commit()
 
-    outcome = parse(request.text)
+    outcome = parse(text)
     if outcome.matched:
         command = outcome.command
         assert command is not None
@@ -185,7 +200,7 @@ async def chat(
         row.content for row in prior_rows if row.role == MessageRole.USER
     ]
     domain_gate = check_domain_gate(
-        request.text, prior_user_messages=prior_user_messages
+        text, prior_user_messages=prior_user_messages
     )
     if not domain_gate.in_domain:
         message = (
@@ -196,7 +211,7 @@ async def chat(
         await db.commit()
         return ChatResponse(session_id=session_id, handled_by="rejected", message=message)
 
-    eligibility = check_eligibility(request.text)
+    eligibility = check_eligibility(text)
     if not eligibility.eligible:
         message = f"Sorry, I can't process that request ({eligibility.reason})."
         await session_repo.append_message(session_id, MessageRole.ASSISTANT, message)
@@ -215,7 +230,7 @@ async def chat(
     if settings.enable_jev_fast_path:
         from app.agent.jev_fast_path import try_jev_fast_path
 
-        jev = await try_jev_fast_path(request.text, settings)
+        jev = await try_jev_fast_path(text, settings)
         jev_arguments = {
             "choice": jev.choice,
             "confidence": jev.confidence,
@@ -277,7 +292,7 @@ async def chat(
     chat_model = get_default_chat_model()
     final_state = await run_agent(
         session_id=session_id,
-        user_text=request.text,
+        user_text=text,
         chat_model=chat_model,
         session_factory=session_factory,
         settings=settings,
@@ -301,4 +316,20 @@ async def chat(
         message=reply_text,
         terminated_reason=final_state["terminated_reason"],
         touched_entity_codes=final_state.get("touched_entity_codes", []),
+    )
+
+
+@router.post("", response_model=ChatResponse)
+async def chat(
+    request: ChatRequest,
+    db: AsyncSession = Depends(get_db),
+    session_factory=Depends(get_session_factory),
+    checkpointer=Depends(get_checkpointer),
+) -> ChatResponse:
+    return await handle_chat_message(
+        text=request.text,
+        session_id=request.session_id,
+        db=db,
+        session_factory=session_factory,
+        checkpointer=checkpointer,
     )
