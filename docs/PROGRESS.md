@@ -964,3 +964,44 @@ Honest limit: `what is 47 times 12 for the MRI appointment?` passes, as it did
 before this change — "times" is also a scheduling word, and a keyword gate
 cannot read intent. The system prompt's refusal instruction is what declines
 it, at the cost of one model call.
+
+## Status: `voice` branch — streaming voice input, Phases 1-2 (experimental)
+
+Not merged to `master`. A pre-build architecture audit (see git history)
+evaluated transport, VAD, and STT choices against this project's actual
+code and current external pricing before any implementation; this phase
+implements what that audit recommended. Full reasoning lives in
+`docs/voice.md`, kept current as each phase lands rather than written
+after the fact.
+
+**Phase 1** extracted `chat.py`'s inlined routing into
+`handle_chat_message()`, a plain function with no HTTP types in its
+signature; `POST /api/chat` is now a thin wrapper around it. This is the
+convergence point voice and text both go through — the same
+one-trusted-implementation discipline this project already applies to
+`CommandRunner`. Verified as a true no-op: the offline suite's pass count
+was identical before and after (216 passed, 6 skipped both times), which
+is itself the proof nothing behavioral moved.
+
+**Phase 2** added local `faster-whisper` STT (`app/voice/stt.py`) and
+proved the full chain — audio file, real transcription, real routing, real
+`ChatResponse` — before any real-time code exists. Model choice (`tiny.en`
+over `base.en`) was measured against a checked-in synthesized fixture
+(`tests/fixtures/audio/list_delayed_mri_appointments.wav`), not assumed:
+~450ms transcription warm, no accuracy loss on short command audio.
+`faster-whisper`'s own dependency metadata was checked before adding it —
+no torch in the base install, consistent with the rest of this stack.
+
+The new test (`test_voice_stt_pipeline.py`) runs real local transcription
+(free, no live call) against the fixture, then posts the transcript
+through the real `/api/chat` route with Jev and the agent mocked —
+covering both branches of the target architecture's UNKNOWN path: a
+confident Jev match executing through the real `CommandRunner`, and a Jev
+decline reaching a scripted agent. 218 passed (216 + 2), 6 skipped, ruff
+clean; no live API call was made to verify any of it.
+
+Phases 3 (WebSocket + energy-based VAD, with the flagged failure modes —
+dropped connections, unbounded utterances, invisible buffer loss — handled
+explicitly) and 4 (frontend mic control) remain, each as its own commit,
+delegated to scoped subagents once the WebSocket message contract is
+settled.

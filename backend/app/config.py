@@ -68,6 +68,18 @@ class Settings(BaseSettings):
     # the agent is cheaper than making the user wait.
     jev_timeout_seconds: float = 5.0
 
+    # --- Voice input (experimental, branch `voice` — see docs/voice.md) ---
+    # Local faster-whisper, not a hosted API: no key, no per-call cost, and
+    # it keeps the project's "offline except live LLM calls" property intact
+    # through the STT layer too. "tiny.en" measured ~450ms transcription on
+    # CPU for a short command-length utterance against this project's own
+    # fixture audio — see docs/voice.md for the full measurement.
+    voice_stt_model: str = "tiny.en"
+    # Enforced max utterance length (Phase 3): the same bounded-execution
+    # instinct as max_agent_rounds/max_tool_calls above, applied to a
+    # WebSocket connection whose client might never signal end-of-speech.
+    voice_max_utterance_seconds: float = 15.0
+
     # --- Bounded agent execution (see docs/ARCHITECTURE.md §5) ---
     max_agent_rounds: int = 6
     max_tool_calls: int = 10

@@ -84,8 +84,27 @@ calls" property intact.
 
 `faster-whisper`'s actual PyPI dependency list (verified against its
 metadata, not assumed): `ctranslate2`, `huggingface-hub`, `tokenizers`,
-`onnxruntime`, `av`, `tqdm` — no torch in the base install. Model:
-`(pending — Phase 2 records the chosen size and measured latency here)`.
+`onnxruntime`, `av`, `tqdm` — no torch in the base install.
+
+**Model: `tiny.en`, CPU, int8** (`settings.voice_stt_model`). Measured
+directly against this project's own checked-in fixture
+(`tests/fixtures/audio/list_delayed_mri_appointments.wav`, a synthesized
+"list delayed MRI appointments"), not assumed from the model card:
+
+| | `tiny.en` | `base.en` |
+|---|---|---|
+| Warm model load (once per process) | ~1.0s | ~1.5s |
+| Transcription, per utterance | ~420–530ms | ~600–820ms |
+| Transcript | `"List delayed MRI appointments."` | `"List delayed MRI appointments"` |
+
+Both transcribed the fixture correctly. `tiny.en` is faster with no
+accuracy loss on short, clear command audio — this project's actual use
+case, not long-form dictation — so it's the default. Both are well inside
+the "a few hundred ms to ~1-2s" target for a responsive command interface.
+The model loads once per process (like the LangGraph checkpointer in
+`app/main.py`'s `lifespan`), not per request; only the first-ever run on a
+machine needs network access, to download the model weights once from
+Hugging Face — after that, transcription is fully offline.
 
 ### Convergence point: `handle_chat_message()`
 `chat.py`'s `chat()` route previously inlined everything from session
@@ -127,21 +146,58 @@ history, preferences, and grounding. No new session concept was introduced.
 
 ## Phases
 
-### Phase 1 — Extract the shared handler `(pending)`
-### Phase 2 — Fixed-file STT → pipeline proof `(pending)`
+### Phase 1 — Extract the shared handler ✅
+`backend/app/api/routes/chat.py`'s `handle_chat_message()` is the one
+routing implementation; `POST /api/chat` is a thin wrapper around it.
+Verified as a true no-op refactor: the offline suite's pass count was
+identical before and after (216 passed, 6 skipped both times).
+
+### Phase 2 — Fixed-file STT → pipeline proof ✅
+`backend/app/voice/stt.py` (`transcribe()`) wraps `faster-whisper`.
+`backend/tests/integration/test_voice_stt_pipeline.py` transcribes the
+checked-in fixture with the real, local, unmocked STT model, then POSTs
+the transcript through the real `/api/chat` route (Phase 1's actual thin
+wrapper, not a shortcut around it) with Jev and the agent model mocked —
+one test per branch of the target architecture's UNKNOWN path: a
+confident Jev match (`list_delayed_appointments`, filtered to MRI, which
+Jev extracted from the transcript) executing through the real
+`CommandRunner`, and a Jev decline falling through to a scripted agent
+response. Both pass; full suite 218 passed (216 + 2), 6 skipped, ruff
+clean.
+
 ### Phase 3 — WebSocket + live VAD `(pending)`
 ### Phase 4 — Frontend mic control `(pending)`
 
 ## Testing
 
-`(pending — Phase 3 records the `TestClient.websocket_connect()` pattern
-here, since it's a new testing idiom for this repo; nothing else in
-`backend/tests/` currently tests a WebSocket endpoint.)`
+Two idioms now exist in `backend/tests/`:
+- **Real local STT, mocked everything downstream** (Phase 2, established):
+  `faster-whisper` runs for real (no cost, no network after the first
+  model download) against a checked-in fixture audio file; Jev and the
+  agent model are mocked exactly like every other test in this project,
+  per the live-API-minimization policy.
+- **WebSocket testing** `(pending — Phase 3 records the
+  `TestClient.websocket_connect()` pattern here, a new idiom for this
+  repo; nothing else in `backend/tests/` currently tests a WebSocket
+  endpoint.)`
 
 ## Configuration
 
-`(pending)`
+```dotenv
+VOICE_STT_MODEL=tiny.en
+VOICE_MAX_UTTERANCE_SECONDS=15.0
+```
+
+No new secret or paid API for this phase — local STT only.
 
 ## Source Map
 
-`(pending)`
+| Concern | File |
+|---|---|
+| Shared routing implementation | `backend/app/api/routes/chat.py` (`handle_chat_message`) |
+| Local speech-to-text | `backend/app/voice/stt.py` |
+| Settings | `backend/app/config.py` (`voice_stt_model`, `voice_max_utterance_seconds`) |
+| Fixed-file pipeline proof | `backend/tests/integration/test_voice_stt_pipeline.py` |
+| Test fixture audio | `backend/tests/fixtures/audio/list_delayed_mri_appointments.wav` |
+| WebSocket endpoint | `(pending — Phase 3)` |
+| Frontend mic control | `(pending — Phase 4)` |
