@@ -249,6 +249,6 @@ integration check is intended.
 | Request routing | `backend/app/api/routes/chat.py` |
 | Settings | `backend/app/config.py` |
 | Cost aggregation API | `backend/app/api/routes/cost.py` |
-| Response schema | `backend/app/api/schemas/chat.py` |
+| Response schema | `backend/app/api/routes/chat.py` (`ChatResponse`) |
 | UI badge and trace | `frontend/src/components/ChatPanel.tsx`, `TracePanel.tsx` |
 | Cost page | `frontend/src/components/CostComparisonPage.tsx` |

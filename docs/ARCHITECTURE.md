@@ -96,8 +96,10 @@ read routing, and agent reasoning separate.
 ## 2. One Trusted Hospital Execution Layer
 
 Hospital operations live in `backend/app/execution/commands/`. The parser,
-agent tools, and read-only operations API all call the same
-`CommandRunner.execute(Command)` implementation.
+Jev's fast path, agent tools, and read-only operations API all call the same
+`CommandRunner.execute(Command)` implementation — Jev never gets its own
+execution path; a confident decision hands off to exactly the same
+chokepoint an exact parser match would have used.
 
 `CommandRunner`:
 
