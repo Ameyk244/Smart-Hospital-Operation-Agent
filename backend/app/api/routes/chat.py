@@ -33,7 +33,7 @@ from starlette.requests import HTTPConnection
 from app.agent.domain_gate import check_domain_gate
 from app.agent.eligibility import check_eligibility
 from app.agent.entity_codes import extract_entity_codes
-from app.agent.graph import run_agent
+from app.agent.graph import record_non_agent_turn, run_agent
 from app.agent.history import to_langchain_messages
 from app.agent.message_text import extract_text_content
 from app.agent.providers.factory import get_default_chat_model
@@ -42,8 +42,11 @@ from app.db.models.agent import EventStatus, MessageRole
 from app.db.repositories.session_repository import SessionRepository
 from app.db.session import get_db, get_session_factory
 from app.execution.commands import Command, CommandRunner
+from app.observability.logging_config import get_logger
 from app.observability.tracing import record_event
 from app.parser.parser import parse
+
+logger = get_logger("api.chat")
 
 # The trace event type the Jev fast path writes, in all three of its
 # outcomes. The frontend's trace panel filters on this exact string and the
@@ -165,6 +168,31 @@ def get_checkpointer(request: HTTPConnection):
     return request.app.state.checkpointer
 
 
+async def _remember_for_agent(
+    *,
+    session_id: str,
+    user_text: str,
+    assistant_text: str,
+    session_factory,
+    checkpointer,
+) -> None:
+    """Record a parser/Jev-answered turn in the agent's own history. The
+    answer has already been computed and persisted, so a checkpoint problem
+    is logged, never surfaced as a failed request."""
+    try:
+        await record_non_agent_turn(
+            session_id=session_id,
+            user_text=user_text,
+            assistant_text=assistant_text,
+            session_factory=session_factory,
+            settings=get_settings(),
+            checkpointer=checkpointer,
+        )
+    except Exception:  # noqa: BLE001 - see docstring
+        logger.warning("record_non_agent_turn_failed", session_id=session_id, exc_info=True)
+
+
+
 async def handle_chat_message(
     text: str,
     session_id: str | None,
@@ -200,6 +228,13 @@ async def handle_chat_message(
         message = _format_deterministic_message(command, result.success, result.error, result.data)
         await session_repo.append_message(session_id, MessageRole.ASSISTANT, message)
         await db.commit()
+        await _remember_for_agent(
+            session_id=session_id,
+            user_text=text,
+            assistant_text=message,
+            session_factory=session_factory,
+            checkpointer=checkpointer,
+        )
         return ChatResponse(
             session_id=session_id,
             handled_by="deterministic",
@@ -277,6 +312,13 @@ async def handle_chat_message(
             )
             await session_repo.append_message(session_id, MessageRole.ASSISTANT, message)
             await db.commit()
+            await _remember_for_agent(
+                session_id=session_id,
+                user_text=text,
+                assistant_text=message,
+                session_factory=session_factory,
+                checkpointer=checkpointer,
+            )
             return ChatResponse(
                 session_id=session_id,
                 handled_by="jev",

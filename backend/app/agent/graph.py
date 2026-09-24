@@ -439,3 +439,49 @@ async def run_agent(
         "touched_entity_codes": [],
     }
     return await compiled.ainvoke(initial_state, config=config)
+
+
+class _StateOnlyModel:
+    """Stands in for the chat model when a graph is built only to write state.
+    `record_non_agent_turn` never runs a node, so `bind_tools` is the only
+    method touched (at build time) and no LLM client is ever constructed."""
+
+    def bind_tools(self, _tools: Any) -> "_StateOnlyModel":
+        return self
+
+
+async def record_non_agent_turn(
+    *,
+    session_id: str,
+    user_text: str,
+    assistant_text: str,
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    checkpointer: Any | None,
+) -> None:
+    """Write a turn the parser or Jev answered into the agent's checkpoint.
+
+    Why: with a checkpointer, the graph state is the *only* history the agent
+    sees (see `run_agent`), and it used to contain only agent-handled turns.
+    After `list delayed appointments` was answered deterministically, a
+    follow-up such as "what did you just find?" reached an agent that had
+    never seen either message and answered "I haven't run any searches yet".
+    Recording the exchange keeps one conversation, whichever path answered.
+
+    No-op without a checkpointer: then `run_agent` gets the full transcript
+    from `ConversationMessage` rows, which already include these turns.
+    Only the user text and the reply text are written, never tool state: the
+    exchange grounds no entity codes, exactly as before.
+    """
+    if checkpointer is None:
+        return
+    compiled = build_graph(_StateOnlyModel(), session_factory, settings, checkpointer=checkpointer)  # type: ignore[arg-type]
+    config = {"configurable": {"thread_id": session_id}}
+    existing = await compiled.aget_state(config)
+    messages: list[Any] = []
+    if not existing.values:
+        # Same first-message rule as run_agent: a thread's first message is
+        # the system prompt, and run_agent skips adding it once state exists.
+        messages.append(await _build_system_message(session_factory, session_id))
+    messages += [HumanMessage(content=user_text), AIMessage(content=assistant_text)]
+    await compiled.aupdate_state(config, {"messages": messages}, as_node="agent")

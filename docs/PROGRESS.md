@@ -1163,3 +1163,19 @@ punctuated/odd-whitespace, 3 Jev, agent, grounding rejections, 2 domain-gate
 rejects): all routed as expected. Noted, not fixed: `departments?` (one word)
 is rejected by the domain gate; `how many scanners are in maintenance` is
 answered by Jev with a list rather than a count.
+
+### Conversation history gap: parser/Jev turns were invisible to the agent
+
+Found by the 40-message spoken test: after `find the delayed CT appointments`
+was answered by Jev, `what did you just find` got "I haven't run any searches
+yet". Cause: with a checkpointer the graph state is the only history the agent
+reads (`run_agent` passes no transcript, to avoid duplicates), and only agent
+turns were written to it. It escaped the suite because every other e2e test
+runs with `checkpointer=None`, where the transcript fallback hides it.
+
+Fix: `record_non_agent_turn()` (graph.py) writes each deterministic/Jev
+exchange into the thread after the answer is persisted; a failure there is
+logged, not surfaced. Rejected turns are not recorded, so an off-topic message
+and the canned refusal never become agent context. Five new e2e tests use the
+real Postgres checkpointer and a recording fake model (no live calls); four
+fail on the old code.

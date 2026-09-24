@@ -277,7 +277,11 @@ These are intentionally separate:
    the application `session_id`.
 
 With the production checkpointer active, prior graph messages come from the
-checkpoint to avoid duplicating `conversation_messages`. Without a
+checkpoint to avoid duplicating `conversation_messages`. Turns answered by the
+parser or Jev never pass through the graph, so `record_non_agent_turn()` writes
+each such exchange (user text and reply only, no tool state, nothing grounded)
+into the same thread; rejected turns are deliberately not written. Without
+this the agent could not see what a fast path had just answered. Without a
 checkpointer, the route supplies converted recent conversation history.
 
 ## 10. Scope And Safety
