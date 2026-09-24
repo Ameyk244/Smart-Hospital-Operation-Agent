@@ -101,8 +101,9 @@ All parser-exposed commands are reads:
 | `show [the] next appointment` | `show_next_appointment` | READ |
 | `list delayed appointments [mri|ct|xray]` | `list_delayed_appointments` | READ |
 
-Matching is case-insensitive and trims surrounding whitespace, but is not
-fuzzy. A phrase such as `show me the next appointment` deliberately misses
+Matching is case-insensitive, collapses repeated whitespace and ignores
+trailing punctuation (spoken transcripts and typed sentences routinely end in
+`.` or `?`), but is not fuzzy. A phrase such as `show me the next appointment` deliberately misses
 the grammar and becomes an agent candidate.
 
 Direct deterministic commands do not create grounding records. Grounding is

@@ -101,8 +101,40 @@ _GRAMMAR: list[tuple[re.Pattern, Callable[[re.Match], Command]]] = [
 ]
 
 
+_WHITESPACE_RUN = re.compile(r"\s+")
+# Sentence-final punctuation and any whitespace around it. Deliberately only
+# ever removed from the *end*: an apostrophe or hyphen inside a name
+# ("O'Neil", "Mary-Jane") is real content, a trailing "." or "?" never is.
+_TRAILING_PUNCTUATION = re.compile(r"[\s.?!,;:…]+$")
+
+
+def _normalize(text: str) -> str:
+    """Whitespace runs collapse to one space; trailing sentence punctuation
+    and surrounding whitespace go.
+
+    Why this lives here and nowhere else: this function is the single choke
+    point every request shape passes through -- typed chat, spoken chat
+    (Whisper habitually appends a "." or "?" to a transcript), the
+    `/api/commands` endpoint, and the agent's `execute_command`
+    decomposition -- so one fix covers all of them instead of each entrance
+    growing its own cleanup.
+
+    Why it matters (not cosmetic): most grammar rules are `$`-anchored, so
+    "list departments." simply missed and detoured through a paid Jev call.
+    Worse, `show patient <name>` has no anchor to trip on: "show patient
+    David Davis." matched, captured the query "David Davis." (period
+    included), and the patient search returned zero rows -- a confidently
+    wrong "No patients matched" under a DETERMINISTIC badge, with no error
+    anywhere. Collapsing internal whitespace fixes the same class of bug for
+    "show patient  David   Davis", whose captured name would otherwise never
+    substring-match the stored "David Davis".
+    """
+    collapsed = _WHITESPACE_RUN.sub(" ", text).strip()
+    return _TRAILING_PUNCTUATION.sub("", collapsed)
+
+
 def parse(text: str) -> ParseOutcome:
-    stripped = text.strip()
+    stripped = _normalize(text)
     for pattern, builder in _GRAMMAR:
         match = pattern.match(stripped)
         if match:

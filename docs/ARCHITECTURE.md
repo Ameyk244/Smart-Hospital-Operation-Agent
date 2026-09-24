@@ -172,6 +172,14 @@ understanding layer. All parser-exposed commands are read-only:
 | `show [the] next appointment` | `show_next_appointment` |
 | `list delayed appointments [type]` | `list_delayed_appointments` |
 
+Before matching, `parse()` normalizes its input: repeated whitespace collapses
+and trailing sentence punctuation is dropped. It is the one function typed
+chat, spoken chat, `/api/commands`, and the agent's `execute_command` all
+call, so this is done once rather than per entrance. It matters for
+correctness, not tidiness: `show patient <name>` is unanchored, so
+`show patient David Davis.` used to search for the literal `"David Davis."`
+and return zero rows under a deterministic badge.
+
 The command registry also contains operations used by APIs or agent tools:
 
 | Command | Access |

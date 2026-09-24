@@ -1098,3 +1098,31 @@ by hand in an actual browser yet.
 
 All four phases of the `voice` branch are now complete. Not merged to
 `master`; left for review per the build's own instruction.
+
+## Status: `voice` branch — first live test matrix, and the parser bug it exposed
+
+A 16-command spoken test matrix (real Chromium, fake mic fed synthesized
+audio, real app, nothing mocked) was run purely to *list* problems before
+fixing any. Full table in `docs/voice.md`. The finding that mattered most was
+not a mishearing: **trailing punctuation broke the deterministic parser.**
+
+Whisper appended `.`/`?` to 13 of the 16 transcripts, and most grammar rules
+are `$`-anchored, so they missed and took a paid Jev detour. Worse,
+`show patient <name>` has no anchor: `show patient David Davis.` matched,
+searched for the literal `"David Davis."`, and returned **"No patients matched
+that search."** under a `DETERMINISTIC` badge — a confidently wrong empty result
+with no error anywhere. Two of the four commands that passed deterministically
+in the matrix only did so because Whisper happened to omit the period that run.
+It is not voice-specific: reproduced *before* the fix by typing the same three
+messages into the real UI.
+
+Fixed in `parse()` — the one function typed chat, spoken chat, `/api/commands`
+and the agent's `execute_command` all share — by collapsing whitespace and
+dropping trailing sentence punctuation; punctuation inside a name is kept and
+the grammar is no fuzzier than before. 112 new test cases; verified they
+*fail* against the old parser (53 failures) before trusting them. Suite: 335
+passed, 6 skipped, ruff clean.
+
+Correction to an earlier claim: the matrix report said 9 of 16 transcripts
+carried terminal punctuation. The actual count is 13 of 16; the mistake
+understated the problem and was caught while writing this entry.

@@ -40,8 +40,11 @@ show the next appointment
 list delayed appointments ct
 ```
 
-Matching is case-insensitive and ignores surrounding whitespace, but it is not
-fuzzy. For example, `show me the next appointment` goes to the agent.
+Matching is case-insensitive, collapses repeated whitespace, and ignores
+trailing punctuation (`.` `?` `!` `,` `;` `:` `…`), but it is not fuzzy. So
+`list departments.` and `show patient David Davis?` match; `show me the next
+appointment` still goes to the agent. Only *trailing* punctuation is dropped —
+an apostrophe or hyphen inside a name (`O'Neil-Smith`) is kept.
 
 ## 2. Domain Operations
 
@@ -313,8 +316,8 @@ LIST DEPARTMENTS
    list departments
 ```
 
-Case and surrounding whitespace don't matter; nothing else does. Add a
-please, a "me", or an "all" and you leave this path entirely.
+Case, extra whitespace and trailing punctuation don't matter; nothing else
+does. Add a please, a "me", or an "all" and you leave this path entirely.
 
 ### 9.2 Jev fast path — parser missed, Jev recognised it anyway
 

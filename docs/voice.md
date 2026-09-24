@@ -144,6 +144,55 @@ history, preferences, and grounding. No new session concept was introduced.
 - Silero VAD and a hosted-STT comparison are explicitly out of scope for
   this build.
 
+## Findings from the first end-to-end voice test matrix
+
+16 synthesized spoken commands (Windows SAPI "Microsoft David", 16kHz, padded
+with silence) were fed through a real Chromium's fake mic into the real running
+app — real mic button, real capture and resampling, real WebSocket, real
+`tiny.en`, real Jev and agent — recording the exact `transcript` and
+`chat_response` frames and the badge the UI rendered. Nothing was mocked and
+nothing was fixed during that pass; it existed to list problems.
+
+| Finding | Kind | Outcome |
+|---|---|---|
+| Trailing `.`/`?` breaks the `$`-anchored parser rules; `show patient David Davis.` searched for `"David Davis."` and found nobody | parser bug, **not voice-specific** | **fixed** (below) |
+| "why is scanner four unavailable" → "Why scanner for unavailable?" — the only transcription error that changed what the user got | STT accuracy | comparison below |
+| "list scanners" → "List Scanner's …" (possessive) misses the grammar; Jev still answered correctly | STT, cost only | left as-is |
+| "show me who's free for MRI right now" → Jev 0.86, under the 0.90 threshold, so the agent answered (correctly) | routing threshold, cost only | left as-is |
+| "S C N seven" → `SCN7` (no hyphen) — the agent coped | STT | left as-is |
+
+The other ten commands were word-exact. Every DOM badge matched the wire's
+`handled_by`, no console errors, database unchanged. The audio is one clean
+synthetic voice with no noise or accent, so read these as an optimistic floor
+for accuracy, not a forecast for a real microphone.
+
+### Fix: trailing punctuation no longer breaks the deterministic parser
+Whisper appended a trailing `.` or `?` to 13 of the 16 transcripts (every one
+from command 4 onward), and typed
+sentences end in one just as often, so this was never a voice corner case. It
+also wasn't luck-dependent in the harmless direction: two of the four
+"deterministic" commands only passed because Whisper happened to omit the
+period that run.
+
+Confirmed *before* the fix by typing into the real UI (no audio involved):
+`list departments.` and `show next appointment.` missed the parser and took a
+paid Jev detour, and `show patient David Davis.` returned **"No patients matched
+that search."** under a `DETERMINISTIC` badge. That last one is the dangerous
+shape — a confidently wrong empty result, where a mishearing at least tends to
+produce an obviously confused answer.
+
+`parse()` now normalizes first: repeated whitespace collapses and trailing
+sentence punctuation (`. ? ! , ; : …`) is dropped. It lives in `parse()`
+because that is the one function the chat route (typed and voice alike),
+`/api/commands`, and the agent's `execute_command` all share — one fix, not one
+per entrance. Only trailing punctuation goes; `O'Neil-Smith` is untouched, and
+the grammar is no more fuzzy than before (`list departments please.` still
+misses, by design). 112 new test cases — parametrized across every grammar
+shape and twelve suffixes, plus DB-backed end-to-end tests that
+`show patient David Davis.` finds exactly the one patient the unpunctuated form
+does. Those tests were run against the old parser first and fail there (53
+failures), so they demonstrably catch the bug rather than merely passing.
+
 ## Phases
 
 ### Phase 1 — Extract the shared handler ✅
