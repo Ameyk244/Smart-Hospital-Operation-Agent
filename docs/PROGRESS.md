@@ -1186,7 +1186,7 @@ One shared, explicit correction table (`app/voice/vocab.py`) runs once after
 transcription, before the parser/gate/Jev/memory. It fixes the confident-wrong
 "MI scanners" answer, the wrong saved preference, and the missed "forget"
 together. Voice only; `raw` keeps what Whisper heard. Ambiguous homophones
-(`four`/`for`) are intentionally not guessed. 28 unit cases + 2 WebSocket
+(`four`/`for`) are intentionally not guessed. 26 unit tests + 2 WebSocket
 tests; suite 424 passed. Found on the way: the deterministic parser itself
 ignores unknown words in a `list scanners ...` tail (see docs/voice.md).
 
@@ -1197,3 +1197,9 @@ offline through the detector at browser-sized chunks before changing code, then
 added a 300 ms bounded pre-roll (`VOICE_VAD_PREROLL_MS`). Same clip now
 transcribes in full; no transcript in a six-clip check got worse. Speech
 confirmation is unchanged. 7 unit tests; suite green.
+
+Live re-check of fixes 2 and 3 (4 spoken clips, real browser mic path): all
+transcribed and routed correctly, but the vocabulary table did not fire live
+because Whisper's output shifted once the pre-roll changed the audio; its
+coverage is the unit/WebSocket tests. The dev-database reseed requested with
+this round was blocked by the tool permission layer and has not been run.
