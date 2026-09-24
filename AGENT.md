@@ -131,7 +131,7 @@ failures. Unexpected infrastructure or programming errors are not hidden.
 
 ## 7. Agent Tool Inventory
 
-The model sees exactly seven tool schemas.
+The model sees exactly eight tool schemas.
 
 ### Hospital reads
 
@@ -140,6 +140,13 @@ The model sees exactly seven tool schemas.
 Filters by status, modality, patient code, department code, scanner code, and
 limit. It executes the canonical `search_appointments` command and grounds
 every appointment, scanner, and patient code returned.
+
+#### `search_scanners`
+
+Lists scanners filtered by modality, status, and/or department code (the
+department filter is the reason it exists: neither the parser grammar nor
+`execute_command` can express one). Runs the canonical `list_scanners` command
+and grounds every scanner code returned.
 
 #### `execute_command`
 
@@ -247,7 +254,7 @@ agent_node -- tool calls --> tool_node -- continue --> agent_node
 
 ### `agent_node`
 
-- binds the seven registered tools to the provider-neutral chat model;
+- binds the eight registered tools to the provider-neutral chat model;
 - records `agent_invoked`;
 - calls the model under `LLM_TIMEOUT_SECONDS`;
 - records `llm_response` or `llm_timeout`;

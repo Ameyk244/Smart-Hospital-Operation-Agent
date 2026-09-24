@@ -268,7 +268,7 @@ full decision, fallback, configuration, and observability contract.
 The LangGraph agent is the final fallback for eligible hospital requests that
 the parser and Jev do not resolve. It uses the configured Anthropic or
 OpenRouter chat model, can reason over conversation context, and may call one
-or more of the seven registered tools. Its hospital operations still pass
+or more of the eight registered tools. Its hospital operations still pass
 through `CommandRunner`, and rescheduling is its only hospital-data write.
 
 ### Appointment Search

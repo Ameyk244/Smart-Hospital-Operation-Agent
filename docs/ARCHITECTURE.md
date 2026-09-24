@@ -196,11 +196,12 @@ the current start time or use a supplied ISO-8601 start time.
 
 ## 6. Registered Agent Tools
 
-There are exactly seven registered agent tools:
+There are exactly eight registered agent tools:
 
 | Tool | Access | CommandRunner | Purpose |
 |---|---|---|---|
 | `search_appointments` | READ | Yes | Filter appointments and ground returned appointment, scanner, and patient codes |
+| `search_scanners` | READ | Yes | List scanners by modality, status, or department and ground the returned scanner codes |
 | `execute_command` | READ | Yes | Parse and run one exact deterministic command; ground codes in its result |
 | `get_scanner_availability` | READ | Yes | Read one already-grounded scanner's status |
 | `reschedule_appointment` | HOSPITAL WRITE | Yes | Reassign a grounded appointment to a grounded scanner and optionally change time |
@@ -231,7 +232,7 @@ tool_node
    +-----------------------------> agent_node
 ```
 
-`agent_node` binds the seven tool schemas, records invocation/response events,
+`agent_node` binds the eight tool schemas, records invocation/response events,
 calls the model under an LLM timeout, and appends its response.
 
 `tool_node` handles every requested tool call in a fresh database session:

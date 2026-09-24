@@ -24,6 +24,14 @@ read-only, return `handled_by: deterministic`, and create no agent trace.
 | `list scanners [mri|ct|xray]` | READ | Scanners |
 | `list scanners [available|in use|maintenance]` | READ | Scanners |
 | `list scanners [mri|ct|xray] [available|in use|maintenance]` | READ | Scanners |
+
+Anything else after `list scanners` or `list delayed appointments` (other than
+`that`/`are` before a scanner filter) makes the parser miss, so the request goes
+to Jev or the agent rather than running with the unknown word ignored. A message
+that names a department (`radiology`, `cardiology`, `orthopedics`, `emergency`,
+`DEPT-...`) is never sent to Jev, which cannot carry a department filter; it goes
+straight to the agent.
+
 | `show patient <name>` | READ | Patients |
 | `show next appointment` | READ | Appointments |
 | `show the next appointment` | READ | Appointments |
@@ -78,6 +86,7 @@ so they consume API tokens even when no tool is called.
 | Tool | Domain | Purpose |
 |---|---|---|
 | `search_appointments` | Appointments | Search by status, type, patient, department, or scanner |
+| `search_scanners` | Scanners | List scanners by modality, status, or department; grounds the codes returned |
 | `get_scanner_availability` | Scanners | Check a grounded scanner |
 | `execute_command` | Shared command layer | Run one of the deterministic parser commands |
 | `list_preferences` | Session memory | Read remembered preferences |

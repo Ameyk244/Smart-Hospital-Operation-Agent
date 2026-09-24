@@ -1203,3 +1203,20 @@ transcribed and routed correctly, but the vocabulary table did not fire live
 because Whisper's output shifted once the pre-roll changed the audio; its
 coverage is the unit/WebSocket tests. The dev-database reseed requested with
 this round was blocked by the tool permission layer and has not been run.
+
+### Parser leniency + department-scoped queries
+
+Parser: unknown words after `list scanners` / `list delayed appointments` now
+make it miss instead of being ignored (`MI available`, `banana`, `connected`).
+Department gap: Jev declines messages naming a department before spending a
+call; new `search_scanners` agent tool (eighth registered tool) applies
+`department_code`; system prompt tells the agent to search fresh rather than
+answer from earlier results. The prompt part is unverified without a live model.
+Suite 461 passed, 6 skipped.
+
+Live check of the department fixes (2 calls, fresh sessions): the appointments
+query now makes a real department-filtered search. The scanners query is declined
+by Jev as intended, but the model used search_appointments instead of the new
+search_scanners tool. Correction to an earlier claim: the old Jev answer (all 8
+scanners) was right for the Radiology query on this seed, because all 8 scanners
+are in Radiology rooms; the defect shows for any other department.

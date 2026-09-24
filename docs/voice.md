@@ -283,15 +283,14 @@ demonstration.
 Voice only. Typed text is what the person meant, and typing does not produce
 these errors, so rewriting it would be a surprise with nothing to gain.
 
-Related finding, not fixed here: the deterministic parser is lenient in the
-same dangerous direction. `list scanners MI available` *matches* and runs as
+Related finding, fixed afterwards (see the next section): the deterministic
+parser was lenient in the same dangerous direction. `list scanners MI available` *matches* and runs as
 `list_scanners(status=AVAILABLE)`, silently ignoring `MI`; `list scanners
 banana` matches and lists every scanner; and its `ct`/`mri` test is a
 substring check on the tail, so a word like `connected` would read as `CT`.
 The correction above removes the voice-sourced trigger, but a typed `MI` still
 gets the wrong answer deterministically. The parser rejecting an unrecognised
-tail (letting Jev or the agent handle it) is the right fix; it changes the
-grammar, so it is left for a decision.
+tail (letting Jev or the agent handle it) was the fix.
 
 ### Fix: the start of an utterance is no longer clipped (VAD pre-roll)
 
@@ -314,6 +313,40 @@ Whisper. Same clip afterwards: `What preferences have you saved?`. Across six
 clips at both chunk sizes no transcript got worse. Seven unit tests, including the original loss
 reproduced with `preroll_ms=0`; the constructor default stays 0 so any other
 caller behaves exactly as before.
+
+### Fixes: parser leniency and the department-scoped gap
+
+**Parser.** After `list scanners` or `list delayed appointments` only recognised
+words are accepted (a modality, a status, and `that`/`are` before a scanner
+filter). `list scanners MI available`, `list scanners banana` and `list
+scanners connected` (which used to read as CT) now miss the parser and go to
+Jev or the agent instead of running as an unfiltered list. Documented grammar is
+unchanged; only undocumented leniency is gone (one existing test relied on
+`list scanners that are available`, which is still accepted).
+
+**Department-scoped queries.** Evidence, from the trace of the test pass:
+`Which appointments belong to the Radiology department?` -- Jev declined, the
+agent made **no tool call** and answered from an earlier patient search, although
+`search_appointments` takes `department_code` (a reasoning gap). `List the
+scanners used by the Radiology department` -- Jev answered `list_scanners` at
+0.94 with the department dropped and returned all 8 scanners (a capability gap. In
+the seed data all 8 scanners happen to sit in Radiology rooms, so that one answer
+was coincidentally right; for any other department, e.g. Cardiology with none,
+it would have returned all 8 as well:
+Jev carries only modality and status, and neither the parser nor
+`execute_command` can express a department, though the underlying command
+supports `department_code`). Changes: (1) messages naming a department are
+declined before Jev is called (no wasted call, no wrong answer); (2) a new
+read-only agent tool `search_scanners(type, status, department_code)` through
+`CommandRunner`, grounding the scanner codes; (3) one sentence in the agent's
+system prompt to run a fresh filtered search instead of answering from earlier
+results. (1) and (2) are covered by scripted tests; (3) is a prompt change, so it
+was checked live once: in a fresh session `Which appointments belong to the
+Radiology department?` made a real `search_appointments(department_code=DEPT-RAD)`
+call. `List the scanners used by the Radiology department` was declined by Jev as
+intended, but the model reached for `search_appointments` and derived the scanners
+rather than calling the new `search_scanners` tool (the answer, all 8, was right
+for this seed). The tool is available and tested; the model does not yet prefer it.
 
 ## Phases
 
