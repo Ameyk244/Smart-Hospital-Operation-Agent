@@ -165,3 +165,57 @@ def test_normalization_did_not_make_the_grammar_fuzzy():
 @pytest.mark.parametrize("text", ["...", "?", "!?", " . ", "…"])
 def test_punctuation_only_input_is_unmatched_and_does_not_crash(text):
     assert parse(text).matched is False
+
+
+# A word the grammar does not know must make the parser miss, not be ignored.
+# `list scanners MI available` (Whisper's "MRI") used to match and run as "all
+# available scanners", a confident answer to a question nobody asked.
+UNRECOGNISED_TAILS = [
+    "list scanners MI available",
+    "list scanners banana",
+    "list scanners connected",  # contains "ct"; must not read as CT
+    "list scanners mri please",
+    "list scanners xrays",
+    "list scanners for radiology",
+    "list delayed appointments foo",
+    "list delayed appointments MI",
+    "list delayed appointments for radiology",
+    "list delayed appointments connected",
+]
+
+
+@pytest.mark.parametrize("text", UNRECOGNISED_TAILS)
+def test_unrecognised_words_after_a_command_make_it_miss(text):
+    assert parse(text).matched is False
+
+
+@pytest.mark.parametrize(
+    ("text", "args"),
+    [
+        ("list scanners", {}),
+        ("list scanners mri", {"type": "MRI"}),
+        ("list scanners CT In Use", {"type": "CT", "status": "IN_USE"}),
+        ("list scanners in-use", {"status": "IN_USE"}),
+        ("list scanners xray maintenance", {"type": "XRAY", "status": "MAINTENANCE"}),
+        ("list scanners that are available", {"status": "AVAILABLE"}),
+        ("list scanners mri available.", {"type": "MRI", "status": "AVAILABLE"}),
+    ],
+)
+def test_recognised_scanner_tails_still_match_with_the_same_arguments(text, args):
+    outcome = parse(text)
+    assert outcome.matched is True
+    assert outcome.command.args == args
+
+
+@pytest.mark.parametrize(
+    ("text", "args"),
+    [
+        ("list delayed appointments", {}),
+        ("list delayed appointments ct", {"appointment_type": "CT"}),
+        ("list delayed appointments XRAY?", {"appointment_type": "XRAY"}),
+    ],
+)
+def test_recognised_delayed_appointment_tails_still_match(text, args):
+    outcome = parse(text)
+    assert outcome.matched is True
+    assert outcome.command.args == args

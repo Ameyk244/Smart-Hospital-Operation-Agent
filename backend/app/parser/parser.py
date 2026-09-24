@@ -79,11 +79,24 @@ def _build_list_delayed_appointments(match: re.Match) -> Command:
     return Command("list_delayed_appointments", args)
 
 
+# What may follow `list scanners` / `list delayed appointments`. Anything else
+# in the tail (a misheard "MI", a typo, "banana", "please") means this is not
+# an exact command, so the parser misses and the request goes to Jev or the
+# agent -- instead of running with the unknown word silently ignored and
+# returning a confident answer to a question that was not asked. Each word is a
+# whole word, so "connected" no longer reads as "ct".
+_MODALITY_TAIL = r"(?:mri|ct|xray)"
+_STATUS_TAIL = r"(?:available|in[\s-]use|maintenance)"
+# "that are" is natural filler ("list scanners that are available"); it carries
+# no filter, so allowing it cannot change what is returned.
+_SCANNER_TAIL = rf"(?:\s+(?:{_MODALITY_TAIL}|{_STATUS_TAIL}|that|are))*"
+_APPOINTMENT_TAIL = rf"(?:\s+{_MODALITY_TAIL})*"
+
 # Order matters: first match wins, so more specific patterns come first.
 _GRAMMAR: list[tuple[re.Pattern, Callable[[re.Match], Command]]] = [
     (re.compile(r"^list\s+departments$", re.IGNORECASE), _build_list_departments),
     (
-        re.compile(r"^list\s+scanners(?P<tail>.*)$", re.IGNORECASE),
+        re.compile(rf"^list\s+scanners(?P<tail>{_SCANNER_TAIL})$", re.IGNORECASE),
         _build_list_scanners,
     ),
     (
@@ -95,7 +108,9 @@ _GRAMMAR: list[tuple[re.Pattern, Callable[[re.Match], Command]]] = [
         _build_show_next_appointment,
     ),
     (
-        re.compile(r"^list\s+delayed\s+appointments(?P<tail>.*)$", re.IGNORECASE),
+        re.compile(
+            rf"^list\s+delayed\s+appointments(?P<tail>{_APPOINTMENT_TAIL})$", re.IGNORECASE
+        ),
         _build_list_delayed_appointments,
     ),
 ]
