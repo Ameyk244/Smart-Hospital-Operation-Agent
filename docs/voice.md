@@ -281,6 +281,29 @@ gets the wrong answer deterministically. The parser rejecting an unrecognised
 tail (letting Jev or the agent handle it) is the right fix; it changes the
 grammar, so it is left for a decision.
 
+### Fix: the start of an utterance is no longer clipped (VAD pre-roll)
+
+`what preferences have you saved` reached the domain gate as `preferences have
+you saved?` and was rejected. Reproduced offline before changing anything, by
+streaming that clip through the detector in ~85 ms chunks (what the browser
+sends): the detected utterance was 2.13 s of a 2.53 s clip and Whisper heard
+`Preferences have you saved?`; with 256 ms chunks the same clip was fine, so
+it depends on chunk size. Cause: speech is confirmed only after 200 ms of
+*continuous* above-threshold audio, a soft onset ("wh") can sit under the
+threshold for a chunk or two, and the detector discarded both the quiet lead-in
+and any run that broke off before confirming.
+
+Fix: a short pre-roll (`VOICE_VAD_PREROLL_MS`, default 300 ms). Chunks that were
+not part of a confirmed utterance -- quiet audio and broken-off candidate runs
+-- are kept in a bounded buffer and prepended when speech is confirmed.
+Confirmation itself is unchanged (still 200 ms of real speech), so noise still
+cannot start an utterance; the cost is up to ~0.3 s of extra leading audio for
+Whisper. Same clip afterwards: `What preferences have you saved?`. Across six
+clips at both chunk sizes no transcript got worse (longer pre-roll also fixed a
+dropped `Which` on another). Seven unit tests, including the original loss
+reproduced with `preroll_ms=0`; the constructor default stays 0 so any other
+caller behaves exactly as before.
+
 ## Phases
 
 ### Phase 1 — Extract the shared handler ✅

@@ -1189,3 +1189,11 @@ together. Voice only; `raw` keeps what Whisper heard. Ambiguous homophones
 (`four`/`for`) are intentionally not guessed. 28 unit cases + 2 WebSocket
 tests; suite 424 passed. Found on the way: the deterministic parser itself
 ignores unknown words in a `list scanners ...` tail (see docs/voice.md).
+
+### VAD pre-roll (utterance-start clipping)
+
+Reproduced `what preferences have you saved` -> `preferences have you saved?`
+offline through the detector at browser-sized chunks before changing code, then
+added a 300 ms bounded pre-roll (`VOICE_VAD_PREROLL_MS`). Same clip now
+transcribes in full; no transcript in a six-clip check got worse. Speech
+confirmation is unchanged. 7 unit tests; suite green.

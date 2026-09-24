@@ -91,6 +91,7 @@ def _make_detector(settings: Settings) -> UtteranceDetector:
         speech_rms_threshold=settings.voice_vad_speech_rms_threshold,
         silence_ms=settings.voice_vad_silence_ms,
         min_speech_ms=settings.voice_vad_min_speech_ms,
+        preroll_ms=settings.voice_vad_preroll_ms,
         max_utterance_ms=settings.voice_max_utterance_seconds * 1000.0,
     )
 

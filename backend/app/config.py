@@ -105,6 +105,14 @@ class Settings(BaseSettings):
     # utterance. Short relative to voice_vad_silence_ms on purpose -- this
     # guards utterance *start*, not end.
     voice_vad_min_speech_ms: float = 200.0
+    # Audio kept from *before* speech was confirmed and prepended to the
+    # utterance. Confirmation needs `voice_vad_min_speech_ms` of continuous
+    # above-threshold audio, and a soft word onset ("wh" in "what") can sit
+    # below the threshold for a chunk or two, so without a lookback the first
+    # word was lost ("what preferences have you saved" -> "preferences have
+    # you saved", which the domain gate then rejected). 300ms covers a soft
+    # onset without dragging in a noticeable amount of room noise.
+    voice_vad_preroll_ms: float = 300.0
 
     # --- Bounded agent execution (see docs/ARCHITECTURE.md §5) ---
     max_agent_rounds: int = 6

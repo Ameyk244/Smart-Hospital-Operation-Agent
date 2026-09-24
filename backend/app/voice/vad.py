@@ -18,7 +18,9 @@ of PCM samples, not 200ms of wall time between calls.
 
 State machine (mirrors the brief in docs/voice.md/the Phase 3 build):
   IDLE   -- below threshold, buffering only a *candidate* run (not yet
-            confirmed as real speech).
+            confirmed as real speech). Recent audio that did not make it into
+            a confirmed utterance is kept in a short pre-roll and prepended
+            when speech is confirmed, so a soft word onset is not lost.
   SPEECH -- confirmed speech in progress; every chunk is appended to the
             utterance buffer regardless of whether that specific chunk is
             above or below threshold (silence right after the last word is
@@ -31,6 +33,7 @@ WebSocket connection (not per utterance -- `ingest()` returns to IDLE on
 its own after finalizing, ready for the connection's next turn).
 """
 
+from collections import deque
 from dataclasses import dataclass
 from enum import Enum
 
@@ -98,11 +101,13 @@ class UtteranceDetector:
         silence_ms: float,
         min_speech_ms: float,
         max_utterance_ms: float,
+        preroll_ms: float = 0.0,
     ) -> None:
         self._speech_rms_threshold = speech_rms_threshold
         self._silence_ms = silence_ms
         self._min_speech_ms = min_speech_ms
         self._max_utterance_ms = max_utterance_ms
+        self._preroll_ms_limit = preroll_ms
 
         self._in_speech = False
         self._leftover_byte = b""
@@ -111,6 +116,12 @@ class UtteranceDetector:
         # above threshold, not yet confirmed as a real utterance.
         self._candidate_bytes = bytearray()
         self._candidate_ms = 0.0
+
+        # Most recent chunks that were *not* part of a confirmed utterance
+        # (silence, and candidate runs that broke off), oldest first, capped
+        # at `preroll_ms` of audio: (bytes, duration_ms).
+        self._preroll: deque[tuple[bytes, float]] = deque()
+        self._preroll_ms = 0.0
 
         # SPEECH-state confirmed utterance.
         self._utterance_bytes = bytearray()
@@ -159,8 +170,14 @@ class UtteranceDetector:
             # *speech* short-run-tolerance the min_speech_ms window already
             # exists to catch is a click/pop, not a run that's already
             # intermittent below threshold.
+            # The run is not thrown away: it goes to the pre-roll, so if
+            # speech is confirmed a moment later the broken-off onset is
+            # still part of the utterance.
+            if self._candidate_bytes:
+                self._push_preroll(bytes(self._candidate_bytes), self._candidate_ms)
             self._candidate_bytes.clear()
             self._candidate_ms = 0.0
+            self._push_preroll(data, duration_ms)
             return None
 
         self._candidate_bytes += data
@@ -171,12 +188,27 @@ class UtteranceDetector:
         # Confirmed: the candidate run becomes the start of the real
         # utterance buffer.
         self._in_speech = True
-        self._utterance_bytes = self._candidate_bytes
-        self._utterance_ms = self._candidate_ms
+        preroll = b"".join(chunk for chunk, _ms in self._preroll)
+        self._utterance_bytes = bytearray(preroll) + self._candidate_bytes
+        self._utterance_ms = self._preroll_ms + self._candidate_ms
+        self._preroll.clear()
+        self._preroll_ms = 0.0
         self._silence_run_ms = 0.0
         self._candidate_bytes = bytearray()
         self._candidate_ms = 0.0
         return SpeechStarted()
+
+    def _push_preroll(self, data: bytes, duration_ms: float) -> None:
+        if self._preroll_ms_limit <= 0:
+            return
+        self._preroll.append((data, duration_ms))
+        self._preroll_ms += duration_ms
+        # Drop whole oldest chunks while the remainder still covers the limit;
+        # chunk-granular on purpose (no sample slicing), so the pre-roll can
+        # run at most one chunk over the limit.
+        while len(self._preroll) > 1 and self._preroll_ms - self._preroll[0][1] >= self._preroll_ms_limit:
+            _chunk, ms = self._preroll.popleft()
+            self._preroll_ms -= ms
 
     def _ingest_speech(
         self, data: bytes, duration_ms: float, is_speech_chunk: bool
