@@ -1127,6 +1127,28 @@ Correction to an earlier claim: the matrix report said 9 of 16 transcripts
 carried terminal punctuation. The actual count is 13 of 16; the mistake
 understated the problem and was caught while writing this entry.
 
+### Domain gate: bare noun phrases (`departments?`) no longer rejected
+
+Reported as a likely sibling of the parser punctuation bug. **It is not.**
+Probing the gate showed `departments`, `departments.` and `departments?` are
+all rejected identically: the clause has a domain noun but no action word, so
+`off_topic_disconnected`. The `?` was never the cause (and the gate splits on
+punctuation anyway), so a shared pre-normalization step would not have fixed it.
+
+Fix: a message that is a single clause of at most four words made only of
+domain nouns plus `the/all/my/our/current/every` passes. Entity codes alone,
+off-topic words and multi-clause messages are excluded, so the "What's 47
+times 12? mri" bypass stays closed. 48 new cases (8 phrases x 6 suffixes)
+plus 8 must-still-reject pins; the 48 fail against the old gate. Suite: 391
+passed, 6 skipped.
+
+Also examined the "how many scanners are in maintenance" quirk. It was not
+the agent choosing a list: the Jev fast path answered it (`jev_invoked`,
+`list_scanners`, confidence 0.90 = threshold, no agent tool events) because
+Jev can only choose among the five parser commands and none is a count. The
+reply text ("Found 1 scanner: SCN-4") does contain the answer. The same
+question without "right now" scored 0.86 and went to the agent. Left as-is.
+
 ### Whisper model comparison (tiny.en / base.en / small.en) — decision left open
 
 Follow-up to matrix case #16 (`four` heard as `for`). Measured on 36 synthesized

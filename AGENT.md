@@ -67,7 +67,8 @@ The agent's domain is synthetic hospital operations, specifically:
 
 The domain gate is synchronous regex/set logic, not another model call. A
 normal request must contain a connected hospital noun and action/question
-shape. This rejects weather, arithmetic, creative writing, travel booking,
+shape (or be a short bare noun phrase such as `departments?` or `mri scanners`;
+punctuation is irrelevant to that rule). This rejects weather, arithmetic, creative writing, travel booking,
 and other unrelated work before API tokens are spent.
 
 Narrow follow-ups may pass without repeating a hospital noun when recent user

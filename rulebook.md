@@ -202,6 +202,13 @@ and on `and`/`but`) contains:
   `reschedule APT-2001 to SCN-1`, `tell me about the radiology department`,
   `compare MRI and CT delays`, `anything delayed on CT today?`.
 
+A short message that is *only* hospital nouns also passes — `departments?`,
+`scanners`, `mri scanners`, `delayed appointments`, `the departments` (at most
+four words, one clause, articles `the/all/my/our/current/every` allowed). It
+needs no request word and does not depend on the `?`. A bare entity code, a
+noun beside `joke`/`poem`/…, or a noun tacked after another sentence still
+fails.
+
 A code still needs a request word: `delete APT-2001`, `cancel APT-2001` and
 `mark SCN-4 as available` are rejected, because nothing in this system can do
 them and they shouldn't cost a model call. A hospital word or code standing

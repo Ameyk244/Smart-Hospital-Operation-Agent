@@ -216,3 +216,46 @@ def test_context_does_not_reopen_disconnected_domain_word_bypass():
 def test_explicit_hospital_followups_pass_without_context_override(text):
     result = check_domain_gate(text)
     assert result.in_domain is True
+
+
+# Terse noun-phrase lookups ("departments?", spoken "scanners"). Rejected before
+# because the clause had a domain noun but no action word. Punctuation was NOT
+# the cause: the unpunctuated forms failed identically, so these are asserted
+# both ways.
+BARE_NOUN_PHRASES = [
+    "departments",
+    "scanners",
+    "appointments",
+    "delayed appointments",
+    "mri scanners",
+    "the departments",
+    "all scanners",
+    "current delayed appointments",
+]
+BARE_NOUN_PHRASE_SUFFIXES = ["", "?", ".", "!", "??", " ?"]
+
+
+@pytest.mark.parametrize("suffix", BARE_NOUN_PHRASE_SUFFIXES)
+@pytest.mark.parametrize("text", BARE_NOUN_PHRASES)
+def test_bare_domain_noun_phrases_pass_with_or_without_punctuation(text, suffix):
+    assert check_domain_gate(text + suffix).in_domain is True
+
+
+# The new rule must not reopen the disconnected-word bypass or admit things
+# with no stated intent: a bare code, a noun beside an off-topic word, a
+# noun phrase longer than a lookup, or a noun tacked after another sentence.
+BARE_NOUN_RULE_MUST_NOT_ADMIT = [
+    "APT-2001",
+    "SCN-1?",
+    "poem scanners",
+    "joke?",
+    "the the the all scanners",
+    "scanners. weather",
+    "What's 47 times 12? scanners",
+    "weather departments",
+]
+
+
+@pytest.mark.parametrize("text", BARE_NOUN_RULE_MUST_NOT_ADMIT)
+def test_bare_noun_phrase_rule_does_not_reopen_the_bypass(text):
+    assert check_domain_gate(text).in_domain is False

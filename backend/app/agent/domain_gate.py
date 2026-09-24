@@ -320,6 +320,13 @@ _OFF_TOPIC_WORDS: frozenset[str] = frozenset(
     }
 )
 
+# Articles/quantifiers that may sit around nouns in a bare noun-phrase query
+# ("the departments", "all scanners", "current delayed appointments").
+_NOUN_PHRASE_FILLER: frozenset[str] = frozenset(
+    {"the", "all", "my", "our", "current", "every"}
+)
+_MAX_BARE_NOUN_PHRASE_WORDS = 4
+
 
 @dataclass(frozen=True)
 class DomainGateResult:
@@ -330,6 +337,32 @@ class DomainGateResult:
 def _is_context_followup(text: str) -> bool:
     normalized = " ".join(_WORD_RE.findall(text.lower()))
     return any(pattern.fullmatch(normalized) for pattern in _CONTEXT_FOLLOWUP_PATTERNS)
+
+
+def _is_bare_domain_noun_phrase(normalized: str) -> bool:
+    """True for a short message that is *nothing but* domain nouns — the
+    terse way staff (and speech-to-text) actually phrase a lookup:
+    "departments?", "scanners", "mri scanners", "delayed appointments".
+
+    This is a different failure from the parser's punctuation bug, and
+    trailing punctuation is not the cause: "departments" without the "?" is
+    rejected identically, because the clause has a noun but no action word.
+    It does not reopen the disconnected-word bypass: the *whole* message
+    must be a single fragment made only of nouns and a few articles, so
+    "What's 47 times 12? mri" (two fragments, off-topic words) still fails.
+    Entity codes are excluded — a bare code has no stated intent.
+    """
+    fragments = [f for f in _FRAGMENT_SPLIT_RE.split(normalized) if f.strip()]
+    if len(fragments) != 1:
+        return False
+    words = _WORD_RE.findall(fragments[0])
+    if not words or len(words) > _MAX_BARE_NOUN_PHRASE_WORDS:
+        return False
+    if _ENTITY_TOKEN in words or set(words) & _OFF_TOPIC_WORDS:
+        return False
+    return all(w in _DOMAIN_NOUNS or w in _NOUN_PHRASE_FILLER for w in words) and any(
+        w in _DOMAIN_NOUNS for w in words
+    )
 
 
 def check_domain_gate(
@@ -392,5 +425,8 @@ def check_domain_gate(
         # paid agent turn.
         if (words & _DOMAIN_NOUNS) and (words & _ACTION_WORDS):
             return DomainGateResult(in_domain=True)
+
+    if _is_bare_domain_noun_phrase(normalized):
+        return DomainGateResult(in_domain=True)
 
     return DomainGateResult(in_domain=False, reason="off_topic_disconnected")
