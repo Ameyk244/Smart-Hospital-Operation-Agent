@@ -17,6 +17,7 @@ from unittest.mock import patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 from langchain_core.messages import AIMessage
+from sqlalchemy import text
 
 from app.api.routes.chat import get_checkpointer
 from app.db.session import get_db, get_session_factory
@@ -48,6 +49,14 @@ async def http(agent_session_factory, checkpointer):
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         yield ac
     app.dependency_overrides.clear()
+    # These requests commit for real (the agent opens its own sessions), and
+    # `/api/cost-comparison` tests assert exact global `jev_invoked` counts,
+    # so leave no sessions/events/messages behind in the shared test DB.
+    async with agent_session_factory() as session:
+        await session.execute(
+            text("TRUNCATE agent_events, conversation_messages, agent_sessions CASCADE")
+        )
+        await session.commit()
 
 
 def _agent_model(reply: str = "You just looked at delayed appointments.") -> RecordingModel:
