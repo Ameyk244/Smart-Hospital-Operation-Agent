@@ -1126,3 +1126,18 @@ passed, 6 skipped, ruff clean.
 Correction to an earlier claim: the matrix report said 9 of 16 transcripts
 carried terminal punctuation. The actual count is 13 of 16; the mistake
 understated the problem and was caught while writing this entry.
+
+### Whisper model comparison (tiny.en / base.en / small.en) — decision left open
+
+Follow-up to matrix case #16 (`four` heard as `for`). Measured on 36 synthesized
+clips through the production STT function: `tiny.en` 5.6% WER / 404 ms median,
+`base.en` 3.3% / 757 ms, `small.en` 1.7% / 2690 ms. `base.en` did **not** fix
+the exact #16 phrase for two of three voices and added `eight`→`aid` errors;
+`small.en` fixed it at ~2.7 s. Default stays `tiny.en`; the tradeoff is in
+`docs/voice.md` for the owner to decide (`VOICE_STT_MODEL`, no code change).
+
+Also ran 20 typed messages through the real UI (6 deterministic incl.
+punctuated/odd-whitespace, 3 Jev, agent, grounding rejections, 2 domain-gate
+rejects): all routed as expected. Noted, not fixed: `departments?` (one word)
+is rejected by the domain gate; `how many scanners are in maintenance` is
+answered by Jev with a list rather than a count.

@@ -193,6 +193,51 @@ shape and twelve suffixes, plus DB-backed end-to-end tests that
 does. Those tests were run against the old parser first and fail there (53
 failures), so they demonstrably catch the bug rather than merely passing.
 
+### Whisper model comparison: `tiny.en` vs `base.en` vs `small.en` (decision left open)
+
+Triggered by matrix case #16, where `why is scanner four unavailable` was heard
+as `Why scanner for unavailable?` — an outcome-changing error, since it turns
+scanner 4 into the word "for". **The default is unchanged (`tiny.en`); this
+records the tradeoff so the choice is made deliberately, not silently.**
+
+Method: 36 synthesized clips (12 short scanner/number-heavy phrases × 3 Windows
+TTS voices), run through the production function
+`app.voice.stt._transcribe_array_sync` (CPU, int8, beam 5) with the same
+0.2s-lead / 0.8s-trailing-silence padding the VAD hands over. Two passes per
+clip, faster kept. WER is computed after lowercasing, stripping punctuation and
+mapping digits to words (so `4` = `four`).
+
+| Model | Exact transcripts | WER | Median latency | p90 | Model load |
+|---|---|---|---|---|---|
+| `tiny.en` (default) | 27 / 36 | 5.6% | 404 ms | 426 ms | 1.1 s |
+| `base.en` | 30 / 36 | 3.3% | 757 ms | 829 ms | 0.7 s |
+| `small.en` | 33 / 36 | 1.7% | 2690 ms | 3107 ms | 49.5 s (first download) |
+
+What the numbers hide — the actual errors:
+
+- **`base.en` did not fix #16.** `four` was still heard as `for` for two of the
+  three voices. `small.en` did fix it.
+- **`base.en` introduced its own number errors**: `eight` → `aid` (`Show scanner
+  aid status`) for two voices, which `tiny.en` got right for those voices.
+- `tiny.en` mishears `two` as `too` (`scanner too available`), which `base.en`
+  gets right. Homophones are the dominant failure for both small models.
+- `for MI` / `for our CT` (`free for MRI` / `are for CT`) appeared in all three.
+
+One live check through the real browser mic path (Chromium fake mic → WebSocket
+→ backend, one stack per model): `base.en` latency in the app was ~0.8 s
+against ~0.5 s for `tiny.en`, matching the offline figures, and the transcripts
+broadly matched the offline ones. Seven phrases per model; one `base.en` run was cut
+off by an interruption, so it is six pairs.
+
+**Reading it:** `base.en` buys ~2 fewer bad transcripts in 12 for ~350 ms more
+per utterance, but trades some errors for others rather than removing the
+number-word class. `small.en` is materially better but its ~2.7 s median is
+long enough to feel laggy on top of the 800 ms silence endpoint. None of the
+three is safe to act on for a write by transcript alone; that is why voice
+input still shows the transcript and routes through the same grounded,
+read-first pipeline as text. To switch, set `VOICE_STT_MODEL=base.en` (no code
+change).
+
 ## Phases
 
 ### Phase 1 — Extract the shared handler ✅
