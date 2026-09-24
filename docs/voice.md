@@ -268,6 +268,18 @@ for CT` is valid), `is the scanner too busy` (no status word after `too`), and
 remain the model's weak spot; the answer to those is a bigger model (see the
 comparison above), not a longer table.
 
+Live re-check (real browser mic path, the same four clips, restarted stack):
+`remember that I prefer MRI scanner one`, `what preferences have you saved`,
+`forget my scanner preference` and `which MRI scanners are available` were all
+heard correctly, the preference saved as `MRI scanner 1`, forgotten on request,
+and the MRI query answered with the 2 available MRI scanners. Read this
+carefully: it shows the pre-roll working (`What preferences...` kept its first
+word) but it does **not** show the correction table firing, because with the
+extra lead-in Whisper no longer misheard `MRI` or `forget` on those clips (no
+`raw` field appeared). Whisper's errors move with the audio it is given, so the
+table stays as a safety net covered by unit and WebSocket tests, not by a live
+demonstration.
+
 Voice only. Typed text is what the person meant, and typing does not produce
 these errors, so rewriting it would be a surprise with nothing to gain.
 
@@ -299,8 +311,7 @@ not part of a confirmed utterance -- quiet audio and broken-off candidate runs
 Confirmation itself is unchanged (still 200 ms of real speech), so noise still
 cannot start an utterance; the cost is up to ~0.3 s of extra leading audio for
 Whisper. Same clip afterwards: `What preferences have you saved?`. Across six
-clips at both chunk sizes no transcript got worse (longer pre-roll also fixed a
-dropped `Which` on another). Seven unit tests, including the original loss
+clips at both chunk sizes no transcript got worse. Seven unit tests, including the original loss
 reproduced with `preroll_ms=0`; the constructor default stays 0 so any other
 caller behaves exactly as before.
 
