@@ -35,7 +35,7 @@ psycopg[binary]>=3.2,<4
 # bump without re-testing.
 typesafe-sdk>=0.7.1,<1
 
-# Voice input (experimental, branch `voice`). Local speech-to-text, not a
+# Voice input. Local speech-to-text, not a
 # hosted API — see app/voice/stt.py for why. Pinned to the version this was
 # built and measured against (docs/voice.md records the latency numbers);
 # its own base dependencies (ctranslate2, onnxruntime, huggingface-hub) pull

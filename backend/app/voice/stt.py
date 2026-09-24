@@ -41,17 +41,23 @@ import asyncio
 from functools import lru_cache
 
 import numpy as np
-from faster_whisper import WhisperModel
 
 
 @lru_cache
-def _load_model(model_size: str) -> WhisperModel:
+def _load_model(model_size: str):
     """Cached per model name (there's only ever one in practice —
     `settings.voice_stt_model` — but caching by name rather than a bare
     singleton keeps this honest about what it's actually keyed on, and lets
     a test load a different size without fighting a global). CPU + int8:
     this project has no GPU dependency anywhere else and command-length
-    audio doesn't need one."""
+    audio doesn't need one.
+
+    Imported here, not at module level: `app/main.py` imports the voice route
+    at startup, and importing faster-whisper (ctranslate2, onnxruntime) there
+    would cost startup time and memory on every deployment, including ones
+    that never receive a voice utterance."""
+    from faster_whisper import WhisperModel
+
     return WhisperModel(model_size, device="cpu", compute_type="int8")
 
 
