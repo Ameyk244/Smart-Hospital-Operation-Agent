@@ -1220,3 +1220,28 @@ by Jev as intended, but the model used search_appointments instead of the new
 search_scanners tool. Correction to an earlier claim: the old Jev answer (all 8
 scanners) was right for the Radiology query on this seed, because all 8 scanners
 are in Radiology rooms; the defect shows for any other department.
+
+## Status: `voice` merged to `master`
+
+Streaming voice input is now part of `master`: WebSocket transport, local
+`faster-whisper` STT, energy-based VAD with pre-roll, the mic button, and the
+fixes the test passes forced. Timeline of the branch: Phase 1 extract
+`handle_chat_message()`; Phase 2 local STT proved on a fixture; Phase 3 WebSocket
++ VAD + three failure modes; Phase 4 mic button; then, from real spoken and typed
+test passes (16, then 40 text + 40 voice): trailing punctuation broke the
+deterministic parser (`show patient David Davis.` returned nobody under a
+DETERMINISTIC badge), bare noun phrases (`departments?`) were rejected by the
+domain gate, parser/Jev turns were invisible to the agent, misheard `MRI`
+produced a confident wrong answer and wrong saved preferences, soft word
+onsets were clipped, the parser ignored unknown words, and department-scoped
+queries lost the department. Each was reproduced or evidenced first, fixed with
+tests that fail on the old code, and recorded in `docs/voice.md`.
+
+Deliberately left as-is: `base.en`/`small.en` are not the default (`tiny.en`
+stays; tradeoff measured), number homophones are not guessed, and the dev
+database was not reseeded after the README write-flow tests moved two
+appointments (a cleanup, not a requirement).
+
+Deployment note: the backend gains `faster-whisper` (with `ctranslate2`,
+`onnxruntime`, `av`). The Whisper model downloads on first use, and the
+WebSocket has no authentication, like the rest of the API.

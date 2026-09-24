@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     # the agent is cheaper than making the user wait.
     jev_timeout_seconds: float = 5.0
 
-    # --- Voice input (experimental, branch `voice` — see docs/voice.md) ---
+    # --- Voice input (see docs/voice.md) ---
     # Local faster-whisper, not a hosted API: no key, no per-call cost, and
     # it keeps the project's "offline except live LLM calls" property intact
     # through the STT layer too. "tiny.en" measured ~450ms transcription on

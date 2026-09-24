@@ -16,6 +16,7 @@ The project uses only synthetic patient and hospital data.
 - Safe scanner reassignment with business-rule validation
 - Persistent conversations and session preferences
 - Agent execution traces visible in the frontend
+- Streaming voice input (mic button) into the same routing pipeline, with local speech-to-text and no new API key
 - Synthetic, reproducible seed data
 - Offline tests that do not consume LLM API credits
 - Anthropic and OpenRouter provider support
@@ -67,6 +68,37 @@ The agent is activated only when:
 2. The request belongs to the hospital operations domain.
 3. The request passes eligibility checks.
 4. Jev declines, is not confident, is disabled, or cannot handle the request.
+
+## Voice Input
+
+The chat panel has a mic button. Speech is streamed to `WS /api/voice/{session_id}`
+as raw 16-bit PCM, cut into utterances by an energy-based (RMS) voice-activity
+detector, transcribed locally with `faster-whisper` (CPU, `tiny.en`), and then
+handed to the **same** `handle_chat_message()` that `POST /api/chat` uses. There
+is no second routing path: a spoken command goes through the parser, domain
+gate, Jev fast path, agent, grounding and traces exactly like a typed one, and
+shares the same `session_id`, history and preferences.
+
+- **No new secret or paid API.** Speech-to-text is local; the only metered calls
+  are the existing Jev/LLM ones.
+- **Whisper mishears domain words**, so a short explicit table
+  (`backend/app/voice/vocab.py`) corrects known cases (`MI` -> `MRI`, `for get` ->
+  `forget`, ...) right after transcription. When it changes something the
+  transcript event also carries the raw text. Typed text is never rewritten.
+- **Requirements.** Browsers only expose the mic on `https://` or `localhost`.
+  The first utterance on a fresh machine downloads the Whisper model (~75 MB)
+  from Hugging Face; after that transcription is offline (~0.5 s per utterance
+  on a laptop CPU, slower on a small shared host).
+- **Settings** (all optional, see `backend/app/config.py`): `VOICE_STT_MODEL`
+  (default `tiny.en`), `VOICE_VAD_SPEECH_RMS_THRESHOLD`, `VOICE_VAD_SILENCE_MS`,
+  `VOICE_VAD_MIN_SPEECH_MS`, `VOICE_VAD_PREROLL_MS`, `VOICE_MAX_UTTERANCE_SECONDS`.
+- **Known limits.** Number homophones (`four`/`for`, `two`/`too`) are the weak spot
+  of the small model and are not guessed at; a bigger model (`base.en`, `small.en`)
+  trades latency for accuracy, measured in `docs/voice.md`. Entity codes such as
+  `SCN-7` are not practical to speak; say "scanner seven".
+
+Full design, decisions, measurements and every finding from the test passes:
+[docs/voice.md](docs/voice.md).
 
 ## Agent Scope
 
@@ -268,7 +300,7 @@ full decision, fallback, configuration, and observability contract.
 The LangGraph agent is the final fallback for eligible hospital requests that
 the parser and Jev do not resolve. It uses the configured Anthropic or
 OpenRouter chat model, can reason over conversation context, and may call one
-or more of the eight registered tools. Its hospital operations still pass
+or more of the eight registered tools (`search_appointments`, `search_scanners`, `execute_command`, `get_scanner_availability`, `reschedule_appointment` and the three preference tools). Its hospital operations still pass
 through `CommandRunner`, and rescheduling is its only hospital-data write.
 
 ### Appointment Search

@@ -4,36 +4,35 @@ Smart Hospital Operations Agent — a modular monolith. `backend/`
 (Python/FastAPI/PostgreSQL/LangGraph) and `frontend/` (React/TypeScript/
 Vite) are separate concerns. See `docs/ARCHITECTURE.md` for the full
 design, `AGENT.md` for the runtime agent contract, `JEV.md` for the read-only
-fast path, `docs/voice.md` for the streaming voice input layer,
+fast path, `docs/voice.md` for the streaming voice input layer (design, measurements, test findings),
 `docs/PROGRESS.md` for
 the implementation timeline, and `rulebook.md` for the current command,
 tool, routing, grounding, and manual verification reference.
 
-## Experimental branch: `voice`
-The `voice` branch adds streaming voice input alongside the existing text
-pipeline: a WebSocket transport (`app/api/routes/voice.py`), local
-`faster-whisper` speech-to-text (CPU, no GPU dependency), and energy-based
-(RMS) VAD for utterance endpointing — deliberately not Silero VAD, since its
-packaged pip install pulls in `torch`/`torchaudio`, a genuinely heavy
-addition nothing else in this stack needs; that trade is documented in
-`docs/voice.md`, not decided silently. This phase requires **no new paid
-API or secret** — local STT only, so it works offline like everything else
-except the live LLM/Jev calls already in the project.
+## Voice input (merged from the `voice` branch)
+Streaming voice input runs alongside the text pipeline: a WebSocket transport
+(`app/api/routes/voice.py`), local `faster-whisper` speech-to-text (CPU, no GPU
+dependency), and energy-based (RMS) VAD with a short pre-roll for utterance
+endpointing -- deliberately not Silero VAD, since its packaged pip install pulls
+in `torch`/`torchaudio`, a genuinely heavy addition nothing else in this stack
+needs; that trade is documented in `docs/voice.md`, not decided silently. It
+requires **no new paid API or secret** -- local STT only.
 
-Voice and text must converge into the exact same code path with no
-duplicated routing logic: both call the same `handle_chat_message()`
-function extracted from `app/api/routes/chat.py`, the way the parser and
-agent tools already share one `CommandRunner`. A voice session reuses the
-app's existing `session_id` as the LangGraph `thread_id` exactly as the
-text path does — there is no separate voice-session concept at the
-checkpointing layer.
+Voice and text converge into the exact same code path with no duplicated
+routing logic: both call the same `handle_chat_message()` in
+`app/api/routes/chat.py`, the way the parser and agent tools already share one
+`CommandRunner`. A voice session reuses the app's existing `session_id` as the
+LangGraph `thread_id` exactly as the text path does -- there is no separate
+voice-session concept at the checkpointing layer. Anything that changes what
+text reaches routing for voice (the vocabulary correction in
+`app/voice/vocab.py`) lives in the voice layer, is voice-only, and stays a short
+explicit table, not a model. Turns answered by the parser or Jev are recorded in
+the agent's checkpoint (`record_non_agent_turn`) so follow-ups see them.
 
-Everything below applies on this branch unchanged. Rules from prior
-incidents on other branches still hold here: no destructive DB action
-without explicit in-turn approval regardless of task brief, subagents stay
-scoped to the files they were assigned, and every subagent's diff is
-reviewed — with `git status`/diff checked against its intended scope —
-before it's committed.
+Rules from prior incidents still hold: no destructive DB action without
+explicit in-turn approval regardless of task brief, subagents stay scoped to
+the files they were assigned, and every subagent's diff is reviewed -- with
+`git status`/diff checked against its intended scope -- before it's committed.
 
 ## Jev read-only fast path
 The main request flow includes TypeSafe AI's Jev (`typesafe-sdk`) and a

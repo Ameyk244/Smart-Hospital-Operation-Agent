@@ -255,6 +255,17 @@ appointment?` passes, because "what" and "MRI appointment" share a clause and
 "times" is also a real scheduling word. The agent's system prompt declines the
 arithmetic, but that still costs one model call.
 
+### Voice input
+
+Spoken input (`WS /api/voice/{session_id}`) is transcribed locally, passed
+through the domain-vocabulary correction in `backend/app/voice/vocab.py`
+(`MI`/`MRR` -> `MRI`, `for get` -> `forget`, `pointment` -> `appointment`,
+`scanner aid` -> `scanner eight`, `scanner too <status>` -> `scanner two`,
+spelled-out `M R I`/`C T`/`x-ray`), and then goes through exactly the same
+routing as typed text: parser, domain gate, Jev, agent. Typed text is not
+corrected. Ambiguous homophones such as `four`/`for` are deliberately left
+alone. A leading 300 ms pre-roll keeps soft word onsets from being clipped.
+
 ## 7. Minimal Manual Check
 
 Use this small set to avoid unnecessary API usage:

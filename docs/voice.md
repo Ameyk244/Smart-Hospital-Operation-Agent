@@ -1,8 +1,9 @@
-# Voice Input (Streaming) — Experimental, Branch `voice`
+# Voice Input (Streaming)
 
-Streaming voice input alongside the existing text pipeline. Not merged to
-`master`. This file is filled in as each phase lands, not reconstructed
-afterward — sections marked `(pending)` haven't been built yet.
+Streaming voice input alongside the existing text pipeline. Built on the `voice`
+branch in four phases and merged to `master`. This file was filled in as each
+phase landed, not reconstructed afterward, and also records what the real test
+passes found and how each finding was resolved.
 
 ## Why streaming, not record-and-send
 
