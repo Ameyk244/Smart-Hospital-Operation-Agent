@@ -238,6 +238,49 @@ input still shows the transcript and routes through the same grounded,
 read-first pipeline as text. To switch, set `VOICE_STT_MODEL=base.en` (no code
 change).
 
+### Fix: mishearings of domain words no longer reach routing or memory
+
+The 40-message spoken pass showed one class of error behind three symptoms:
+Whisper turns domain words into other words and everything downstream trusts
+the transcript.
+
+| Heard | Should be | What it cost |
+|---|---|---|
+| `which MI scanners are available` | MRI | Jev dropped the modality filter and answered with 5 scanners including CT and X-ray, confidently, no hedge |
+| `Remember that I prefer MI scanner 1` | MRI | the wrong value was saved as a preference |
+| `For Get My Scanner Preference` | forget | the request was read as "list", nothing was forgotten |
+
+`app/voice/vocab.py` is one short, explicit list of anchored regex rules run
+once per utterance, right after transcription and before the parser, domain
+gate, Jev or any memory tool sees the text. Rules: `MI`/`MRR` and spelled-out
+`M R I`/`M.R.I.` -> `MRI`; `C T`/`C.T.` -> `CT`; `x-ray`/`x ray` -> `xray` (the
+parser's word); `for get` -> `forget`; `pointment` -> `appointment`;
+`scanner aid` -> `scanner eight`; `scanner too <status word>` -> `scanner two`.
+The transcript event still carries what Whisper heard, as `raw`, whenever it
+was changed, so a correction is visible rather than silent.
+
+Deliberately narrow: no fuzzy matching, no model. A rule exists only for a
+mishearing that was observed (or its direct sibling) and whose corrected form
+could not be a legitimate different word here. Left uncorrected on purpose:
+`scanner for unavailable` (`four` vs real English `for` -- `which scanners are
+for CT` is valid), `is the scanner too busy` (no status word after `too`), and
+`MI` after `patient`/`named` (a name). Scanner-number homophones therefore
+remain the model's weak spot; the answer to those is a bigger model (see the
+comparison above), not a longer table.
+
+Voice only. Typed text is what the person meant, and typing does not produce
+these errors, so rewriting it would be a surprise with nothing to gain.
+
+Related finding, not fixed here: the deterministic parser is lenient in the
+same dangerous direction. `list scanners MI available` *matches* and runs as
+`list_scanners(status=AVAILABLE)`, silently ignoring `MI`; `list scanners
+banana` matches and lists every scanner; and its `ct`/`mri` test is a
+substring check on the tail, so a word like `connected` would read as `CT`.
+The correction above removes the voice-sourced trigger, but a typed `MI` still
+gets the wrong answer deterministically. The parser rejecting an unrecognised
+tail (letting Jev or the agent handle it) is the right fix; it changes the
+grammar, so it is left for a decision.
+
 ## Phases
 
 ### Phase 1 — Extract the shared handler ✅

@@ -507,3 +507,52 @@ def test_stt_failure_returns_error_and_connection_survives(voice_client, voice_s
     assert any(m["type"] == "chat_response" for m in second_turn)
     assert second_turn[-1] == {"type": "ready"}
     assert call_count["n"] == 2
+
+
+def test_misheard_acronym_is_corrected_before_routing_and_raw_is_kept(
+    voice_client, voice_session_id
+):
+    """Whisper hears "MRI" as "MI". The transcript event carries the corrected
+    text (plus what was actually heard), and the message that is routed is the
+    corrected one: an exact deterministic MRI query, all results MRI and
+    AVAILABLE -- not a modality-less list."""
+    loud_chunk = _noise_pcm(300, amplitude=0.15, seed=7)
+    trailing_silence = _silence_pcm(1000)
+
+    async def fake_transcribe(samples, model_size):
+        return "List scanners MI available."
+
+    with patch("app.api.routes.voice.transcribe_array", new=fake_transcribe):
+        with voice_client.websocket_connect(f"/api/voice/{voice_session_id}") as ws:
+            assert ws.receive_json() == {"type": "ready"}
+            ws.send_bytes(loud_chunk)
+            ws.send_bytes(trailing_silence)
+            messages = _drain_until_ready(ws)
+
+    by_type = {m["type"]: m for m in messages}
+    assert by_type["transcript"]["text"] == "List scanners MRI available."
+    assert by_type["transcript"]["raw"] == "List scanners MI available."
+    response = by_type["chat_response"]["response"]
+    assert response["handled_by"] == "deterministic"
+    assert response["data"], "seeded data has available MRI scanners"
+    assert {(row["type"], row["status"]) for row in response["data"]} == {
+        ("MRI", "AVAILABLE")
+    }
+
+
+def test_clean_transcript_has_no_raw_field(voice_client, voice_session_id):
+    loud_chunk = _noise_pcm(300, amplitude=0.15, seed=7)
+    trailing_silence = _silence_pcm(1000)
+
+    async def fake_transcribe(samples, model_size):
+        return "list departments"
+
+    with patch("app.api.routes.voice.transcribe_array", new=fake_transcribe):
+        with voice_client.websocket_connect(f"/api/voice/{voice_session_id}") as ws:
+            assert ws.receive_json() == {"type": "ready"}
+            ws.send_bytes(loud_chunk)
+            ws.send_bytes(trailing_silence)
+            messages = _drain_until_ready(ws)
+
+    transcript = next(m for m in messages if m["type"] == "transcript")
+    assert transcript == {"type": "transcript", "text": "list departments"}

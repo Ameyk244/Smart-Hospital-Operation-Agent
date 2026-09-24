@@ -1179,3 +1179,13 @@ logged, not surfaced. Rejected turns are not recorded, so an off-topic message
 and the canned refusal never become agent context. Five new e2e tests use the
 real Postgres checkpointer and a recording fake model (no live calls); four
 fail on the old code.
+
+### STT vocabulary correction (MI -> MRI, "for get" -> forget)
+
+One shared, explicit correction table (`app/voice/vocab.py`) runs once after
+transcription, before the parser/gate/Jev/memory. It fixes the confident-wrong
+"MI scanners" answer, the wrong saved preference, and the missed "forget"
+together. Voice only; `raw` keeps what Whisper heard. Ambiguous homophones
+(`four`/`for`) are intentionally not guessed. 28 unit cases + 2 WebSocket
+tests; suite 424 passed. Found on the way: the deterministic parser itself
+ignores unknown words in a `list scanners ...` tail (see docs/voice.md).

@@ -8,7 +8,8 @@ VAD alone drives state (see app/voice/vad.py).
 Event contract (server -> client): JSON text frames --
 `{"type": "ready"}`, `{"type": "speech_started"}`,
 `{"type": "speech_ended", "reason": "silence" | "max_duration"}`,
-`{"type": "transcribing"}`, `{"type": "transcript", "text": ...}`,
+`{"type": "transcribing"}`, `{"type": "transcript", "text": ..., "raw": ...}` (`raw` only
+present when `app/voice/vocab.py` corrected what Whisper heard; `text` is what is routed),
 `{"type": "chat_response", "response": <ChatResponse.model_dump(mode="json")>}`,
 `{"type": "error", "code": "empty_transcript" | "stt_failed" | "internal_error", "message": ...}`.
 After a `chat_response` or `error`, `ready` is sent again and the connection
@@ -70,6 +71,7 @@ from app.db.session import get_session_factory
 from app.observability.logging_config import get_logger
 from app.observability.tracing import record_event
 from app.voice.stt import transcribe_array
+from app.voice.vocab import correct_transcript
 from app.voice.vad import SpeechEnded, SpeechStarted, UtteranceDetector
 
 _logger = get_logger("voice.websocket")
@@ -181,7 +183,14 @@ async def _process_utterance(
         )
         return
 
-    await websocket.send_json({"type": "transcript", "text": text})
+    raw_text = text
+    text = correct_transcript(text)
+    transcript_event = {"type": "transcript", "text": text}
+    if text != raw_text:
+        # Keep what Whisper actually heard visible; the text that is routed
+        # and persisted is the corrected one.
+        transcript_event["raw"] = raw_text
+    await websocket.send_json(transcript_event)
 
     async with session_factory() as db:
         response = await handle_chat_message(
