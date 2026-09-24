@@ -172,6 +172,14 @@ understanding layer. All parser-exposed commands are read-only:
 | `show [the] next appointment` | `show_next_appointment` |
 | `list delayed appointments [type]` | `list_delayed_appointments` |
 
+Before matching, `parse()` normalizes its input: repeated whitespace collapses
+and trailing sentence punctuation is dropped. It is the one function typed
+chat, spoken chat, `/api/commands`, and the agent's `execute_command` all
+call, so this is done once rather than per entrance. It matters for
+correctness, not tidiness: `show patient <name>` is unanchored, so
+`show patient David Davis.` used to search for the literal `"David Davis."`
+and return zero rows under a deterministic badge.
+
 The command registry also contains operations used by APIs or agent tools:
 
 | Command | Access |
@@ -188,11 +196,12 @@ the current start time or use a supplied ISO-8601 start time.
 
 ## 6. Registered Agent Tools
 
-There are exactly seven registered agent tools:
+There are exactly eight registered agent tools:
 
 | Tool | Access | CommandRunner | Purpose |
 |---|---|---|---|
 | `search_appointments` | READ | Yes | Filter appointments and ground returned appointment, scanner, and patient codes |
+| `search_scanners` | READ | Yes | List scanners by modality, status, or department and ground the returned scanner codes |
 | `execute_command` | READ | Yes | Parse and run one exact deterministic command; ground codes in its result |
 | `get_scanner_availability` | READ | Yes | Read one already-grounded scanner's status |
 | `reschedule_appointment` | HOSPITAL WRITE | Yes | Reassign a grounded appointment to a grounded scanner and optionally change time |
@@ -223,7 +232,7 @@ tool_node
    +-----------------------------> agent_node
 ```
 
-`agent_node` binds the seven tool schemas, records invocation/response events,
+`agent_node` binds the eight tool schemas, records invocation/response events,
 calls the model under an LLM timeout, and appends its response.
 
 `tool_node` handles every requested tool call in a fresh database session:
@@ -269,7 +278,11 @@ These are intentionally separate:
    the application `session_id`.
 
 With the production checkpointer active, prior graph messages come from the
-checkpoint to avoid duplicating `conversation_messages`. Without a
+checkpoint to avoid duplicating `conversation_messages`. Turns answered by the
+parser or Jev never pass through the graph, so `record_non_agent_turn()` writes
+each such exchange (user text and reply only, no tool state, nothing grounded)
+into the same thread; rejected turns are deliberately not written. Without
+this the agent could not see what a fast path had just answered. Without a
 checkpointer, the route supplies converted recent conversation history.
 
 ## 10. Scope And Safety

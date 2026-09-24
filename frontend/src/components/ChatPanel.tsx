@@ -3,8 +3,9 @@ import type { FormEvent } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "../api/client";
-import type { AgentEvent, HandledBy } from "../api/types";
+import type { AgentEvent, ChatResponse, HandledBy } from "../api/types";
 import type { TraceState } from "../hooks/useTrace";
+import { useVoiceInput } from "../hooks/useVoiceInput";
 
 // Active-session pointer: sessionStorage (not localStorage) on purpose —
 // this is what makes "reload keeps the chat, restart starts fresh" work
@@ -174,6 +175,56 @@ export function ChatPanel({ sessionId, onSessionId, onTurnComplete, trace }: Cha
   // in-flight turn started — everything after this index in a later
   // /trace fetch belongs to *this* turn, not an earlier one.
   const baselineEventCountRef = useRef(0);
+
+  // Bridges the "transcript" event to the later "chat_response" event for
+  // a voice turn — they arrive as two separate server messages, but the
+  // brand-new-session bookkeeping below needs the transcript text as its
+  // preview, the same way handleSubmit uses the typed text.
+  const lastVoiceTranscriptRef = useRef("");
+
+  // Voice input: see useVoiceInput.ts for what it owns (the WebSocket +
+  // audio capture) versus what stays here (the same message-list/session
+  // bookkeeping handleSubmit already does for typed turns) — these
+  // callbacks are the only place that split is bridged.
+  const voice = useVoiceInput({
+    onTranscript: (text) => {
+      lastVoiceTranscriptRef.current = text;
+      setMessages((prev) => [...prev, { key: `user-voice-${Date.now()}`, role: "user", content: text }]);
+    },
+    onChatResponse: (response: ChatResponse) => {
+      if (!sessionId) {
+        sessionStorage.setItem(ACTIVE_SESSION_KEY, response.session_id);
+        onSessionId(response.session_id);
+        setPreviousSessions(appendPreviousSession(response.session_id, lastVoiceTranscriptRef.current));
+      }
+      setMessages((prev) => [
+        ...prev,
+        {
+          key: `assistant-voice-${Date.now()}`,
+          role: "assistant",
+          content: response.message,
+          handledBy: response.handled_by,
+          terminatedReason: response.terminated_reason,
+        },
+      ]);
+      onTurnComplete(response.touched_entity_codes);
+    },
+    onError: (message) => {
+      setError(message);
+    },
+  });
+
+  function handleStartVoice() {
+    if (sending || voice.active) return;
+    setError(null);
+    lastVoiceTranscriptRef.current = "";
+    // The WebSocket path requires session_id as a URL segment up front —
+    // unlike POST /api/chat, the backend can't assign one for us on a
+    // brand-new session, so we generate it client-side. See the task
+    // brief: the backend contract treats this exactly like handleSubmit's
+    // "first message of a new session" case once the response comes back.
+    voice.start(sessionId ?? crypto.randomUUID());
+  }
 
   // On mount: sessionStorage only holds a session_id if this is the same
   // tab reloading (see ACTIVE_SESSION_KEY's docs above) — a genuinely new
@@ -386,12 +437,14 @@ export function ChatPanel({ sessionId, onSessionId, onTurnComplete, trace }: Cha
             )}
           </div>
         ))}
-        {sending && (
+        {(sending || voice.active) && (
           <div className="chat-message chat-message-assistant chat-message-pending">
             <div className="chat-message-meta">
               <span className="chat-role">Assistant</span>
             </div>
-            <div className="chat-progress-line">{liveStatus ?? "Invoking agent…"}</div>
+            <div className="chat-progress-line">
+              {sending ? (liveStatus ?? "Invoking agent…") : (voice.status ?? "Listening…")}
+            </div>
           </div>
         )}
         <div ref={listEndRef} />
@@ -403,10 +456,21 @@ export function ChatPanel({ sessionId, onSessionId, onTurnComplete, trace }: Cha
           value={input}
           placeholder="Type a message…"
           onChange={(e) => setInput(e.target.value)}
-          disabled={sending}
+          disabled={sending || voice.active}
         />
-        <button type="submit" disabled={sending || !input.trim()}>
+        <button type="submit" disabled={sending || voice.active || !input.trim()}>
           {sending ? "Sending…" : "Send"}
+        </button>
+        <button
+          type="button"
+          className={`voice-mic-button${voice.active ? " voice-mic-button-active" : ""}`}
+          onClick={voice.active ? voice.stop : handleStartVoice}
+          disabled={sending}
+          aria-pressed={voice.active}
+          aria-label={voice.active ? "Stop voice input" : "Start voice input"}
+          title={voice.active ? "Stop voice input" : "Start voice input"}
+        >
+          {voice.active ? "◼" : "\u{1F3A4}"}
         </button>
       </form>
     </div>

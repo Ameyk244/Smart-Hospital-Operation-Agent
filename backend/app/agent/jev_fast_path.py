@@ -94,6 +94,7 @@ request time.
 """
 
 import asyncio
+import re
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -245,6 +246,13 @@ class JevFastPathResult:
         return self.failure_reason in _FAILURE_REASONS
 
 
+# Seeded department names and code shape (app/seed/seed_data.py). Names only,
+# not the generic word "department": "what departments do you have" is exactly
+# what Jev exists to answer.
+_NAMES_A_DEPARTMENT = re.compile(
+    r"\b(?:radiology|cardiology|orthop(?:a)?edics|emergency|dept-[a-z]+)\b", re.IGNORECASE
+)
+
 # Failure reasons that mean "the call did not complete", distinct from the
 # reasons that mean "the call completed and the answer was not actionable".
 _FAILURE_REASONS: frozenset[str] = frozenset(
@@ -352,6 +360,15 @@ async def try_jev_fast_path(text: str, settings: "Settings") -> JevFastPathResul
     the agent on any non-match; this function has no side effects beyond the
     outbound API call.
     """
+    if _NAMES_A_DEPARTMENT.search(text):
+        # Jev can only carry a modality and a status. A message that also
+        # names a department ("scanners used by the Radiology department")
+        # would be matched to `list_scanners` with the department silently
+        # dropped: a confident answer to a narrower question than was asked
+        # (all 8 scanners instead of Radiology's). Decline before spending the
+        # call; the agent has department-aware tools.
+        return JevFastPathResult(matched=False, failure_reason="unsupported_filter")
+
     if not settings.enable_jev_fast_path:
         # Belt-and-braces: the caller already guards on this flag so that no
         # client is constructed when the feature is off. Repeated here so the

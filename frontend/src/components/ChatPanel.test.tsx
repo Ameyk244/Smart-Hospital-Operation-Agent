@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
 import { ChatPanel } from "./ChatPanel";
 import type { TraceState } from "../hooks/useTrace";
 import type { AgentEvent, ChatResponse, ConversationMessage } from "../api/types";
@@ -78,6 +78,58 @@ function Harness({ initialSessionId = null }: { initialSessionId?: string | null
 function sendMessage(text: string) {
   fireEvent.change(screen.getByPlaceholderText("Type a message…"), { target: { value: text } });
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
+}
+
+// A small controllable fake WebSocket, in the same spirit as
+// createFetchMock above: lets a test open a "connection" (captured in
+// .instances), capture what was sent, and inject server JSON text frames
+// via serverMessage(). getUserMedia/AudioContext/AudioWorklet don't exist
+// in jsdom and can't be meaningfully tested there — but pcmCapture.ts's
+// startCapture() feature-detects navigator.mediaDevices.getUserMedia and
+// cleanly no-ops when it's absent (exactly the jsdom case), and
+// useVoiceInput only calls it from the socket's onopen handler, which none
+// of these tests ever trigger — so the WS message-handling wiring below is
+// fully exercisable without a real microphone.
+class FakeWebSocket {
+  static instances: FakeWebSocket[] = [];
+  static OPEN = 1;
+  readyState = 0;
+  binaryType = "blob";
+  url: string;
+  sent: unknown[] = [];
+  closeCalled = false;
+  onopen: (() => void) | null = null;
+  onmessage: ((event: { data: string }) => void) | null = null;
+  onerror: (() => void) | null = null;
+  onclose: (() => void) | null = null;
+
+  constructor(url: string) {
+    this.url = url;
+    FakeWebSocket.instances.push(this);
+  }
+
+  send(data: unknown) {
+    this.sent.push(data);
+  }
+
+  close() {
+    this.closeCalled = true;
+    this.readyState = 3;
+    this.onclose?.();
+  }
+
+  // Wrapped in act() since this synchronously drives React state updates
+  // (setMessages, etc.) from outside any React event handler — the same
+  // reason fireEvent wraps clicks/changes for you automatically.
+  serverMessage(payload: unknown) {
+    act(() => {
+      this.onmessage?.({ data: JSON.stringify(payload) });
+    });
+  }
+}
+
+function startVoice() {
+  fireEvent.click(screen.getByRole("button", { name: "Start voice input" }));
 }
 
 beforeEach(() => {
@@ -376,5 +428,134 @@ describe("ChatPanel agent progress indicator (Task D)", () => {
 
     expect(await screen.findByText("deterministic")).toBeInTheDocument();
     expect(screen.queryByText(/tool call/)).not.toBeInTheDocument();
+  });
+});
+
+describe("ChatPanel voice input", () => {
+  beforeEach(() => {
+    FakeWebSocket.instances = [];
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+  });
+
+  it("a full voice turn renders a user message then an assistant message with the right badge, in order", async () => {
+    vi.stubGlobal("fetch", createFetchMock());
+    const { container } = render(<Harness />);
+
+    startVoice();
+    const ws = FakeWebSocket.instances[0];
+    expect(ws).toBeDefined();
+
+    ws.serverMessage({ type: "transcript", text: "what scanners are free?" });
+    expect(await screen.findByText("what scanners are free?")).toBeInTheDocument();
+
+    ws.serverMessage({
+      type: "chat_response",
+      response: {
+        session_id: "sess-voice-1",
+        handled_by: "agent",
+        message: "MRI-2 is free",
+        data: null,
+        terminated_reason: null,
+        touched_entity_codes: ["MRI-2"],
+      },
+    });
+    expect(await screen.findByText("MRI-2 is free")).toBeInTheDocument();
+    expect(screen.getByText("agent")).toBeInTheDocument();
+
+    // Checked via the outer bubble containers' textContent, not
+    // getAllByText: the assistant bubble renders through ReactMarkdown,
+    // which wraps its text in a nested <p>, so Testing Library's
+    // innermost-match default would pick that <p> over the outer
+    // ".chat-message-content" div a selector filter expects, while the
+    // plain-text user bubble has no such wrapper — an asymmetry that made
+    // one uniform selector-scoped query unreliable. querySelectorAll
+    // sidesteps that by reading the outer bubbles directly, which also
+    // avoids the *other* problem an unscoped query would have: the
+    // brand-new-session bookkeeping below writes this same transcript text
+    // into the "Previous chats" preview list too.
+    const bubbles = container.querySelectorAll(".chat-message-content");
+    expect(bubbles[0]).toHaveTextContent("what scanners are free?");
+    expect(bubbles[1]).toHaveTextContent("MRI-2 is free");
+
+    // Brand-new-session bookkeeping (handleSubmit's equivalent for voice).
+    expect(sessionStorage.getItem("shoa_session_id")).toBe("sess-voice-1");
+  });
+
+  it("surfaces a server error event without crashing or losing existing chat history", async () => {
+    vi.stubGlobal(
+      "fetch",
+      createFetchMock({
+        chat: () => ({ session_id: "sess-x", handled_by: "deterministic", message: "3 departments" }),
+      }),
+    );
+    render(<Harness />);
+
+    sendMessage("list departments");
+    expect(await screen.findByText("3 departments")).toBeInTheDocument();
+
+    startVoice();
+    const ws = FakeWebSocket.instances[0];
+    ws.serverMessage({ type: "error", code: "empty_transcript", message: "Didn't catch that." });
+
+    expect(await screen.findByText("Didn't catch that.")).toBeInTheDocument();
+    // Earlier typed-turn history survives the error, unmodified. Scoped to
+    // the message bubble itself: sending the first message of a new
+    // session also writes this same text into the "Previous chats"
+    // preview list, a second, unrelated match for an unscoped query.
+    expect(screen.getByText("3 departments")).toBeInTheDocument();
+    expect(
+      screen.getByText("list departments", { selector: ".chat-message-content" }),
+    ).toBeInTheDocument();
+  });
+
+  it("disables the mic button while a typed message is sending, and disables typed input while voice is active", async () => {
+    let resolveChat: (overrides: Partial<ChatResponse>) => void = () => {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: RequestInit) => {
+        const u = String(url);
+        if (u.includes("/api/chat") && init?.method === "POST") {
+          return new Promise<Response>((resolve) => {
+            resolveChat = (overrides) =>
+              resolve(
+                jsonResponse({
+                  session_id: "sess-y",
+                  handled_by: "deterministic",
+                  message: "ok",
+                  data: null,
+                  terminated_reason: null,
+                  touched_entity_codes: [],
+                  ...overrides,
+                }),
+              );
+          });
+        }
+        return Promise.reject(new Error(`Unhandled fetch in test: ${init?.method ?? "GET"} ${u}`));
+      }),
+    );
+    render(<Harness />);
+
+    sendMessage("list departments");
+    expect(screen.getByRole("button", { name: "Start voice input" })).toBeDisabled();
+
+    resolveChat({});
+    expect(await screen.findByText("ok")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start voice input" })).not.toBeDisabled();
+
+    startVoice();
+    expect(screen.getByPlaceholderText("Type a message…")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+  });
+
+  it("closes the WebSocket on unmount, releasing the mic", () => {
+    vi.stubGlobal("fetch", createFetchMock());
+    const { unmount } = render(<Harness />);
+
+    startVoice();
+    const ws = FakeWebSocket.instances[0];
+    expect(ws.closeCalled).toBe(false);
+
+    unmount();
+    expect(ws.closeCalled).toBe(true);
   });
 });

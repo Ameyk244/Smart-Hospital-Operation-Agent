@@ -24,6 +24,14 @@ read-only, return `handled_by: deterministic`, and create no agent trace.
 | `list scanners [mri|ct|xray]` | READ | Scanners |
 | `list scanners [available|in use|maintenance]` | READ | Scanners |
 | `list scanners [mri|ct|xray] [available|in use|maintenance]` | READ | Scanners |
+
+Anything else after `list scanners` or `list delayed appointments` (other than
+`that`/`are` before a scanner filter) makes the parser miss, so the request goes
+to Jev or the agent rather than running with the unknown word ignored. A message
+that names a department (`radiology`, `cardiology`, `orthopedics`, `emergency`,
+`DEPT-...`) is never sent to Jev, which cannot carry a department filter; it goes
+straight to the agent.
+
 | `show patient <name>` | READ | Patients |
 | `show next appointment` | READ | Appointments |
 | `show the next appointment` | READ | Appointments |
@@ -40,8 +48,11 @@ show the next appointment
 list delayed appointments ct
 ```
 
-Matching is case-insensitive and ignores surrounding whitespace, but it is not
-fuzzy. For example, `show me the next appointment` goes to the agent.
+Matching is case-insensitive, collapses repeated whitespace, and ignores
+trailing punctuation (`.` `?` `!` `,` `;` `:` `…`), but it is not fuzzy. So
+`list departments.` and `show patient David Davis?` match; `show me the next
+appointment` still goes to the agent. Only *trailing* punctuation is dropped —
+an apostrophe or hyphen inside a name (`O'Neil-Smith`) is kept.
 
 ## 2. Domain Operations
 
@@ -75,6 +86,7 @@ so they consume API tokens even when no tool is called.
 | Tool | Domain | Purpose |
 |---|---|---|
 | `search_appointments` | Appointments | Search by status, type, patient, department, or scanner |
+| `search_scanners` | Scanners | List scanners by modality, status, or department; grounds the codes returned |
 | `get_scanner_availability` | Scanners | Check a grounded scanner |
 | `execute_command` | Shared command layer | Run one of the deterministic parser commands |
 | `list_preferences` | Session memory | Read remembered preferences |
@@ -199,6 +211,13 @@ and on `and`/`but`) contains:
   `reschedule APT-2001 to SCN-1`, `tell me about the radiology department`,
   `compare MRI and CT delays`, `anything delayed on CT today?`.
 
+A short message that is *only* hospital nouns also passes — `departments?`,
+`scanners`, `mri scanners`, `delayed appointments`, `the departments` (at most
+four words, one clause, articles `the/all/my/our/current/every` allowed). It
+needs no request word and does not depend on the `?`. A bare entity code, a
+noun beside `joke`/`poem`/…, or a noun tacked after another sentence still
+fails.
+
 A code still needs a request word: `delete APT-2001`, `cancel APT-2001` and
 `mark SCN-4 as available` are rejected, because nothing in this system can do
 them and they shouldn't cost a model call. A hospital word or code standing
@@ -235,6 +254,17 @@ Known limit: a keyword gate cannot read intent. `what is 47 times 12 for the MRI
 appointment?` passes, because "what" and "MRI appointment" share a clause and
 "times" is also a real scheduling word. The agent's system prompt declines the
 arithmetic, but that still costs one model call.
+
+### Voice input
+
+Spoken input (`WS /api/voice/{session_id}`) is transcribed locally, passed
+through the domain-vocabulary correction in `backend/app/voice/vocab.py`
+(`MI`/`MRR` -> `MRI`, `for get` -> `forget`, `pointment` -> `appointment`,
+`scanner aid` -> `scanner eight`, `scanner too <status>` -> `scanner two`,
+spelled-out `M R I`/`C T`/`x-ray`), and then goes through exactly the same
+routing as typed text: parser, domain gate, Jev, agent. Typed text is not
+corrected. Ambiguous homophones such as `four`/`for` are deliberately left
+alone. A leading 300 ms pre-roll keeps soft word onsets from being clipped.
 
 ## 7. Minimal Manual Check
 
@@ -313,8 +343,8 @@ LIST DEPARTMENTS
    list departments
 ```
 
-Case and surrounding whitespace don't matter; nothing else does. Add a
-please, a "me", or an "all" and you leave this path entirely.
+Case, extra whitespace and trailing punctuation don't matter; nothing else
+does. Add a please, a "me", or an "all" and you leave this path entirely.
 
 ### 9.2 Jev fast path — parser missed, Jev recognised it anyway
 

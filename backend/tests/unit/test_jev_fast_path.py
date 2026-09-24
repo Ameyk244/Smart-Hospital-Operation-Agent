@@ -447,3 +447,43 @@ async def test_latency_is_measured(fake_typesafe, jev_settings, jev_response):
 
     assert result.matched is True
     assert result.latency_ms >= 40
+
+
+# --- A named department is a filter Jev cannot carry ----------------------
+# "List the scanners used by the Radiology department" was matched to
+# list_scanners at 0.94 with the department dropped: all 8 scanners came back
+# as if that answered the question.
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "List the scanners used by the Radiology department",
+        "which appointments are running late in cardiology",
+        "any free scanners in Orthopaedics?",
+        "show scanners for DEPT-RAD",
+        "emergency department scanners",
+    ],
+)
+async def test_a_message_naming_a_department_is_declined_without_calling_jev(
+    fake_typesafe, jev_settings, jev_response, text
+):
+    fake_typesafe.behavior = jev_response("list_scanners", confidence=0.98)
+
+    result = await try_jev_fast_path(text, jev_settings())
+
+    assert result.matched is False
+    assert result.failure_reason == "unsupported_filter"
+    assert result.is_failure is False  # a decision, not an integration failure
+    assert fake_typesafe.calls == []  # and no call was spent on it
+
+
+async def test_asking_what_departments_exist_is_still_jevs_job(
+    fake_typesafe, jev_settings, jev_response
+):
+    fake_typesafe.behavior = jev_response("list_departments", confidence=0.98)
+
+    result = await try_jev_fast_path("what departments do you have?", jev_settings())
+
+    assert result.matched is True
+    assert len(fake_typesafe.calls) == 1

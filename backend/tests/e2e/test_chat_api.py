@@ -54,6 +54,44 @@ async def test_deterministic_show_next_appointment_reply_names_the_appointment(c
     assert body["data"]["patient"]["name"] in body["message"]
 
 
+async def test_show_patient_with_a_trailing_period_finds_the_patient_not_nobody(client):
+    """The confidently-wrong bug: "show patient David Davis." used to match
+    the grammar but search for the literal string "David Davis." and return
+    zero rows -- "No patients matched that search." under a DETERMINISTIC
+    badge, with no error anywhere. Whisper appends a period to most
+    transcripts and people type one just as often, so this is not a voice
+    corner case. Asserted against the real seeded database, both ways:
+    the punctuated and the plain form must find exactly the same patient."""
+    plain = (await client.post("/api/chat", json={"text": "show patient David Davis"})).json()
+    punctuated = (await client.post("/api/chat", json={"text": "show patient David Davis."})).json()
+
+    assert plain["handled_by"] == "deterministic"
+    assert len(plain["data"]) == 1  # sanity: the seed really has exactly one
+    assert punctuated["handled_by"] == "deterministic"
+    assert len(punctuated["data"]) == 1
+    assert punctuated["data"][0]["code"] == plain["data"][0]["code"]
+    assert "No patients matched" not in punctuated["message"]
+
+
+@pytest.mark.parametrize("text", ["list departments.", "show next appointment.", "LIST DEPARTMENTS!!!"])
+async def test_trailing_punctuation_stays_on_the_free_deterministic_path(client, text):
+    """Before the fix these missed the parser and fell to the Jev fast path
+    -- a paid call for something that should cost nothing. Jev and the model
+    are both patched to fail loudly, so a regression can't quietly spend
+    money in the test suite."""
+    with (
+        patch(
+            "app.agent.jev_fast_path.try_jev_fast_path",
+            new=AsyncMock(side_effect=AssertionError("Jev must not be consulted")),
+        ),
+        patch("app.api.routes.chat.get_default_chat_model") as mock_get_model,
+    ):
+        response = await client.post("/api/chat", json={"text": text})
+    assert response.status_code == 200
+    assert response.json()["handled_by"] == "deterministic"
+    mock_get_model.assert_not_called()
+
+
 async def test_empty_request_is_rejected_before_reaching_the_agent(client):
     response = await client.post("/api/chat", json={"text": "   "})
     assert response.status_code == 200

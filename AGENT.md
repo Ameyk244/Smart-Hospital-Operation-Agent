@@ -67,7 +67,8 @@ The agent's domain is synthetic hospital operations, specifically:
 
 The domain gate is synchronous regex/set logic, not another model call. A
 normal request must contain a connected hospital noun and action/question
-shape. This rejects weather, arithmetic, creative writing, travel booking,
+shape (or be a short bare noun phrase such as `departments?` or `mri scanners`;
+punctuation is irrelevant to that rule). This rejects weather, arithmetic, creative writing, travel booking,
 and other unrelated work before API tokens are spent.
 
 Narrow follow-ups may pass without repeating a hospital noun when recent user
@@ -101,8 +102,9 @@ All parser-exposed commands are reads:
 | `show [the] next appointment` | `show_next_appointment` | READ |
 | `list delayed appointments [mri|ct|xray]` | `list_delayed_appointments` | READ |
 
-Matching is case-insensitive and trims surrounding whitespace, but is not
-fuzzy. A phrase such as `show me the next appointment` deliberately misses
+Matching is case-insensitive, collapses repeated whitespace and ignores
+trailing punctuation (spoken transcripts and typed sentences routinely end in
+`.` or `?`), but is not fuzzy. A phrase such as `show me the next appointment` deliberately misses
 the grammar and becomes an agent candidate.
 
 Direct deterministic commands do not create grounding records. Grounding is
@@ -129,7 +131,7 @@ failures. Unexpected infrastructure or programming errors are not hidden.
 
 ## 7. Agent Tool Inventory
 
-The model sees exactly seven tool schemas.
+The model sees exactly eight tool schemas.
 
 ### Hospital reads
 
@@ -138,6 +140,13 @@ The model sees exactly seven tool schemas.
 Filters by status, modality, patient code, department code, scanner code, and
 limit. It executes the canonical `search_appointments` command and grounds
 every appointment, scanner, and patient code returned.
+
+#### `search_scanners`
+
+Lists scanners filtered by modality, status, and/or department code (the
+department filter is the reason it exists: neither the parser grammar nor
+`execute_command` can express one). Runs the canonical `list_scanners` command
+and grounds every scanner code returned.
 
 #### `execute_command`
 
@@ -245,7 +254,7 @@ agent_node -- tool calls --> tool_node -- continue --> agent_node
 
 ### `agent_node`
 
-- binds the seven registered tools to the provider-neutral chat model;
+- binds the eight registered tools to the provider-neutral chat model;
 - records `agent_invoked`;
 - calls the model under `LLM_TIMEOUT_SECONDS`;
 - records `llm_response` or `llm_timeout`;

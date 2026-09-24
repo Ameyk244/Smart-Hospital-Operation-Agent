@@ -61,3 +61,43 @@ SEARCH_APPOINTMENTS_TOOL = register_tool(
         is_write=False,
     )
 )
+
+
+class SearchScannersArgs(BaseModel):
+    type: str | None = Field(None, description="One of MRI, CT, XRAY")
+    status: str | None = Field(None, description="One of AVAILABLE, IN_USE, MAINTENANCE")
+    department_code: str | None = Field(
+        None,
+        description="A department code, e.g. DEPT-RAD, to list only the scanners that "
+        "sit in that department's rooms",
+    )
+
+
+async def handle_search_scanners(
+    session: AsyncSession, session_id: str, args: SearchScannersArgs
+) -> list[dict]:
+    command_args = args.model_dump(exclude_none=True)
+    result = await CommandRunner(session).execute(Command("list_scanners", command_args))
+    if not result.success:
+        raise ToolExecutionError(result.error or "search_scanners failed", result.error_category or "tool_error")
+
+    scanners: list[dict] = result.data
+    await GroundingRegistry(session).expose(session_id, "scanner", [s["code"] for s in scanners])
+    return scanners
+
+
+SEARCH_SCANNERS_TOOL = register_tool(
+    ToolSpec(
+        name="search_scanners",
+        description=(
+            "List scanners, optionally narrowed by modality, status, or department. "
+            "Use this (not execute_command) whenever the scanners are limited by "
+            "department, e.g. 'the scanners used by the Radiology department'. Returns "
+            "each scanner's code, type and status, and makes those scanner codes usable "
+            "in later lookups and reschedules."
+        ),
+        args_schema=SearchScannersArgs,
+        handler=handle_search_scanners,
+        is_write=False,
+    )
+)

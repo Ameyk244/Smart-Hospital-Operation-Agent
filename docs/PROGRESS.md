@@ -964,3 +964,284 @@ Honest limit: `what is 47 times 12 for the MRI appointment?` passes, as it did
 before this change — "times" is also a scheduling word, and a keyword gate
 cannot read intent. The system prompt's refusal instruction is what declines
 it, at the cost of one model call.
+
+## Status: `voice` branch — streaming voice input, Phases 1-2 (experimental)
+
+Not merged to `master`. A pre-build architecture audit (see git history)
+evaluated transport, VAD, and STT choices against this project's actual
+code and current external pricing before any implementation; this phase
+implements what that audit recommended. Full reasoning lives in
+`docs/voice.md`, kept current as each phase lands rather than written
+after the fact.
+
+**Phase 1** extracted `chat.py`'s inlined routing into
+`handle_chat_message()`, a plain function with no HTTP types in its
+signature; `POST /api/chat` is now a thin wrapper around it. This is the
+convergence point voice and text both go through — the same
+one-trusted-implementation discipline this project already applies to
+`CommandRunner`. Verified as a true no-op: the offline suite's pass count
+was identical before and after (216 passed, 6 skipped both times), which
+is itself the proof nothing behavioral moved.
+
+**Phase 2** added local `faster-whisper` STT (`app/voice/stt.py`) and
+proved the full chain — audio file, real transcription, real routing, real
+`ChatResponse` — before any real-time code exists. Model choice (`tiny.en`
+over `base.en`) was measured against a checked-in synthesized fixture
+(`tests/fixtures/audio/list_delayed_mri_appointments.wav`), not assumed:
+~450ms transcription warm, no accuracy loss on short command audio.
+`faster-whisper`'s own dependency metadata was checked before adding it —
+no torch in the base install, consistent with the rest of this stack.
+
+The new test (`test_voice_stt_pipeline.py`) runs real local transcription
+(free, no live call) against the fixture, then posts the transcript
+through the real `/api/chat` route with Jev and the agent mocked —
+covering both branches of the target architecture's UNKNOWN path: a
+confident Jev match executing through the real `CommandRunner`, and a Jev
+decline reaching a scripted agent. 218 passed (216 + 2), 6 skipped, ruff
+clean; no live API call was made to verify any of it.
+
+**Phase 3** added the WebSocket endpoint itself
+(`app/api/routes/voice.py`) and the energy-based RMS VAD state machine
+(`app/voice/vad.py`) — chunk-level and duration-based, not wall-clock, so
+a test can stream chunks as fast as it wants and still get deterministic
+transitions. All three flagged failure modes from the pre-build audit are
+handled explicitly: an empty/blank transcript never reaches
+`handle_chat_message`; an STT exception degrades to `error: stt_failed`
+without killing the connection; a connection dropped genuinely
+mid-utterance discards the buffer and records a `voice_connection_dropped`
+trace event (status `FAILURE`, `arguments.buffered_ms`) so that loss isn't
+silent, while a drop while idle records nothing, since nothing was lost.
+The max-utterance-duration cutoff is explicitly *not* treated as a
+failure — same transcription and routing, only `speech_ended`'s `reason`
+differs.
+
+One existing file needed a small, deliberate change: `chat.py`'s
+`get_checkpointer` is now typed `HTTPConnection` instead of `Request`.
+This wasn't a style choice — verified directly against FastAPI's own
+dependency resolution that the *unmodified* `Request`-typed version raises
+`missing 1 required positional argument` under a WebSocket route, since a
+`Request`-typed `Depends()` parameter is only ever populated for an actual
+`Request` instance. `HTTPConnection` is the base both `Request` and
+`WebSocket` share, so the fix is type-only; the function body and every
+existing HTTP-side override are unchanged.
+
+RMS thresholds were measured against this project's own fixture audio
+(silent gaps ~0.0 normalized RMS, in-speech windows ~0.04-0.24), not
+picked blind — `voice_vad_speech_rms_threshold=0.02` sits above the noise
+floor and below typical speech energy, with an explicit note in
+`config.py` that, unlike `voice_stt_model`, there is no universally
+"correct" value here.
+
+Testing this required solving a real problem, not just writing assertions:
+`TestClient.websocket_connect()` runs the app inside its own background
+thread with its own event loop, and an async engine built inside
+pytest-asyncio's loop (every other fixture's pattern) fails with asyncpg's
+"attached to a different loop" error when reused there — reproduced
+directly against this project's own Postgres before working around it,
+not assumed. `test_voice_websocket.py` uses plain sync test functions with
+a lazily-constructed, per-test DB engine instead. A second harness quirk
+(the test client cancels its portal task shortly after disconnecting,
+without waiting for the server's cleanup coroutine to finish) meant the
+dropped-connection test polls for its DB row explicitly rather than
+trusting the client's own teardown timing. Both are documented in
+`test_voice_websocket.py`'s module docstring and `docs/voice.md`'s Testing
+section.
+
+Result: 223 passed (218 + 5 new WebSocket tests), 6 skipped, ruff clean. No
+live LLM/Jev API call, no Alembic or schema-affecting command, and no file
+outside `backend/` (plus these two docs) was touched to build or verify
+any of it.
+
+## Status: `voice` branch — Phase 4, frontend mic control (experimental)
+
+Dispatched to the restricted `frontend-worker` subagent type (no `Bash`)
+against Phase 3's WS message contract, frozen and reviewed before dispatch.
+A mic button in `ChatPanel` streams captured mic audio over
+`/api/voice/{session_id}` and renders the resulting turn through the exact
+same message list and badge rendering a typed turn already uses — no new
+UI language for voice. Full writeup in `docs/voice.md`'s Phase 4 section.
+
+Reviewing the diff (not just trusting the report) found one real
+correctness bug and fixed it directly: the audio downsampling used
+nearest-integer-ratio decimation, which is only actually correct when the
+browser's native sample rate happens to be an exact multiple of 16000. At
+the very common 44100Hz native rate, the rounded ratio (3) silently
+produces audio at an effective 14700Hz mislabeled as 16000Hz -- an 8.8%
+speed/pitch distortion into Whisper, confirmed by computing the actual
+effective rate for common browser sample rates rather than assumed.
+Replaced with continuous-phase linear interpolation resampling -- still a
+deliberately simple technique, not a full resampling filter, but correct
+for any source rate rather than only exact multiples of 16000. Also added
+a small fix so an unsupported-browser capture failure surfaces as an
+explicit error instead of leaving the UI silently stuck at "Listening..."
+forever with no audio ever sent.
+
+Running the tests independently (not just trusting "should pass") also
+surfaced two real test failures the subagent's own report didn't catch --
+both a test-assertion problem, not a production bug: the "first message of
+a new session" bookkeeping (pre-existing, unrelated to voice) writes the
+same text into the "Previous chats" preview list, so an unscoped text query
+matched two elements. Fixed by scoping the queries to the actual message
+bubbles; one of the two also needed reading bubble `textContent` directly
+rather than `getByText`, since the assistant bubble renders through
+`ReactMarkdown`'s nested `<p>` while the user bubble is plain text -- an
+asymmetry a single selector-scoped query couldn't handle uniformly.
+
+Full suite after fixes: 33 passed, build clean, lint clean (only the same
+pre-existing `set-state-in-effect` warnings already present before this
+phase). Honest limit, stated plainly rather than implied as covered: real
+browser mic permission prompts, actual audio quality against the live
+backend, and that "stop" genuinely releases the mic-in-use indicator are
+real-hardware/real-browser behavior no headless review or jsdom test can
+exercise -- verified by code inspection and what automation can cover, not
+by hand in an actual browser yet.
+
+All four phases of the `voice` branch are now complete. Not merged to
+`master`; left for review per the build's own instruction.
+
+## Status: `voice` branch — first live test matrix, and the parser bug it exposed
+
+A 16-command spoken test matrix (real Chromium, fake mic fed synthesized
+audio, real app, nothing mocked) was run purely to *list* problems before
+fixing any. Full table in `docs/voice.md`. The finding that mattered most was
+not a mishearing: **trailing punctuation broke the deterministic parser.**
+
+Whisper appended `.`/`?` to 13 of the 16 transcripts, and most grammar rules
+are `$`-anchored, so they missed and took a paid Jev detour. Worse,
+`show patient <name>` has no anchor: `show patient David Davis.` matched,
+searched for the literal `"David Davis."`, and returned **"No patients matched
+that search."** under a `DETERMINISTIC` badge — a confidently wrong empty result
+with no error anywhere. Two of the four commands that passed deterministically
+in the matrix only did so because Whisper happened to omit the period that run.
+It is not voice-specific: reproduced *before* the fix by typing the same three
+messages into the real UI.
+
+Fixed in `parse()` — the one function typed chat, spoken chat, `/api/commands`
+and the agent's `execute_command` all share — by collapsing whitespace and
+dropping trailing sentence punctuation; punctuation inside a name is kept and
+the grammar is no fuzzier than before. 112 new test cases; verified they
+*fail* against the old parser (53 failures) before trusting them. Suite: 335
+passed, 6 skipped, ruff clean.
+
+Correction to an earlier claim: the matrix report said 9 of 16 transcripts
+carried terminal punctuation. The actual count is 13 of 16; the mistake
+understated the problem and was caught while writing this entry.
+
+### Domain gate: bare noun phrases (`departments?`) no longer rejected
+
+Reported as a likely sibling of the parser punctuation bug. **It is not.**
+Probing the gate showed `departments`, `departments.` and `departments?` are
+all rejected identically: the clause has a domain noun but no action word, so
+`off_topic_disconnected`. The `?` was never the cause (and the gate splits on
+punctuation anyway), so a shared pre-normalization step would not have fixed it.
+
+Fix: a message that is a single clause of at most four words made only of
+domain nouns plus `the/all/my/our/current/every` passes. Entity codes alone,
+off-topic words and multi-clause messages are excluded, so the "What's 47
+times 12? mri" bypass stays closed. 48 new cases (8 phrases x 6 suffixes)
+plus 8 must-still-reject pins; the 48 fail against the old gate. Suite: 391
+passed, 6 skipped.
+
+Also examined the "how many scanners are in maintenance" quirk. It was not
+the agent choosing a list: the Jev fast path answered it (`jev_invoked`,
+`list_scanners`, confidence 0.90 = threshold, no agent tool events) because
+Jev can only choose among the five parser commands and none is a count. The
+reply text ("Found 1 scanner: SCN-4") does contain the answer. The same
+question without "right now" scored 0.86 and went to the agent. Left as-is.
+
+### Whisper model comparison (tiny.en / base.en / small.en) — decision left open
+
+Follow-up to matrix case #16 (`four` heard as `for`). Measured on 36 synthesized
+clips through the production STT function: `tiny.en` 5.6% WER / 404 ms median,
+`base.en` 3.3% / 757 ms, `small.en` 1.7% / 2690 ms. `base.en` did **not** fix
+the exact #16 phrase for two of three voices and added `eight`→`aid` errors;
+`small.en` fixed it at ~2.7 s. Default stays `tiny.en`; the tradeoff is in
+`docs/voice.md` for the owner to decide (`VOICE_STT_MODEL`, no code change).
+
+Also ran 20 typed messages through the real UI (6 deterministic incl.
+punctuated/odd-whitespace, 3 Jev, agent, grounding rejections, 2 domain-gate
+rejects): all routed as expected. Noted, not fixed: `departments?` (one word)
+is rejected by the domain gate; `how many scanners are in maintenance` is
+answered by Jev with a list rather than a count.
+
+### Conversation history gap: parser/Jev turns were invisible to the agent
+
+Found by the 40-message spoken test: after `find the delayed CT appointments`
+was answered by Jev, `what did you just find` got "I haven't run any searches
+yet". Cause: with a checkpointer the graph state is the only history the agent
+reads (`run_agent` passes no transcript, to avoid duplicates), and only agent
+turns were written to it. It escaped the suite because every other e2e test
+runs with `checkpointer=None`, where the transcript fallback hides it.
+
+Fix: `record_non_agent_turn()` (graph.py) writes each deterministic/Jev
+exchange into the thread after the answer is persisted; a failure there is
+logged, not surfaced. Rejected turns are not recorded, so an off-topic message
+and the canned refusal never become agent context. Five new e2e tests use the
+real Postgres checkpointer and a recording fake model (no live calls); four
+fail on the old code.
+
+### STT vocabulary correction (MI -> MRI, "for get" -> forget)
+
+One shared, explicit correction table (`app/voice/vocab.py`) runs once after
+transcription, before the parser/gate/Jev/memory. It fixes the confident-wrong
+"MI scanners" answer, the wrong saved preference, and the missed "forget"
+together. Voice only; `raw` keeps what Whisper heard. Ambiguous homophones
+(`four`/`for`) are intentionally not guessed. 26 unit tests + 2 WebSocket
+tests; suite 424 passed. Found on the way: the deterministic parser itself
+ignores unknown words in a `list scanners ...` tail (see docs/voice.md).
+
+### VAD pre-roll (utterance-start clipping)
+
+Reproduced `what preferences have you saved` -> `preferences have you saved?`
+offline through the detector at browser-sized chunks before changing code, then
+added a 300 ms bounded pre-roll (`VOICE_VAD_PREROLL_MS`). Same clip now
+transcribes in full; no transcript in a six-clip check got worse. Speech
+confirmation is unchanged. 7 unit tests; suite green.
+
+Live re-check of fixes 2 and 3 (4 spoken clips, real browser mic path): all
+transcribed and routed correctly, but the vocabulary table did not fire live
+because Whisper's output shifted once the pre-roll changed the audio; its
+coverage is the unit/WebSocket tests. The dev-database reseed requested with
+this round was blocked by the tool permission layer and has not been run.
+
+### Parser leniency + department-scoped queries
+
+Parser: unknown words after `list scanners` / `list delayed appointments` now
+make it miss instead of being ignored (`MI available`, `banana`, `connected`).
+Department gap: Jev declines messages naming a department before spending a
+call; new `search_scanners` agent tool (eighth registered tool) applies
+`department_code`; system prompt tells the agent to search fresh rather than
+answer from earlier results. The prompt part is unverified without a live model.
+Suite 461 passed, 6 skipped.
+
+Live check of the department fixes (2 calls, fresh sessions): the appointments
+query now makes a real department-filtered search. The scanners query is declined
+by Jev as intended, but the model used search_appointments instead of the new
+search_scanners tool. Correction to an earlier claim: the old Jev answer (all 8
+scanners) was right for the Radiology query on this seed, because all 8 scanners
+are in Radiology rooms; the defect shows for any other department.
+
+## Status: `voice` merged to `master`
+
+Streaming voice input is now part of `master`: WebSocket transport, local
+`faster-whisper` STT, energy-based VAD with pre-roll, the mic button, and the
+fixes the test passes forced. Timeline of the branch: Phase 1 extract
+`handle_chat_message()`; Phase 2 local STT proved on a fixture; Phase 3 WebSocket
++ VAD + three failure modes; Phase 4 mic button; then, from real spoken and typed
+test passes (16, then 40 text + 40 voice): trailing punctuation broke the
+deterministic parser (`show patient David Davis.` returned nobody under a
+DETERMINISTIC badge), bare noun phrases (`departments?`) were rejected by the
+domain gate, parser/Jev turns were invisible to the agent, misheard `MRI`
+produced a confident wrong answer and wrong saved preferences, soft word
+onsets were clipped, the parser ignored unknown words, and department-scoped
+queries lost the department. Each was reproduced or evidenced first, fixed with
+tests that fail on the old code, and recorded in `docs/voice.md`.
+
+Deliberately left as-is: `base.en`/`small.en` are not the default (`tiny.en`
+stays; tradeoff measured), number homophones are not guessed, and the dev
+database was not reseeded after the README write-flow tests moved two
+appointments (a cleanup, not a requirement).
+
+Deployment note: the backend gains `faster-whisper` (with `ctranslate2`,
+`onnxruntime`, `av`). The Whisper model downloads on first use, and the
+WebSocket has no authentication, like the rest of the API.

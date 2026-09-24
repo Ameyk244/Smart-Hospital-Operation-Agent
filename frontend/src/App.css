@@ -487,6 +487,48 @@
   cursor: not-allowed;
 }
 
+/* Mic button: same button family as the rest of .chat-input-row (border,
+   radius, disabled treatment, via the ".chat-input-row button" rule above)
+   — the active/recording state below is the only new visual: a red tint
+   plus a pulse, not a new shape or palette. The extra ".chat-input-row"
+   qualifier on these two rules matches that base rule's specificity so
+   they reliably win instead of being silently outweighed by it. */
+.chat-input-row .voice-mic-button {
+  padding: 8px 12px;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.chat-input-row .voice-mic-button-active {
+  background: rgba(179, 38, 30, 0.14);
+  border-color: var(--error);
+  color: var(--error);
+  animation: voice-mic-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes voice-mic-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(179, 38, 30, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(179, 38, 30, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-mic-button-active {
+    animation: none;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .chat-input-row .voice-mic-button-active {
+    border-color: #ff8983;
+    color: #ff8983;
+  }
+}
+
 /* --- Trace panel --- */
 
 .trace-panel {

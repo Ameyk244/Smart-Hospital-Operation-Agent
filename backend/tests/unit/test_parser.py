@@ -1,6 +1,8 @@
 """Unit tests for the deterministic parser (concept 54's "parser" half).
 No database, no LLM — pure grammar-matching logic."""
 
+import pytest
+
 from app.parser.parser import parse
 
 
@@ -89,3 +91,131 @@ def test_empty_string_is_unmatched():
 def test_unmatched_preserves_raw_text():
     outcome = parse("do something clever")
     assert outcome.raw_text == "do something clever"
+
+
+# --- Trailing punctuation / whitespace ------------------------------------
+# Found by running spoken commands through the real pipeline: Whisper adds a
+# trailing "." or "?" to most transcripts (9 of 16 in that run), and typed
+# input ends in one just as often. Most grammar rules are `$`-anchored, so
+# those inputs used to miss the parser and detour through a paid Jev call --
+# and "show patient David Davis." matched but searched for the literal
+# string "David Davis." and found nobody.
+
+TRAILING_PUNCTUATION = [".", "?", "!", "...", " .", "?!", ";", ",", ":", "…", " . ", "\n"]
+
+
+@pytest.mark.parametrize("suffix", TRAILING_PUNCTUATION)
+@pytest.mark.parametrize(
+    "text, command, args",
+    [
+        ("list departments", "list_departments", {}),
+        ("show next appointment", "show_next_appointment", {}),
+        ("show the next appointment", "show_next_appointment", {}),
+        ("list scanners", "list_scanners", {}),
+        ("list scanners ct available", "list_scanners", {"type": "CT", "status": "AVAILABLE"}),
+        ("list delayed appointments", "list_delayed_appointments", {}),
+        ("list delayed appointments mri", "list_delayed_appointments", {"appointment_type": "MRI"}),
+        ("show patient David Davis", "search_patients", {"query": "David Davis"}),
+    ],
+)
+def test_trailing_punctuation_does_not_change_the_parsed_command(text, command, args, suffix):
+    outcome = parse(text + suffix)
+    assert outcome.matched is True
+    assert outcome.command.name == command
+    assert outcome.command.args == args
+
+
+def test_patient_query_never_captures_the_trailing_period():
+    """The confidently-wrong case: this used to yield query "David Davis."."""
+    outcome = parse("show patient David Davis.")
+    assert outcome.command.args == {"query": "David Davis"}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "show patient  David   Davis",
+        "  show   patient David    Davis  ?  ",
+        "show\tpatient\tDavid Davis.",
+    ],
+)
+def test_internal_whitespace_runs_collapse_so_names_still_match(text):
+    assert parse(text).command.args == {"query": "David Davis"}
+
+
+def test_only_trailing_punctuation_is_removed_not_punctuation_inside_a_name():
+    outcome = parse("show patient O'Neil-Smith.")
+    assert outcome.command.args == {"query": "O'Neil-Smith"}
+
+
+def test_raw_text_still_reports_what_was_actually_sent():
+    outcome = parse("list departments.")
+    assert outcome.raw_text == "list departments."
+
+
+def test_normalization_did_not_make_the_grammar_fuzzy():
+    """Punctuation is forgiven; extra words still aren't. Fuzzy phrasing is
+    Jev's and the agent's job, not the parser's (see the module docstring)."""
+    assert parse("list departments please.").matched is False
+    assert parse("please list departments.").matched is False
+    assert parse("show me the next appointment.").matched is False
+    assert parse("do something clever.").matched is False
+
+
+@pytest.mark.parametrize("text", ["...", "?", "!?", " . ", "…"])
+def test_punctuation_only_input_is_unmatched_and_does_not_crash(text):
+    assert parse(text).matched is False
+
+
+# A word the grammar does not know must make the parser miss, not be ignored.
+# `list scanners MI available` (Whisper's "MRI") used to match and run as "all
+# available scanners", a confident answer to a question nobody asked.
+UNRECOGNISED_TAILS = [
+    "list scanners MI available",
+    "list scanners banana",
+    "list scanners connected",  # contains "ct"; must not read as CT
+    "list scanners mri please",
+    "list scanners xrays",
+    "list scanners for radiology",
+    "list delayed appointments foo",
+    "list delayed appointments MI",
+    "list delayed appointments for radiology",
+    "list delayed appointments connected",
+]
+
+
+@pytest.mark.parametrize("text", UNRECOGNISED_TAILS)
+def test_unrecognised_words_after_a_command_make_it_miss(text):
+    assert parse(text).matched is False
+
+
+@pytest.mark.parametrize(
+    ("text", "args"),
+    [
+        ("list scanners", {}),
+        ("list scanners mri", {"type": "MRI"}),
+        ("list scanners CT In Use", {"type": "CT", "status": "IN_USE"}),
+        ("list scanners in-use", {"status": "IN_USE"}),
+        ("list scanners xray maintenance", {"type": "XRAY", "status": "MAINTENANCE"}),
+        ("list scanners that are available", {"status": "AVAILABLE"}),
+        ("list scanners mri available.", {"type": "MRI", "status": "AVAILABLE"}),
+    ],
+)
+def test_recognised_scanner_tails_still_match_with_the_same_arguments(text, args):
+    outcome = parse(text)
+    assert outcome.matched is True
+    assert outcome.command.args == args
+
+
+@pytest.mark.parametrize(
+    ("text", "args"),
+    [
+        ("list delayed appointments", {}),
+        ("list delayed appointments ct", {"appointment_type": "CT"}),
+        ("list delayed appointments XRAY?", {"appointment_type": "XRAY"}),
+    ],
+)
+def test_recognised_delayed_appointment_tails_still_match(text, args):
+    outcome = parse(text)
+    assert outcome.matched is True
+    assert outcome.command.args == args

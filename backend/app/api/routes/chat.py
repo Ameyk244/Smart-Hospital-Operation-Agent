@@ -10,20 +10,30 @@ Every branch appends to `ConversationMessage` (concept 35) so the next
 request in the same session has continuity regardless of which path
 handled it.
 
-What calls it: the frontend's chat UI; `tests/e2e/*`.
+The actual routing logic lives in `handle_chat_message()`, a plain
+function with no FastAPI/HTTP dependency in its signature — deliberately
+extracted (see docs/voice.md, Phase 1) so the streaming voice pipeline
+(`app/api/routes/voice.py`) can call the exact same routing a typed
+message goes through, the same one-trusted-implementation discipline as
+`CommandRunner`. `POST /api/chat` is a thin wrapper around it; it must
+never grow routing logic of its own again.
+
+What calls it: the frontend's chat UI; the voice WebSocket handler once
+it has a final transcript; `tests/e2e/*`.
 """
 
 import uuid
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.requests import HTTPConnection
 
 from app.agent.domain_gate import check_domain_gate
 from app.agent.eligibility import check_eligibility
 from app.agent.entity_codes import extract_entity_codes
-from app.agent.graph import run_agent
+from app.agent.graph import record_non_agent_turn, run_agent
 from app.agent.history import to_langchain_messages
 from app.agent.message_text import extract_text_content
 from app.agent.providers.factory import get_default_chat_model
@@ -32,8 +42,11 @@ from app.db.models.agent import EventStatus, MessageRole
 from app.db.repositories.session_repository import SessionRepository
 from app.db.session import get_db, get_session_factory
 from app.execution.commands import Command, CommandRunner
+from app.observability.logging_config import get_logger
 from app.observability.tracing import record_event
 from app.parser.parser import parse
+
+logger = get_logger("api.chat")
 
 # The trace event type the Jev fast path writes, in all three of its
 # outcomes. The frontend's trace panel filters on this exact string and the
@@ -134,21 +147,66 @@ def _format_deterministic_message(command: Command, success: bool, error: str | 
     return f"OK — ran {command.name}."  # safety net; see docstring
 
 
-def get_checkpointer(request: Request):
+def get_checkpointer(request: HTTPConnection):
     """The long-lived LangGraph checkpointer built once at process startup
     (see app/main.py's `lifespan`). A FastAPI dependency, like `get_db` and
-    `get_session_factory`, so tests can override it the same way."""
+    `get_session_factory`, so tests can override it the same way.
+
+    Typed as `HTTPConnection` (the common base of `Request` and
+    `WebSocket`), not `Request`, so this same function also works as a
+    `Depends()` for app/api/routes/voice.py's WebSocket route -- verified
+    directly against FastAPI's dependency resolution
+    (fastapi/dependencies/utils.py's `solve_dependencies`): a param typed
+    `Request` is only ever populated when the connection is an actual
+    `Request` instance, which a WebSocket connection never is, so a
+    `Request`-typed version of this dependency raises
+    "missing 1 required positional argument" under a WebSocket route. Both
+    `Request` and `WebSocket` expose `.app` via `HTTPConnection`, so the
+    body is unchanged and every existing HTTP-side caller/override
+    (`app.dependency_overrides[get_checkpointer] = ...` in tests/conftest.py)
+    keeps working exactly as before."""
     return request.app.state.checkpointer
 
 
-@router.post("", response_model=ChatResponse)
-async def chat(
-    request: ChatRequest,
-    db: AsyncSession = Depends(get_db),
-    session_factory=Depends(get_session_factory),
-    checkpointer=Depends(get_checkpointer),
+async def _remember_for_agent(
+    *,
+    session_id: str,
+    user_text: str,
+    assistant_text: str,
+    session_factory,
+    checkpointer,
+) -> None:
+    """Record a parser/Jev-answered turn in the agent's own history. The
+    answer has already been computed and persisted, so a checkpoint problem
+    is logged, never surfaced as a failed request."""
+    try:
+        await record_non_agent_turn(
+            session_id=session_id,
+            user_text=user_text,
+            assistant_text=assistant_text,
+            session_factory=session_factory,
+            settings=get_settings(),
+            checkpointer=checkpointer,
+        )
+    except Exception:  # noqa: BLE001 - see docstring
+        logger.warning("record_non_agent_turn_failed", session_id=session_id, exc_info=True)
+
+
+
+async def handle_chat_message(
+    text: str,
+    session_id: str | None,
+    db: AsyncSession,
+    session_factory,
+    checkpointer,
 ) -> ChatResponse:
-    session_id = request.session_id or str(uuid.uuid4())
+    """The one routing implementation for a text message, regardless of
+    which transport produced that text. Byte-for-byte the same logic the
+    inlined `chat()` route body used to contain — extracted, not rewritten,
+    so this refactor's own test coverage is "nothing changed", not "the new
+    behavior is also correct". See this module's docstring and
+    docs/voice.md."""
+    session_id = session_id or str(uuid.uuid4())
     session_repo = SessionRepository(db)
     await session_repo.get_or_create(session_id)
 
@@ -159,10 +217,10 @@ async def chat(
     prior_rows = await session_repo.get_recent_messages(session_id, limit=20)
     history = to_langchain_messages(prior_rows)
 
-    await session_repo.append_message(session_id, MessageRole.USER, request.text)
+    await session_repo.append_message(session_id, MessageRole.USER, text)
     await db.commit()
 
-    outcome = parse(request.text)
+    outcome = parse(text)
     if outcome.matched:
         command = outcome.command
         assert command is not None
@@ -170,6 +228,13 @@ async def chat(
         message = _format_deterministic_message(command, result.success, result.error, result.data)
         await session_repo.append_message(session_id, MessageRole.ASSISTANT, message)
         await db.commit()
+        await _remember_for_agent(
+            session_id=session_id,
+            user_text=text,
+            assistant_text=message,
+            session_factory=session_factory,
+            checkpointer=checkpointer,
+        )
         return ChatResponse(
             session_id=session_id,
             handled_by="deterministic",
@@ -185,7 +250,7 @@ async def chat(
         row.content for row in prior_rows if row.role == MessageRole.USER
     ]
     domain_gate = check_domain_gate(
-        request.text, prior_user_messages=prior_user_messages
+        text, prior_user_messages=prior_user_messages
     )
     if not domain_gate.in_domain:
         message = (
@@ -196,7 +261,7 @@ async def chat(
         await db.commit()
         return ChatResponse(session_id=session_id, handled_by="rejected", message=message)
 
-    eligibility = check_eligibility(request.text)
+    eligibility = check_eligibility(text)
     if not eligibility.eligible:
         message = f"Sorry, I can't process that request ({eligibility.reason})."
         await session_repo.append_message(session_id, MessageRole.ASSISTANT, message)
@@ -215,7 +280,7 @@ async def chat(
     if settings.enable_jev_fast_path:
         from app.agent.jev_fast_path import try_jev_fast_path
 
-        jev = await try_jev_fast_path(request.text, settings)
+        jev = await try_jev_fast_path(text, settings)
         jev_arguments = {
             "choice": jev.choice,
             "confidence": jev.confidence,
@@ -247,6 +312,13 @@ async def chat(
             )
             await session_repo.append_message(session_id, MessageRole.ASSISTANT, message)
             await db.commit()
+            await _remember_for_agent(
+                session_id=session_id,
+                user_text=text,
+                assistant_text=message,
+                session_factory=session_factory,
+                checkpointer=checkpointer,
+            )
             return ChatResponse(
                 session_id=session_id,
                 handled_by="jev",
@@ -277,7 +349,7 @@ async def chat(
     chat_model = get_default_chat_model()
     final_state = await run_agent(
         session_id=session_id,
-        user_text=request.text,
+        user_text=text,
         chat_model=chat_model,
         session_factory=session_factory,
         settings=settings,
@@ -301,4 +373,20 @@ async def chat(
         message=reply_text,
         terminated_reason=final_state["terminated_reason"],
         touched_entity_codes=final_state.get("touched_entity_codes", []),
+    )
+
+
+@router.post("", response_model=ChatResponse)
+async def chat(
+    request: ChatRequest,
+    db: AsyncSession = Depends(get_db),
+    session_factory=Depends(get_session_factory),
+    checkpointer=Depends(get_checkpointer),
+) -> ChatResponse:
+    return await handle_chat_message(
+        text=request.text,
+        session_id=request.session_id,
+        db=db,
+        session_factory=session_factory,
+        checkpointer=checkpointer,
     )
