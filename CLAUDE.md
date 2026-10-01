@@ -46,7 +46,8 @@ local, self-hosted tooling.
 
 - **Never in the hospital UI.** No frontend link, button, or page references
   Grafana or any telemetry endpoint, now or in a future deployment. Grafana
-  is opened directly at `localhost:3000`.
+  is opened directly at `localhost:3001` (not 3000: that port is taken by
+  another local project; override with `GRAFANA_PORT`).
 - **Telemetry is optional at runtime.** The app and the offline test suite
   must work with the collector down or absent; exporting failures never fail
   a request.
