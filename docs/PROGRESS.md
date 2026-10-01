@@ -1342,3 +1342,15 @@ Three app telemetry bugs were reported and fixed in the next commit:
 - the pool overflow gauge goes negative;
 - agent log lines carry `agent.run`'s span id instead of the tool's;
 - the last `agent.round` span absorbs the final checkpoint writes.
+
+Phase 7 (SLOs), done by the lead session. Three SLOs live in
+`observability/slos.yaml`: fast-path latency (99% within 1 s), agent-turn
+latency (95% within 10 s) and chat availability (99.5% non-5xx).
+`observability/scripts/build_slo_panels.py` renders them into the
+dashboard as SLI, error-budget-left and 1 h rolling panels. All three
+queries were verified against the running stack. Availability reads 95.8%
+on the verification traffic, which deliberately injects 500s, so it
+correctly shows red. No burn-rate alerting, by design. The Phase 6
+audit-log docs landed in `observability/README.md` at the same time.
+
+Branch `observability` is complete and left unmerged for review.

@@ -76,8 +76,8 @@ as each phase lands.
 | 3 | OTel metrics: routing counter, agent/tool/LLM, Jev, voice STT + CPU, HTTP RED, SQLAlchemy pool gauge + checkpointer operation timing | Done |
 | 4 | OTel traces: auto-instrumentation + manual spans along the request path; trace_id on logs; OTLP log export | Done |
 | 5 | `grafana/otel-lgtm` stack + checked-in dashboard, verified with real local traffic | Done |
-| 6 | Audit record for `reschedule_appointment` (needs a migration, approval-gated) | Planned |
-| 7 | 2–3 SLIs/SLOs as dashboard panels | Planned |
+| 6 | Audit record for `reschedule_appointment` (needs a migration, approval-gated) | Done |
+| 7 | 2–3 SLIs/SLOs as dashboard panels | Done |
 
 ### Phase 1: PHI and secret redaction
 
@@ -778,6 +778,88 @@ confirmed to fail on the old code.
   end of `agent_node` when the model asked for none. Test for both
   agent-span fixes:
   `test_tracing.py::test_log_lines_carry_their_own_round_or_tool_span_and_rounds_end_on_time`.
+
+### Phase 6: Audit log for mutations
+
+This is not observability. It sits next to it on purpose, to show the
+difference. Telemetry is redacted, sampled and operator-facing, and losing
+some is acceptable. An audit record is the system of record for "who
+changed this hospital record, when, from what to what". It must be complete
+and must never be edited.
+
+| Piece | Where |
+|---|---|
+| `audit_log` table: `actor`, `action`, `entity_type`, `entity_code`, `before_json`, `after_json`, `request_id`, `trace_id`, `occurred_at` | `backend/app/db/models/audit.py` |
+| Append-only, enforced by the database: a trigger rejects UPDATE and DELETE | same file; migration `backend/alembic/versions/5d3e9a1b7c20_audit_log_for_mutations.py` |
+| Written in the `reassign_scanner` command, in the same transaction as the change | `backend/app/execution/commands/appointment_commands.py` |
+| `register(..., audited=True)`, with the actor passed explicitly by `CommandRunner(session, actor=...)`. A missing actor is recorded as `unattributed`, never skipped | `backend/app/execution/commands/base.py` |
+| No-update/no-delete repository | `backend/app/db/repositories/audit_repository.py` |
+
+Design choices:
+- **At the command, not the tool.** A future entry point to the mutation
+  is audited without anyone remembering to add it.
+- **Same transaction.** There is never a change without its record, or a
+  record without its change. A rejected reschedule writes nothing; its
+  attempt is in the agent trace.
+- **"Who" is the agent session id** (`agent_session:<id>`). This app has no
+  user authentication, so that's the most specific actor that exists.
+  `request_id`/`trace_id` link the record to its logs and trace.
+- **Before/after carry only the changed fields** (scanner code, start/end,
+  status), never patient data.
+
+Known limit: the trigger is row-level, so it blocks UPDATE and DELETE but
+not `TRUNCATE` by the table owner. It guards against application edits, not
+a database superuser.
+
+Migration `5d3e9a1b7c20` was applied to the dev database with the user's
+explicit approval in that turn. A before/after snapshot showed only the new
+empty table and the version bump; every other table's row count was
+unchanged, the LangGraph checkpoint tables included.
+
+**How to see it:** reschedule through the agent, then
+`SELECT actor, entity_code, before_json, after_json, trace_id FROM audit_log
+ORDER BY id DESC LIMIT 5;`. Paste the `trace_id` into Grafana Explore →
+Tempo to see the request that made the change.
+
+**Tests:** `tests/integration/test_audit_log.py` (7). It checks:
+- one complete record per successful reschedule, with actor and request_id;
+- no patient name, MRN or code in the record;
+- nothing written for a rejected reschedule;
+- a caller without an actor is still audited;
+- UPDATE and DELETE are rejected by the database.
+
+5 of the 7 fail with the audit write removed. The other 2 (the registry
+flag, and nothing written on rejection) don't depend on it.
+
+### Phase 7: SLOs (light-touch)
+
+Three SLOs, defined once in `observability/slos.yaml` and rendered into the
+dashboard's **SLOs** row by `observability/scripts/build_slo_panels.py`, so
+a target can't drift between config and panel. Re-run the script after
+editing the YAML; Grafana reloads within 30 s.
+
+| SLO | SLI (good / total) | Target | Why this target |
+|---|---|---|---|
+| Fast-path latency | parser + Jev chat turns completing within 1 s | 99% | Parser is milliseconds and Jev well under a second; a fast-path turn near Jev's 5 s timeout has stopped being fast |
+| Agent-turn latency | agent chat turns completing within 10 s | 95% | Several LLM calls are normal; past 10 s users assume it's stuck; 95% because the LLM tail is outside our control |
+| Chat availability | `POST /api/chat` responses that aren't 5xx | 99.5% | Measured at HTTP, as the user sees it. Rejections are 200s and count as good: they're the system working as designed |
+
+Each SLO gets three panels:
+- the SLI over the dashboard's range (green at or above target);
+- the **error budget left**, `1 - (1 - SLI) / (1 - target)`: 100% means no
+  bad events, 0% means spent, negative means missed;
+- the SLI as a 1 h rolling series with the target as a dashed line.
+
+Thresholds sit on histogram bucket boundaries (`le="1"`, `le="10"`), so the
+good count is exact, not interpolated.
+
+Observed on the verification traffic (6 h window): fast path 100%, agent
+turns 100%, chat availability **95.8%**. The last one is red, as it should
+be: the traffic script deliberately injects provider errors that return 500.
+
+Deliberately not built: multi-window burn-rate alerts, alert rules,
+severity tiers, and SLAs. At one developer and local traffic they'd be
+ceremony; the audit graded them as interview theory.
 
 ## 3. Decisions
 

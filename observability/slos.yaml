@@ -1,0 +1,55 @@
+# Service level objectives (observability Phase 7).
+#
+# The single source of truth for this project's SLOs. Each one is an SLI (a
+# ratio of good events to all events, measured from metrics the backend
+# already exports) and a target. `scripts/build_slo_panels.py` generates the
+# dashboard's "SLOs" row from this file, so a target is never typed twice.
+#
+# Deliberately light: SLIs and targets as panels, plus error budget remaining
+# over the dashboard's time range. No multi-window burn-rate alerting and no
+# severity tiers. At one developer and local traffic, those are interview
+# theory, not operational need (see observability/CONCEPT_MAP.md, Module 8).
+#
+# Thresholds must sit on a histogram bucket boundary (seconds buckets:
+# 0.005 0.01 0.025 0.05 0.1 0.25 0.5 1 2.5 5 10 30 60, from
+# backend/app/observability/metrics.py), or the "good" count can't be read
+# exactly from the `le` bucket.
+
+slos:
+  - id: fast_path_latency
+    name: Fast-path latency
+    question: Do turns the parser or Jev answer feel instant?
+    sli: Share of chat turns answered by the parser or Jev that complete within 1 s
+    target: 0.99
+    good: sum(increase(chat_request_duration_seconds_bucket{service_name="hospital-ops-backend", route=~"parser|jev", le="1"}[$__range]))
+    total: sum(increase(chat_request_duration_seconds_count{service_name="hospital-ops-backend", route=~"parser|jev"}[$__range]))
+    why: >-
+      The parser answers in milliseconds and Jev in well under a second, so 1 s
+      leaves room for DB time while still catching a slow Jev call. Jev's own
+      timeout is 5 s, and a turn near that is a fast path that stopped being
+      fast.
+
+  - id: agent_turn_latency
+    name: Agent-turn latency
+    question: Do turns that reach the LLM agent finish in reasonable time?
+    sli: Share of agent-answered chat turns that complete within 10 s
+    target: 0.95
+    good: sum(increase(chat_request_duration_seconds_bucket{service_name="hospital-ops-backend", route="agent", le="10"}[$__range]))
+    total: sum(increase(chat_request_duration_seconds_count{service_name="hospital-ops-backend", route="agent"}[$__range]))
+    why: >-
+      A multi-round agent turn is several LLM calls plus tool round-trips, so
+      seconds are normal. Past 10 s a user assumes it's stuck. 95% rather
+      than 99% because LLM latency has a long tail outside this system's
+      control.
+
+  - id: chat_availability
+    name: Chat availability
+    question: Does POST /api/chat answer without a server error?
+    sli: Share of POST /api/chat requests that don't return a 5xx
+    target: 0.995
+    good: sum(increase(http_server_request_duration_seconds_count{service_name="hospital-ops-backend", http_route="/api/chat", http_response_status_code!~"5.."}[$__range]))
+    total: sum(increase(http_server_request_duration_seconds_count{service_name="hospital-ops-backend", http_route="/api/chat"}[$__range]))
+    why: >-
+      Measured at the HTTP layer because that's what the user sees.
+      Rejections (domain gate, eligibility, grounding) are 200s and count as
+      good: they are the system working as designed, not failing.

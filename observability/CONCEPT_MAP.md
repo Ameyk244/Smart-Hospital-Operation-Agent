@@ -89,8 +89,8 @@ Entries are updated as each phase lands.
 | Concept | What it is | Where / how to see it | Fit | Status |
 |---|---|---|---|---|
 | Error categories | validation / dependency / programming | `error_category` on `agent.tool.calls`; `outcome=failed` on `jev.consultations`; `route=error` on `chat.requests` | Core | Done (3) |
-| SLI / SLO | Measurement / target | 2–3 dashboard panels, in the dashboard's reserved (collapsed) row "SLOs: reserved for Phase 7" | Light | Planned (7) |
-| Error budget | Allowed failure under the SLO | SLO panels | Light | Planned (7) |
+| SLI / SLO | Measurement / target | Three SLOs in `observability/slos.yaml` (fast-path latency, agent-turn latency, chat availability), rendered by `scripts/build_slo_panels.py`. See it: dashboard row "SLOs", the SLI stat per SLO (green = met) | Light | Done (7) |
+| Error budget | Allowed failure under the SLO: `1 - (1 - SLI) / (1 - target)` | "error budget left" stat per SLO. Chat availability shows it spent (negative) on the verification traffic, which injects 500s | Light | Done (7) |
 | Burn-rate multi-window alerts, severity tiers | | Overkill for one developer | Theory | Not built (by design) |
 | SLA | Contractual commitment | No customers | Theory | Not built (by design) |
 
@@ -102,7 +102,7 @@ Entries are updated as each phase lands.
 | Metric → trace → logs | The investigation path | Metric → trace: exemplars (`trace_id`) on the latency histograms, shown as dots on "/api/chat latency" and "Chat turn latency p95 by route", linked to Tempo. Trace → logs: Tempo's "Logs for this span" (`{service_name="hospital-ops-backend"} \| trace_id="<id>"`) and the dashboard's "Show this trace's logs below" link into "Backend logs (Loki)". Logs → trace: Loki's `trace_id` derived field. Walkthrough and a verified example: README §2 Phase 5 | Core | Done (4/5) |
 | PHI redaction / allowlisting | Store only fields proven safe, not everything except known-bad ones | `redaction.redact_arguments` on every `agent_events` write. See it: trace panel shows `command_text: "[REDACTED]"` after a `show patient` tool call; `tests/integration/test_trace_redaction.py` | Core | Done (1) |
 | Secrets out of logs | Credentials never in telemetry | `redaction.make_log_redactor` scrubs API keys + DB password from every field incl. tracebacks; `hide_parameters=True` on the engine | Core | Done (1) |
-| Observability vs audit logs | Sampled, operator-facing vs complete, who/what/before/after | `reschedule_appointment` audit table | Core | Planned (6) |
+| Observability vs audit logs | Telemetry is redacted, sampled and lossy; an audit record is complete, immutable, who/what/before/after | `audit_log` table, written in the same transaction as `reassign_scanner`, append-only via DB trigger. See it: `SELECT * FROM audit_log`, then follow its `trace_id` into Tempo | Core | Done (6) |
 | Telemetry cost / retention tuning | | n/a locally | Theory | Not built (by design) |
 
 ## Module 10: LLM and agent observability

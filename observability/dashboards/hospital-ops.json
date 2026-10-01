@@ -2161,9 +2161,9 @@
     },
     {
       "type": "row",
-      "id": 45,
-      "title": "SLOs: reserved for Phase 7 (not built yet)",
-      "collapsed": true,
+      "id": 100,
+      "title": "SLOs: targets from observability/slos.yaml (green = met)",
+      "collapsed": false,
       "gridPos": {
         "x": 0,
         "y": 100,
@@ -2171,6 +2171,633 @@
         "h": 1
       },
       "panels": []
+    },
+    {
+      "type": "stat",
+      "id": 101,
+      "title": "Fast-path latency: SLI (target 99.0%)",
+      "description": "Share of chat turns answered by the parser or Jev that complete within 1 s. The parser answers in milliseconds and Jev in well under a second, so 1 s leaves room for DB time while still catching a slow Jev call. Jev's own timeout is 5 s, and a turn near that is a fast path that stopped being fast.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 101,
+        "w": 4,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "(sum(increase(chat_request_duration_seconds_bucket{service_name=\"hospital-ops-backend\", route=~\"parser|jev\", le=\"1\"}[$__range]))) / (sum(increase(chat_request_duration_seconds_count{service_name=\"hospital-ops-backend\", route=~\"parser|jev\"}[$__range])))",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "noValue": "no traffic in range",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0.99
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "type": "stat",
+      "id": 102,
+      "title": "Fast-path latency: error budget left",
+      "description": "1 - (1 - SLI) / (1 - target) over the dashboard's range. 100% = no bad events, 0% = budget spent, below 0 = SLO missed.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 4,
+        "y": 101,
+        "w": 4,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "1 - (1 - (sum(increase(chat_request_duration_seconds_bucket{service_name=\"hospital-ops-backend\", route=~\"parser|jev\", le=\"1\"}[$__range]))) / (sum(increase(chat_request_duration_seconds_count{service_name=\"hospital-ops-backend\", route=~\"parser|jev\"}[$__range])))) / (1 - 0.99)",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "noValue": "no traffic in range",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 0.25
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 103,
+      "title": "Fast-path latency: SLI, 1 h rolling",
+      "description": "Do turns the parser or Jev answer feel instant?",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 106,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "(sum(increase(chat_request_duration_seconds_bucket{service_name=\"hospital-ops-backend\", route=~\"parser|jev\", le=\"1\"}[1h]))) / (sum(increase(chat_request_duration_seconds_count{service_name=\"hospital-ops-backend\", route=~\"parser|jev\"}[1h])))",
+          "legendFormat": "SLI",
+          "range": true,
+          "instant": false,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "max": 1,
+          "custom": {
+            "lineWidth": 2,
+            "showPoints": "never",
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0.99
+              }
+            ]
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 104,
+      "title": "Agent-turn latency: SLI (target 95.0%)",
+      "description": "Share of agent-answered chat turns that complete within 10 s. A multi-round agent turn is several LLM calls plus tool round-trips, so seconds are normal. Past 10 s a user assumes it's stuck. 95% rather than 99% because LLM latency has a long tail outside this system's control.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 101,
+        "w": 4,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "(sum(increase(chat_request_duration_seconds_bucket{service_name=\"hospital-ops-backend\", route=\"agent\", le=\"10\"}[$__range]))) / (sum(increase(chat_request_duration_seconds_count{service_name=\"hospital-ops-backend\", route=\"agent\"}[$__range])))",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "noValue": "no traffic in range",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0.95
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "type": "stat",
+      "id": 105,
+      "title": "Agent-turn latency: error budget left",
+      "description": "1 - (1 - SLI) / (1 - target) over the dashboard's range. 100% = no bad events, 0% = budget spent, below 0 = SLO missed.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 101,
+        "w": 4,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "1 - (1 - (sum(increase(chat_request_duration_seconds_bucket{service_name=\"hospital-ops-backend\", route=\"agent\", le=\"10\"}[$__range]))) / (sum(increase(chat_request_duration_seconds_count{service_name=\"hospital-ops-backend\", route=\"agent\"}[$__range])))) / (1 - 0.95)",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "noValue": "no traffic in range",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 0.25
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 106,
+      "title": "Agent-turn latency: SLI, 1 h rolling",
+      "description": "Do turns that reach the LLM agent finish in reasonable time?",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 106,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "(sum(increase(chat_request_duration_seconds_bucket{service_name=\"hospital-ops-backend\", route=\"agent\", le=\"10\"}[1h]))) / (sum(increase(chat_request_duration_seconds_count{service_name=\"hospital-ops-backend\", route=\"agent\"}[1h])))",
+          "legendFormat": "SLI",
+          "range": true,
+          "instant": false,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "max": 1,
+          "custom": {
+            "lineWidth": 2,
+            "showPoints": "never",
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0.95
+              }
+            ]
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "id": 107,
+      "title": "Chat availability: SLI (target 99.5%)",
+      "description": "Share of POST /api/chat requests that don't return a 5xx. Measured at the HTTP layer because that's what the user sees. Rejections (domain gate, eligibility, grounding) are 200s and count as good: they are the system working as designed, not failing.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 101,
+        "w": 4,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "(sum(increase(http_server_request_duration_seconds_count{service_name=\"hospital-ops-backend\", http_route=\"/api/chat\", http_response_status_code!~\"5..\"}[$__range]))) / (sum(increase(http_server_request_duration_seconds_count{service_name=\"hospital-ops-backend\", http_route=\"/api/chat\"}[$__range])))",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "noValue": "no traffic in range",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0.995
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "type": "stat",
+      "id": 108,
+      "title": "Chat availability: error budget left",
+      "description": "1 - (1 - SLI) / (1 - target) over the dashboard's range. 100% = no bad events, 0% = budget spent, below 0 = SLO missed.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 20,
+        "y": 101,
+        "w": 4,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "1 - (1 - (sum(increase(http_server_request_duration_seconds_count{service_name=\"hospital-ops-backend\", http_route=\"/api/chat\", http_response_status_code!~\"5..\"}[$__range]))) / (sum(increase(http_server_request_duration_seconds_count{service_name=\"hospital-ops-backend\", http_route=\"/api/chat\"}[$__range])))) / (1 - 0.995)",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2,
+          "noValue": "no traffic in range",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 0.25
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 109,
+      "title": "Chat availability: SLI, 1 h rolling",
+      "description": "Does POST /api/chat answer without a server error?",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 106,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "(sum(increase(http_server_request_duration_seconds_count{service_name=\"hospital-ops-backend\", http_route=\"/api/chat\", http_response_status_code!~\"5..\"}[1h]))) / (sum(increase(http_server_request_duration_seconds_count{service_name=\"hospital-ops-backend\", http_route=\"/api/chat\"}[1h])))",
+          "legendFormat": "SLI",
+          "range": true,
+          "instant": false,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "max": 1,
+          "custom": {
+            "lineWidth": 2,
+            "showPoints": "never",
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0.995
+              }
+            ]
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      }
     }
   ]
 }
