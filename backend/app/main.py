@@ -3,8 +3,8 @@
 Why it exists: process entrypoint (`uvicorn app.main:app`). Deliberately
 thin — route logic lives in `app/api/routes/*`, this module only wires them
 together plus cross-cutting concerns (CORS for the local frontend dev
-server, health check, and building the long-lived LangGraph checkpointer
-for the process lifetime).
+server, request-ID correlation for logs, health check, and building the
+long-lived LangGraph checkpointer for the process lifetime).
 """
 
 import asyncio
@@ -25,6 +25,7 @@ from app.agent.checkpointer import build_checkpointer  # noqa: E402
 from app.api.routes import chat, commands, cost, operations, sessions, voice  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from app.observability.logging_config import configure_logging  # noqa: E402
+from app.observability.request_context import RequestContextMiddleware  # noqa: E402
 
 configure_logging()
 settings = get_settings()
@@ -45,6 +46,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Added last, so it is the outermost user middleware: the request_id is
+# bound before anything else runs (CORS included) and every response,
+# preflights too, carries the X-Request-ID header. See
+# app/observability/request_context.py.
+app.add_middleware(RequestContextMiddleware)
 
 app.include_router(commands.router)
 app.include_router(chat.router)

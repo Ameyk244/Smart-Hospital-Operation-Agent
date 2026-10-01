@@ -1264,3 +1264,10 @@ Phase 1 (PHI/secret redaction), done by the lead session directly:
 access log loses query strings; SQLAlchemy hides bound parameters; a
 structlog processor scrubs configured secrets. The leak test was confirmed
 to fail on the old `tracing.py`. Suite: 480 passed, 6 skipped.
+
+Phase 2 (correlation), delegated to one backend subagent and reviewed by
+the lead. A pure-ASGI request-ID middleware binds `request_id` for each
+HTTP request and WebSocket connection, and `session_id` is bound per turn
+and per voice connection. There is one `request_completed` line per
+request, logged by route template. The lead confirmed the new e2e tests
+fail with the middleware removed. Suite: 502 passed, 6 skipped.

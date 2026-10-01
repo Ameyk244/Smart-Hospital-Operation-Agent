@@ -25,6 +25,7 @@ it has a final transcript; `tests/e2e/*`.
 import uuid
 from typing import Literal
 
+import structlog
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -205,8 +206,34 @@ async def handle_chat_message(
     inlined `chat()` route body used to contain — extracted, not rewritten,
     so this refactor's own test coverage is "nothing changed", not "the new
     behavior is also correct". See this module's docstring and
-    docs/voice.md."""
+    docs/voice.md.
+
+    `session_id` is bound into structlog's contextvars for the duration of
+    the turn, so every log line it causes (agent rounds, tool calls, trace
+    events) carries it alongside the middleware's `request_id`. Bound with
+    `bound_contextvars`, which restores the previous value on exit, so it
+    never outlives this turn. See app/observability/request_context.py."""
     session_id = session_id or str(uuid.uuid4())
+    with structlog.contextvars.bound_contextvars(session_id=session_id):
+        return await _route_chat_message(
+            text=text,
+            session_id=session_id,
+            db=db,
+            session_factory=session_factory,
+            checkpointer=checkpointer,
+        )
+
+
+async def _route_chat_message(
+    *,
+    text: str,
+    session_id: str,
+    db: AsyncSession,
+    session_factory,
+    checkpointer,
+) -> ChatResponse:
+    """The body of `handle_chat_message`, split out only so the contextvar
+    binding above can wrap it without re-indenting the routing logic."""
     session_repo = SessionRepository(db)
     await session_repo.get_or_create(session_id)
 

@@ -358,3 +358,50 @@ def jev_settings():
 @pytest.fixture
 def jev_response():
     return _build_jev_response
+
+
+# --------------------------------------------------------------------------
+# Log capture for correlation tests (observability Phase 2).
+#
+# Captures the exact JSON lines the configured structlog chain prints --
+# after `merge_contextvars` and after the redaction processor -- so a test
+# asserts on what really reaches stdout. It patches the `print` that
+# structlog's `PrintLogger` calls (structlog switched `PrintLogger` to
+# `print` in 22.1 specifically for monkeypatchability) rather than
+# reconfiguring structlog: `cache_logger_on_first_use=True` means loggers
+# already used earlier in the run keep their original processor chain, so a
+# reconfigure would silently miss them. Works across threads too, so it
+# also sees lines logged inside `TestClient`'s WebSocket portal thread.
+# --------------------------------------------------------------------------
+
+
+class CapturedLogs:
+    def __init__(self) -> None:
+        self.raw: list[str] = []
+
+    def lines(self) -> list[dict]:
+        import json
+
+        parsed = []
+        for line in self.raw:
+            try:
+                parsed.append(json.loads(line))
+            except ValueError:
+                continue
+        return parsed
+
+    def events(self, event: str) -> list[dict]:
+        return [line for line in self.lines() if line.get("event") == event]
+
+
+@pytest.fixture
+def captured_logs(monkeypatch):
+    import structlog._output as structlog_output
+
+    captured = CapturedLogs()
+
+    def _capture(message="", *args, **kwargs):
+        captured.raw.append(str(message))
+
+    monkeypatch.setattr(structlog_output, "print", _capture, raising=False)
+    return captured

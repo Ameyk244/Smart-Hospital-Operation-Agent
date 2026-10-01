@@ -556,3 +556,43 @@ def test_clean_transcript_has_no_raw_field(voice_client, voice_session_id):
 
     transcript = next(m for m in messages if m["type"] == "transcript")
     assert transcript == {"type": "transcript", "text": "list departments"}
+
+
+def test_voice_connection_log_lines_carry_request_and_session_id(
+    voice_client, voice_session_id, captured_logs
+):
+    """Observability Phase 2: one request_id for the whole connection,
+    echoed on the accept, and the connection's session_id on lines logged
+    by the voice handler itself (the STT failure line) as well as by the
+    routing it hands off to."""
+    session_id = voice_session_id
+    loud_chunk = _noise_pcm(300, amplitude=0.15, seed=7)
+    trailing_silence = _silence_pcm(1000)
+    call_count = {"n": 0}
+
+    async def flaky_transcribe(samples, model_size):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise RuntimeError("synthetic STT failure")
+        return "list departments"
+
+    with patch("app.api.routes.voice.transcribe_array", new=flaky_transcribe):
+        with voice_client.websocket_connect(
+            f"/api/voice/{session_id}", headers={"X-Request-ID": "voice-conn-1"}
+        ) as ws:
+            accept_headers = dict(ws.extra_headers or [])
+            assert ws.receive_json() == {"type": "ready"}
+            for _ in range(2):
+                ws.send_bytes(loud_chunk)
+                ws.send_bytes(trailing_silence)
+                _drain_until_ready(ws)
+
+    assert accept_headers[b"x-request-id"] == b"voice-conn-1"
+    stt_failed = captured_logs.events("voice_stt_failed")
+    assert len(stt_failed) == 1
+    assert stt_failed[0]["session_id"] == session_id
+    assert stt_failed[0]["request_id"] == "voice-conn-1"
+    handler_lines = [
+        line for line in captured_logs.lines() if line.get("event") != "websocket_closed"
+    ]
+    assert {line.get("request_id") for line in handler_lines} == {"voice-conn-1"}

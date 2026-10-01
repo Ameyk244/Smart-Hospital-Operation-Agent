@@ -72,7 +72,7 @@ as each phase lands.
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | PHI/secret redaction on existing trace + logs | Done |
-| 2 | Request-ID middleware; `request_id`/`session_id` bound into structlog | Planned |
+| 2 | Request-ID middleware; `request_id`/`session_id` bound into structlog | Done |
 | 3 | OTel metrics: routing counter, agent/tool/LLM, voice STT, both DB pools | Planned |
 | 4 | OTel traces: auto-instrumentation + manual spans along the request path | Planned |
 | 5 | `grafana/otel-lgtm` stack + checked-in dashboard, verified with real local traffic | Planned |
@@ -108,6 +108,61 @@ trace panel shows `command_text: "[REDACTED]"`.
   stdout. This test was confirmed to **fail** against the pre-Phase-1
   `tracing.py`; there, the stored `command_text` contained the patient's
   name.
+
+### Phase 2: Correlation
+
+Before this, nothing tied log lines together: two concurrent chats
+interleaved on stdout, and an `agent.trace` line couldn't be matched to the
+HTTP call that caused it. The middleware is in
+`backend/app/observability/request_context.py`, added in `app/main.py` as
+the outermost user middleware.
+
+| Piece | What it does |
+|---|---|
+| `RequestContextMiddleware` (pure ASGI) | One `request_id` per HTTP request and per WebSocket connection, bound into structlog contextvars, so every line logged downstream carries it with no call site passing it. Reset with the bind tokens afterwards, so nothing bleeds into the next request. |
+| `X-Request-ID` | A client-supplied id is kept only if it matches `^[A-Za-z0-9._-]{1,64}$`. Anything else (spaces, quotes, newlines, too long) is replaced with a uuid4 hex, so a client can't put free text into every log line. The id is echoed on the HTTP response and on the WebSocket accept. |
+| `session_id` binding | `handle_chat_message` binds it for the turn (text and voice both go through it). The voice handler also binds it for the connection's lifetime, so STT lines carry it. Both use `bound_contextvars`, which restores the previous value on exit. |
+| `request_completed` log line | One per HTTP request: `method`, `route` (the template, e.g. `/api/sessions/{session_id}/trace`, or `unmatched`), `status_code`, `duration_ms`. Logs alone now give RED per endpoint. Never the raw path, query string, or body. An unhandled exception is logged as 500. WebSockets get one `websocket_closed` line with route and duration. |
+
+Why pure ASGI and not `BaseHTTPMiddleware`: the latter runs the endpoint
+in a separate task, so contextvars bound inside don't come back out, and
+it buffers streaming responses. A plain ASGI wrapper runs in the request's
+own task.
+
+`request_completed` carries `request_id` but not `session_id`. The session
+binding is scoped to the turn inside the handler and is gone by the time
+the middleware logs. Join on `request_id` to get from the request line to
+the session's lines.
+
+Known gap: when an exception escapes to Starlette's `ServerErrorMiddleware`,
+the 500 it sends is produced outside this middleware, so that one response
+has no `X-Request-ID` header. Its `request_completed` line still has the
+id.
+
+**How to see it:** `curl -i -X POST localhost:8000/api/chat -H
+"Content-Type: application/json" -d '{"text":"list departments"}'`. The
+response has an `X-Request-ID` header, and every JSON line the backend
+printed for it (including `request_completed` with `"route": "/api/chat"`)
+has the same `request_id`.
+
+**Tests:**
+- `tests/e2e/test_request_correlation.py` (9 tests, real app): all lines of
+  a chat request share the echoed id; a safe incoming id is kept; unsafe
+  ones are replaced and never printed; no leak of `request_id` or
+  `session_id` between two sequential requests; a line logged inside the
+  routing carries the `session_id`; `request_completed` logs route
+  templates, never the patient-search query or path parameters.
+- `tests/unit/test_request_context.py` (12 tests, toy app): id validation,
+  an endpoint that raises is logged as 500, one id across a WebSocket
+  connection plus the accept header, prior bindings restored rather than
+  cleared.
+- `tests/integration/test_voice_websocket.py::test_voice_connection_log_lines_carry_request_and_session_id`:
+  the real voice handler's lines carry the connection's `request_id` and
+  `session_id`, and the accept carries the header.
+- Log lines are captured by the `captured_logs` fixture in
+  `tests/conftest.py`. It patches the `print` that structlog's
+  `PrintLogger` calls, so tests assert on the redacted JSON that really
+  reaches stdout.
 
 ## 3. Decisions
 

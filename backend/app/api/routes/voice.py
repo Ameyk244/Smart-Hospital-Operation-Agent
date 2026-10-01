@@ -60,6 +60,7 @@ control, a separate subagent) is built against exactly this event contract.
 """
 
 import numpy as np
+import structlog
 from fastapi import APIRouter, Depends
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
@@ -213,6 +214,26 @@ async def voice_stream(
     session_id: str,
     session_factory=Depends(get_session_factory),
     checkpointer=Depends(get_checkpointer),
+) -> None:
+    # The connection's session_id is bound for its whole lifetime, so the
+    # STT and error lines logged between utterances carry it too, not only
+    # the lines `handle_chat_message` logs. The connection's request_id is
+    # already bound by app/observability/request_context.py.
+    with structlog.contextvars.bound_contextvars(session_id=session_id):
+        await _serve_voice_connection(
+            websocket,
+            session_id=session_id,
+            session_factory=session_factory,
+            checkpointer=checkpointer,
+        )
+
+
+async def _serve_voice_connection(
+    websocket: WebSocket,
+    *,
+    session_id: str,
+    session_factory,
+    checkpointer,
 ) -> None:
     settings = get_settings()
     await websocket.accept()
