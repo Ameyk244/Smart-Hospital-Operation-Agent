@@ -22,7 +22,12 @@ from app.config import get_settings
 
 _settings = get_settings()
 
-engine = create_async_engine(_settings.database_url, echo=False, pool_pre_ping=True)
+# hide_parameters: SQLAlchemy otherwise puts bound values into error
+# messages ("[parameters: ('David Davis',)]"), and from there into logged
+# tracebacks. The values can be patient search text.
+engine = create_async_engine(
+    _settings.database_url, echo=False, pool_pre_ping=True, hide_parameters=True
+)
 
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
 

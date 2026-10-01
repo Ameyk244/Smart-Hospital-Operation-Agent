@@ -71,13 +71,43 @@ as each phase lands.
 
 | Phase | Scope | Status |
 |---|---|---|
-| 1 | PHI/secret redaction on existing trace + logs | Planned |
+| 1 | PHI/secret redaction on existing trace + logs | Done |
 | 2 | Request-ID middleware; `request_id`/`session_id` bound into structlog | Planned |
 | 3 | OTel metrics: routing counter, agent/tool/LLM, voice STT, both DB pools | Planned |
 | 4 | OTel traces: auto-instrumentation + manual spans along the request path | Planned |
 | 5 | `grafana/otel-lgtm` stack + checked-in dashboard, verified with real local traffic | Planned |
 | 6 | Audit record for `reschedule_appointment` (needs a migration, approval-gated) | Planned |
 | 7 | 2–3 SLIs/SLOs as dashboard panels | Planned |
+
+### Phase 1: PHI and secret redaction
+
+This came first so that later instrumentation is built on a non-leaky
+base. Everything is in `backend/app/observability/redaction.py`.
+
+| Leak | Fix |
+|---|---|
+| Free-text tool args in `agent_events.arguments_json` (`command_text`, preference values, raw args of rejected calls) | `record_event` runs a **fail-closed allowlist** over `arguments`: each allowed key has a required value shape (entity code, enum, ISO datetime, number, identifier). Anything else becomes `[REDACTED]`. Keys are kept so the trace still shows what was passed; non-identifier keys are dropped and counted. |
+| A model-invented `tool_name` on `unknown_tool` | Kept only if it's a plain identifier |
+| `/api/operations/patients?query=<name>` in uvicorn's access log | A `logging.Filter` on `uvicorn.access` replaces the query string |
+| Bound SQL parameters inside SQLAlchemy error text, and so inside logged tracebacks | `create_async_engine(..., hide_parameters=True)` |
+| API keys or the DB password in any log line | A structlog processor, run after exception formatting, scrubs the configured secret values from every field. It also redacts keys like `user_text`, `query`, `*_api_key`. |
+
+Entity codes are **kept** on purpose. They are pseudonymous internal keys
+the session has already been shown, and a trace without them can't be
+followed. Names, MRNs and free text are what gets removed.
+
+**How to see it:** run a `show patient <name>` turn through the agent. The
+trace panel shows `command_text: "[REDACTED]"`.
+
+**Tests:**
+- `tests/unit/test_redaction.py` (18 tests).
+- `tests/integration/test_trace_redaction.py`: a scripted agent turn
+  carries a real seeded patient's name through a successful lookup, a
+  wrong-field search, and an `invalid_argument` rejection. It asserts that
+  neither the full name nor the surname appears in the stored events or on
+  stdout. This test was confirmed to **fail** against the pre-Phase-1
+  `tracing.py`; there, the stored `command_text` contained the patient's
+  name.
 
 ## 3. Decisions
 

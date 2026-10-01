@@ -1258,3 +1258,9 @@ extra leak vectors in free-text tool args and in uvicorn's access log
 (patient-search query strings). All observability work, docs, and dashboard
 JSON live under `observability/`. Phases 1–7 land one commit each. The
 baseline suite before Phase 1 was 461 passed, 6 skipped.
+
+Phase 1 (PHI/secret redaction), done by the lead session directly:
+`agent_events` arguments now go through a fail-closed allowlist; the
+access log loses query strings; SQLAlchemy hides bound parameters; a
+structlog processor scrubs configured secrets. The leak test was confirmed
+to fail on the old `tracing.py`. Suite: 480 passed, 6 skipped.

@@ -37,7 +37,7 @@ Entries are updated as each phase lands.
 | Structured JSON events | Machine-parseable log lines | `logging_config.py` `JSONRenderer` | Core | Done (pre-existing) |
 | Contextual logging | Context bound once, carried on every line | `structlog.contextvars.merge_contextvars` (already configured; Phase 2 binds values) | Core | Planned (2) |
 | Request / correlation ID | Ties every line of one request together | Request-ID middleware | Core | Planned (2) |
-| Redaction / no PHI or secrets | Logs must never carry patient data or credentials | `app/observability/redaction.py` | Core | Planned (1) |
+| Redaction / no PHI or secrets | Logs must never carry patient data or credentials | `app/observability/redaction.py`: structlog processor + uvicorn access-log filter. See it with `pytest tests/unit/test_redaction.py -v` | Core | Done (1) |
 | Sampling, rotation, retention | Volume control | n/a at this traffic level | Light | Not built (by design) |
 
 ## Module 4: Metrics
@@ -100,8 +100,8 @@ Entries are updated as each phase lands.
 |---|---|---|---|---|
 | Dashboard as code | Reproducible dashboards | `observability/dashboards/*.json` | Core | Planned (5) |
 | Metric → trace → logs | The investigation path | Grafana exemplars → Tempo → Loki via `trace_id` | Core | Planned (4/5) |
-| PHI redaction / allowlisting | | `redaction.py`, fail-closed allowlist | Core | Planned (1) |
-| Secrets out of logs | | Secret-value scrubbing processor | Core | Planned (1) |
+| PHI redaction / allowlisting | Store only fields proven safe, not everything except known-bad ones | `redaction.redact_arguments` on every `agent_events` write. See it: trace panel shows `command_text: "[REDACTED]"` after a `show patient` tool call; `tests/integration/test_trace_redaction.py` | Core | Done (1) |
+| Secrets out of logs | Credentials never in telemetry | `redaction.make_log_redactor` scrubs API keys + DB password from every field incl. tracebacks; `hide_parameters=True` on the engine | Core | Done (1) |
 | Observability vs audit logs | Sampled, operator-facing vs complete, who/what/before/after | `reschedule_appointment` audit table | Core | Planned (6) |
 | Telemetry cost / retention tuning | | n/a locally | Theory | Not built (by design) |
 

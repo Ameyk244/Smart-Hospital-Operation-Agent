@@ -6,6 +6,11 @@ default `print`-style logging. Separate from `AgentEvent` (the DB-backed
 trace `app/observability/tracing.py` writes): this is for operational logs
 (every request, every error); the DB trace is for the UI's per-session trace
 panel. They overlap in content but serve different readers.
+
+Every line passes through `redaction.make_log_redactor` last, just before
+rendering, so that no log line carries a credential or a known free-text
+field. The uvicorn access log gets a filter that drops query strings (see
+`app/observability/redaction.py`).
 """
 
 import logging
@@ -14,6 +19,11 @@ import sys
 import structlog
 
 from app.config import get_settings
+from app.observability.redaction import (
+    AccessLogQueryStringFilter,
+    make_log_redactor,
+    secret_values_from_settings,
+)
 
 
 def configure_logging() -> None:
@@ -28,6 +38,7 @@ def configure_logging() -> None:
             structlog.processors.TimeStamper(fmt="iso"),
             structlog.processors.StackInfoRenderer(),
             structlog.processors.format_exc_info,
+            make_log_redactor(secret_values_from_settings(settings)),
             structlog.processors.JSONRenderer(),
         ],
         wrapper_class=structlog.make_filtering_bound_logger(
@@ -36,6 +47,9 @@ def configure_logging() -> None:
         logger_factory=structlog.PrintLoggerFactory(),
         cache_logger_on_first_use=True,
     )
+    access_logger = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, AccessLogQueryStringFilter) for f in access_logger.filters):
+        access_logger.addFilter(AccessLogQueryStringFilter())
 
 
 def get_logger(name: str) -> structlog.BoundLogger:

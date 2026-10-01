@@ -163,6 +163,25 @@ Expected rejection in a fresh session:
 Move appointment APT-9999 to scanner SCN-9999.
 ```
 
+### What the trace stores (redaction)
+
+Every `agent_events.arguments_json` value goes through a fail-closed
+allowlist (`app/observability/redaction.py`) before it is stored.
+
+- **Kept:** entity codes (`PT-1001`, `APT-2001`, `SCN-1`, `DEPT-RAD`),
+  upper-case enums (`MRI`, `DELAYED`), ISO datetimes, counts, and the seven
+  Jev keys.
+- **Replaced with `[REDACTED]`:** free text, including
+  `execute_command.command_text`, preference keys and values, and anything
+  under an unrecognised key.
+- **Replaced with `[REDACTED]`:** any allowlisted key whose value has the
+  wrong shape. A name passed as `patient_code` is redacted.
+
+The trace panel therefore shows `command_text: "[REDACTED]"` for a
+`show patient <name>` tool call. Uvicorn's access log drops query strings,
+so `/api/operations/patients?query=…` is logged without the search text.
+Adding a key to the allowlist states that its values can never carry PHI.
+
 ## 6. Routing Rules
 
 | Input | Result | LLM cost |

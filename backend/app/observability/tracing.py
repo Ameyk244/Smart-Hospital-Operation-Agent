@@ -10,6 +10,11 @@ reasoning/chain-of-thought — only what was requested, decided, and the
 outcome, per the master prompt's explicit prohibition on capturing private
 reasoning.
 
+`arguments` and `tool_name` go through the fail-closed allowlist in
+`app/observability/redaction.py` before they are stored. Free text such as
+patient names never reaches `agent_events` (and so never reaches the trace
+panel), whichever call site passed it.
+
 What calls it: `app/agent/graph.py`'s agent_node and tool_node, once per
 decision point.
 """
@@ -21,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models.agent import EventStatus
 from app.db.repositories.event_repository import EventRepository
 from app.observability.logging_config import get_logger
+from app.observability.redaction import redact_arguments, redact_tool_name
 
 _logger = get_logger("agent.trace")
 
@@ -37,6 +43,8 @@ async def record_event(
     latency_ms: int | None = None,
     error_category: str | None = None,
 ) -> None:
+    tool_name = redact_tool_name(tool_name)
+    arguments = redact_arguments(arguments)
     await EventRepository(session).record(
         session_id=session_id,
         round_num=round_num,
