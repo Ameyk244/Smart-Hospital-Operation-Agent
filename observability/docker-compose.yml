@@ -1,0 +1,53 @@
+# Local observability stack for the Smart Hospital Operations Agent
+# (observability Phase 5). See observability/README.md, "Phase 5: The stack".
+#
+# Opt-in and standalone: it is NOT part of the root docker-compose.yml, and
+# the app runs fine without it (telemetry is off unless OTEL_ENABLED=true).
+#
+#   docker compose -f observability/docker-compose.yml up -d     # start
+#   docker compose -f observability/docker-compose.yml down      # stop, keep data
+#   docker compose -f observability/docker-compose.yml down -v   # stop, wipe data
+#
+# One container: the OpenTelemetry Collector (OTLP in), Prometheus (metrics),
+# Tempo (traces), Loki (logs) and Grafana, all self-hosted, no account, no key.
+name: hospital-ops-observability
+
+services:
+  lgtm:
+    # Pinned, not `latest`: 0.34.0 was the newest release on 2026-10-01
+    # (Grafana 13.2.2, Prometheus 3.14.0, Tempo 3.0.3, Loki 3.7.8,
+    # Collector 0.161.0). The dashboard JSON, the provisioning path and the
+    # datasource UIDs (prometheus / tempo / loki) were verified against this
+    # exact tag; bump it deliberately and re-run the verification.
+    image: grafana/otel-lgtm:0.34.0
+    container_name: hospital_ops_lgtm
+    ports:
+      # Bound to localhost only: Grafana runs with anonymous Admin access
+      # (the image default), which must not be reachable from the LAN.
+      # Host 3000 is taken by another local project, hence 3001.
+      - "127.0.0.1:${GRAFANA_PORT:-3001}:3000"
+      - "127.0.0.1:4317:4317" # OTLP gRPC
+      - "127.0.0.1:4318:4318" # OTLP HTTP (what the backend exports to)
+    volumes:
+      # Every component (Prometheus TSDB, Tempo WAL/blocks, Loki chunks,
+      # Grafana's database) writes under /data, per the image's docs
+      # ("Persist data across container instantiation").
+      - lgtm-data:/data
+      # Dashboard as code, using the image's documented "Add custom
+      # dashboards" mechanism: a file provider YAML next to the image's own,
+      # pointing at a folder the checked-in JSON is mounted into. Read-only:
+      # edits in the UI are not saved back; change the JSON file instead.
+      - ./grafana/dashboards-provisioning.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/hospital-ops.yaml:ro
+      - ./dashboards:/otel-lgtm/grafana/conf/provisioning/dashboards/hospital-ops:ro
+    environment:
+      # OTLP counters carry a start time. With this flag Prometheus writes a
+      # zero sample at that start time, so a counter's FIRST increment is
+      # visible to rate()/increase(). Without it, a series whose first
+      # sample is already 1 (one llm_timeout, one dropped voice connection)
+      # shows an increase of 0 until it happens a second time.
+      PROMETHEUS_EXTRA_ARGS: "--enable-feature=created-timestamp-zero-ingestion"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /otel-lgtm/grafana/conf/provisioning/dashboards/hospital-ops/hospital-ops.json
+    restart: "no"
+
+volumes:
+  lgtm-data:

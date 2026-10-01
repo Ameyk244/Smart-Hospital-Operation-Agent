@@ -75,7 +75,7 @@ as each phase lands.
 | 2 | Request-ID middleware; `request_id`/`session_id` bound into structlog | Done |
 | 3 | OTel metrics: routing counter, agent/tool/LLM, Jev, voice STT + CPU, HTTP RED, SQLAlchemy pool gauge + checkpointer operation timing | Done |
 | 4 | OTel traces: auto-instrumentation + manual spans along the request path; trace_id on logs; OTLP log export | Done |
-| 5 | `grafana/otel-lgtm` stack + checked-in dashboard, verified with real local traffic | Planned |
+| 5 | `grafana/otel-lgtm` stack + checked-in dashboard, verified with real local traffic | Done |
 | 6 | Audit record for `reschedule_appointment` (needs a migration, approval-gated) | Planned |
 | 7 | 2–3 SLIs/SLOs as dashboard panels | Planned |
 
@@ -189,6 +189,9 @@ to the 5 s export timeout.
 rewrites them: dots become underscores, the unit is appended, and counters
 get `_total`. So `chat.requests` appears as `chat_requests_total`, and
 `llm.call.duration` (unit `s`) appears as `llm_call_duration_seconds_*`.
+Verified against the running stack in Phase 5, with one addition: the
+unit-`1` gauge `checkpointer.connection.up` appears as
+`checkpointer_connection_up_ratio`.
 
 | Metric | Type | Attributes | Question it answers |
 |---|---|---|---|
@@ -328,11 +331,15 @@ Tempo, once Phase 5 runs the stack):
    `tool.execute` shows its SQL spans underneath, so DB time is visible.
    A `tool.error_category` of `grounding_rejected` is the model using an
    unseen code.
-4. Copy the `trace_id` into Loki to get every log line of that request.
-   OTLP log attributes land as structured metadata, so the query is
-   `{service_name="hospital-ops-backend"} | trace_id="<id>"`. Phase 5
-   verifies the exact label names against the running stack. In the other
-   direction, every log line written inside a span has `trace_id`.
+4. Copy the `trace_id` into Loki to get every log line of that request:
+   `{service_name="hospital-ops-backend"} | trace_id="<id>"`. Verified in
+   Phase 5 against Loki 3.7.8: the only index labels are `service_name`,
+   `service_instance_id` and `deployment_environment_name` (promoted
+   resource attributes); every other field of the log line (`trace_id`,
+   `span_id`, `session_id`, `request_id`, `tool_name`, ...) is structured
+   metadata, so it is filtered with `| key="value"` after the selector, not
+   inside `{}`. In the other direction, every log line written inside a span
+   has `trace_id`, and Grafana links it to Tempo.
 
 **Design decisions:**
 - **Rounds span two graph nodes.** A round's model call happens in
@@ -440,11 +447,343 @@ redacting exporter):
   the call sites themselves never put the name on a span. It guards the
   call sites, and the FastAPI test guards the exporter.
 
+### Phase 5: The stack
+
+One local container collects all three signals, and one checked-in dashboard
+reads them. The dashboard was verified by running real, free, local traffic
+through the real app and querying every panel through Grafana's HTTP API.
+
+| Piece | Where |
+|---|---|
+| Stack: `grafana/otel-lgtm:0.34.0`, standalone compose project `hospital-ops-observability` | `observability/docker-compose.yml` |
+| Dashboard provider (file provider, folder "Hospital Ops", UI edits not saved) | `observability/grafana/dashboards-provisioning.yaml` |
+| The dashboard (uid `hospital-ops`), also Grafana's home dashboard | `observability/dashboards/hospital-ops.json` |
+| Traffic generator | `observability/scripts/generate_traffic.py` |
+
+**The image.** Pinned to `0.34.0`, the newest release on 2026-10-01
+(Grafana 13.2.2, Prometheus 3.14.0, Tempo 3.0.3, Loki 3.7.8, OTel Collector
+0.161.0), not `latest`: the provisioning path, the datasource UIDs and the
+Prometheus name translation were all verified against this exact tag. Bump
+it on purpose and re-run the verification below.
+
+**Ports**, all bound to `127.0.0.1` only:
+
+| Host | Container | What |
+|---|---|---|
+| `${GRAFANA_PORT:-3001}` | 3000 | Grafana. Host 3000 is taken by another local project |
+| 4317 | 4317 | OTLP gRPC (unused by this app) |
+| 4318 | 4318 | OTLP HTTP: the backend exports here (`OTEL_EXPORTER_OTLP_ENDPOINT` default) |
+
+Prometheus (9090), Tempo (3200) and Loki (3100) are **not** published. Every
+query goes through Grafana, either the UI or its datasource proxy
+(`/api/datasources/proxy/uid/<uid>/...`).
+
+**Provisioning**, using the image's documented "Add custom dashboards"
+mechanism, as read-only mounts:
+- `grafana/dashboards-provisioning.yaml` →
+  `/otel-lgtm/grafana/conf/provisioning/dashboards/hospital-ops.yaml`, a
+  file provider next to the image's own `grafana-dashboards.yaml`;
+- `dashboards/` → `/otel-lgtm/grafana/conf/provisioning/dashboards/hospital-ops/`,
+  the folder that provider reads.
+
+Grafana rescans every 30 s, so an edited JSON file shows up without a
+restart. The datasources are the image's own (`conf/provisioning/datasources/grafana-datasources.yaml`).
+Their UIDs, read from the running Grafana's `/api/datasources`, are
+`prometheus`, `tempo` and `loki`, and the dashboard uses those. The image
+already links them:
+- Prometheus exemplars (`trace_id`) → Tempo;
+- Tempo → Loki "logs for this trace/span", with the query
+  `{service_name="hospital-ops-backend"} | trace_id = "<id>"`;
+- Loki → Tempo, a derived field on `trace_id`.
+
+The Tempo → Loki query is exactly the query verified below. No datasource
+change was needed, so none is mounted.
+
+**Persistence.** A named volume `lgtm-data` is mounted at `/data`, where every
+component writes (Prometheus TSDB, Tempo WAL and blocks, Loki chunks,
+Grafana's database). Checked: after `docker compose restart` the counts were
+unchanged: 204 `chat.handle` traces in Tempo, 892 log records in Loki, and
+204 chat requests in Prometheus. `down -v` wipes it.
+
+**One Prometheus flag.** `PROMETHEUS_EXTRA_ARGS=--enable-feature=created-timestamp-zero-ingestion`.
+OTLP counters carry a start time, and with this flag Prometheus writes a
+zero sample at that time. Without it, a counter series whose first sample
+is already 1 (one `llm_timeout`, one dropped voice connection in a fresh
+process) shows `increase()` = 0 until the event happens a second time, so
+rare events would be invisible on the dashboard. Checked with a probe
+counter: the series starts `0, 1` with the flag.
+
+**Login.** Anonymous access is on, with the Admin role (the image's
+default), so <http://localhost:3001> opens straight to the dashboard. The
+`admin` / `admin` login also works. This is acceptable only because the
+ports are bound to localhost.
+
+#### Running it
+
+```sh
+# start (the image is ~0.9 GB on disk); ready when `docker logs hospital_ops_lgtm` says "up and running"
+docker compose -f observability/docker-compose.yml up -d
+# stop, keeping the data
+docker compose -f observability/docker-compose.yml down
+# stop and wipe all telemetry
+docker compose -f observability/docker-compose.yml down -v
+```
+
+Different Grafana port: `GRAFANA_PORT=3002 docker compose -f observability/docker-compose.yml up -d`.
+
+**Turning export on for the real app.** Set `OTEL_ENABLED=true` in
+`backend/.env`, or in the environment, which wins over `.env`. Then start the
+backend as usual (`uvicorn app.main:app`). The endpoint defaults to
+`http://localhost:4318`, and metrics export every 15 s
+(`OTEL_METRIC_EXPORT_INTERVAL_MS`). The setting is read when `app.main` is
+imported, so restart the backend after changing it. With the stack down, the
+app still works; exports just fail in the background. The test suite forces
+`OTEL_ENABLED=false` whatever `.env` says.
+
+#### The traffic generator
+
+```sh
+# from the repo root, stack up; ~1.5 min; prints session and request ids at the end
+backend/.venv/Scripts/python.exe observability/scripts/generate_traffic.py
+# options: --iterations N (default 3), --pause SECONDS (default 20), --no-voice, --endpoint URL
+```
+
+It runs the **real app in-process**: a Starlette `TestClient` entered as a
+context manager, so the real lifespan builds the real checkpointer. The
+WebSocket goes through the same client. Before `app.main` is imported, it
+sets `OTEL_ENABLED=true` and `OTEL_METRIC_EXPORT_INTERVAL_MS=5000`. Every
+request goes through the real middleware, routing, `CommandRunner`, agent
+graph, tools, local faster-whisper STT and the dev database. Leaving the
+client block runs the lifespan exit, which calls `shutdown_telemetry()` and
+flushes all three signals before the process ends.
+
+**No paid call can happen**, by construction:
+- `ENABLE_JEV_FAST_PATH=false`, and `TYPESAFE_API_KEY`, `ANTHROPIC_API_KEY`
+  and `OPENROUTER_API_KEY` are set to empty in the environment. The script
+  asserts all of these before sending anything.
+- `app.api.routes.chat.get_default_chat_model` is replaced by a queue of
+  scripted models (`FakeMessagesListChatModel`, the
+  `tests/integration/test_agent_loop.py` pattern). An agent turn with nothing
+  queued raises instead of falling back.
+- `app.agent.providers.factory.get_provider`, the only code that builds a
+  real model, is patched to raise.
+- Jev turns use a fake `typesafe_sdk` module in `sys.modules` (the
+  `tests/conftest.py` pattern), with the flag turned on per request and a
+  dummy key.
+- `HF_HUB_OFFLINE=1`: the cached Whisper model is used without asking the
+  Hub.
+
+**It never calls `reschedule_appointment`**, the only mutating tool. Its
+hospital-data access is read-only. It writes the normal per-session rows
+(sessions, messages, agent events, checkpoints, grounding), all under
+session ids `obs-traffic-<run>-<n><label>`.
+
+Each iteration sends:
+- **Parser and gates:** 5 parser hits, including `show patient Anthony
+  Martin`, a real seeded name; 1 off-topic (`domain_rejected`); 1 over-long
+  message (`ineligible`).
+- **Operations:** departments, scanners, appointments, a patient search
+  `?query=Anthony Martin`, a 404 on an unknown path, and `/api/cost-comparison`.
+- **Jev, through the fake SDK:** matched; declined → agent; failed → agent.
+- **Scripted agent turns:**
+  - a 4-round search: appointments → scanners → `get_scanner_availability`
+    on a grounded code → answer;
+  - a grounding rejection (an unseen `SCN-7`);
+  - an unknown tool plus an invalid argument;
+  - `execute_command("show patient David Davis")`;
+  - `too_many_invalid_calls`;
+  - `max_rounds_exceeded` (`max_agent_rounds=2` for that turn);
+  - `llm_timeout` (a model slower than a 1 s timeout);
+  - a tool timeout (a real search with a 0 s budget);
+  - a provider exception (`route=error`, HTTP 500).
+- **Voice:** one connection streaming the WAV fixture twice. The transcript
+  doesn't match the parser's word order and Jev is off, so each is a
+  scripted agent turn with `channel=voice`. The connection is held open past
+  one export so the open-connections gauge reads 1. Then one connection
+  drops mid-utterance.
+
+#### The dashboard: "Hospital Ops"
+
+Every Prometheus query filters on `service_name="hospital-ops-backend"`.
+Rates use `$__rate_interval`. "Totals" panels use `increase(...[$__range])`,
+which Prometheus extrapolates to the window edges, so they read e.g. 3.08
+for 3 events. Set the time range to cover the traffic.
+
+| Row | Panel | Question it answers | Query (abridged) |
+|---|---|---|---|
+| API (RED) | Request rate by endpoint | How busy is each endpoint? | `sum by (http_route) (rate(http_server_request_duration_seconds_count[..]))` |
+| | 5xx error share | What share of responses are server errors? | 5xx rate / all rate (`or vector(0)` so 0 shows as 0) |
+| | /api/chat latency p50/p95/p99 | How long do chat requests take? Exemplar dots link to traces | `histogram_quantile(q, sum by (le) (rate(..._bucket{http_route="/api/chat"}[..])))` |
+| | Responses by status code | Which status codes, and how many 4xx vs 5xx? | `sum by (http_response_status_code) (rate(..._count[..]))` |
+| | Voice: open WebSocket connections | How many voice sessions are open? | `sum(voice_connections_active)` |
+| | Voice: utterances by outcome | Do utterances reach routing or fail in STT/VAD? | `sum by (outcome) (increase(voice_utterances_total[$__range]))` |
+| | Voice: dropped mid-utterance | How often is audio lost to a disconnect? | `sum(increase(voice_connections_dropped_total[$__range]))` |
+| Routing mix | Parser hit rate / Jev hit rate / LLM fallback rate / Gate rejection rate / Chat turn errors / Voice share | What share of turns each path answered (LLM fallback = `route="agent"`) | `sum(increase(chat_requests_total{route=~".."}[$__range])) / sum(increase(chat_requests_total[$__range]))` |
+| | Chat turns per second by route | Routing mix over time (stacked) | `sum by (route) (rate(chat_requests_total[..]))` |
+| | Route share over time | The same, as shares stacking to 100% | per-route rate / `scalar(` total rate `)` |
+| | Chat turns by route and channel | E.g. how many voice turns needed the agent | `sum by (route, channel) (increase(...))` |
+| | Chat turn latency p95 by route | Parser ms vs agent seconds | `histogram_quantile(0.95, sum by (le, route) (rate(chat_request_duration_seconds_bucket[..])))` |
+| Agent | Rounds per agent turn | Distribution of rounds; is the loop limit doing the stopping? | `sum by (le) (increase(agent_rounds_bucket[$__range]))`, heatmap format |
+| | Agent terminations by type | How turns end: completed vs the four cut-offs | `sum by (termination) (increase(agent_terminations_total[..]))` |
+| | Tool calls by tool and status | Which tools run, succeed, fail, get rejected | `sum by (tool_name, status) (increase(agent_tool_calls_total[..]))` |
+| | Tool failures and rejections by category | Grounding rejections, invalid args, unknown tools, timeouts | `... {error_category!="none"}` by `error_category` |
+| | LLM call latency p95 | Model latency, overall and per status | `histogram_quantile(0.95, ... llm_call_duration_seconds_bucket ...)` |
+| | LLM calls per second by status | Model timeout and error rate | `sum by (status) (rate(llm_call_duration_seconds_count[..]))` |
+| | LLM tokens | Token spend, by type and model | `sum by (token_type, model) (increase(llm_tokens_total[..]))` |
+| | Tool latency p95 by tool | Which tool is slow (its SQL is in the trace) | `... agent_tool_duration_seconds_bucket` by `tool_name` |
+| Jev | Consultations by outcome / latency p95 / tokens | How often Jev saves an agent turn, its latency and spend | `jev_consultations_total`, `jev_duration_seconds_bucket`, `jev_tokens_total` |
+| Voice STT and CPU | STT duration p95 | Local Whisper latency per utterance | `... stt_duration_seconds_bucket` by `status` |
+| | STT real-time factor | Is STT slower than speech (above the dashed line at 1)? | p95 of `stt_real_time_factor_bucket`, and mean = sum/count |
+| | Process CPU (cores) | USE utilization of each backend process | `sum by (instance) (rate(process_cpu_time_seconds_total[..]))` |
+| Database | SQLAlchemy pool connections | Pool saturation: checked out vs size | `clamp_min(max by (state) (db_pool_connections{pool="sqlalchemy"}), 0)` |
+| | Checkpointer operation latency p95 | Checkpointer saturation (includes its lock wait) | `... checkpointer_operation_duration_seconds_bucket` by `operation` |
+| | Checkpointer connection open | Is the checkpointer's connection up, per process? | `max by (instance) (checkpointer_connection_up_ratio)` |
+| Traces and logs | Recent chat turns (Tempo) | Find a request; click its trace ID to open it, or to filter the logs below | TraceQL `{resource.service.name="hospital-ops-backend" && name="chat.handle"} \| select(span.chat.route, span.chat.channel)` |
+| | Agent tool calls that were rejected or failed (Tempo) | What the agent tried that the system refused | TraceQL: `tool.execute` with `tool.error_category!="none"`, or `llm.status="timeout"` |
+| | Backend logs (Loki) | The redacted log lines, all of them or one trace's (the `trace_id` box at the top) | `{service_name="hospital-ops-backend"} \| trace_id=~"${trace_id:regex}.*"` |
+| SLOs: reserved for Phase 7 | (empty, collapsed) | Phase 7 adds 2–3 SLI/SLO panels here | |
+
+Prometheus names, checked against the running stack's
+`/api/v1/label/__name__/values`. The rules in Phase 3 hold: dots become
+underscores, the unit is appended (`_seconds`), and counters get `_total`.
+Two details the rules didn't spell out:
+- `checkpointer.connection.up`, a gauge with unit `1`, becomes
+  **`checkpointer_connection_up_ratio`**.
+- The `stt.real_time_factor` and `agent.rounds` histograms get no unit
+  suffix.
+
+Attribute names become labels the same way (`http.route` → `http_route`).
+`service.name`, `service.instance.id`, `service.version` and
+`deployment.environment.name` are promoted to labels. Every backend process
+gets a new `service_instance_id` (also `instance`). That is why the gauges
+aggregate with `max by` and the CPU and checkpointer panels show one line
+per process.
+
+#### Investigating: metric → trace → logs
+
+The walkthrough for "why was this chat slow / why did it go to Sonnet":
+1. **Metric.** On *Chat turn latency p95 by route* or */api/chat latency*,
+   hover an exemplar dot near the spike. It carries the `trace_id` of one
+   real request in that bucket; click "Query with Tempo". Without
+   exemplars, use *Recent chat turns* and pick a turn by its route.
+2. **Trace.** The span tree shows where the time went: the gate spans
+   (`parser.matched=false`, `domain_gate.in_domain`), `agent.run`
+   (`agent.rounds`, `agent.termination`), each `agent.round` with its
+   `llm.invoke` and `tool.execute`, SQL under each tool, and the
+   `checkpointer.*` spans. For refusals, start from *Agent tool calls that
+   were rejected or failed*.
+3. **Logs.** In the trace view, "Logs for this span" opens Loki with that
+   trace's lines. On the dashboard, click "Show this trace's logs below" on
+   a trace ID to fill the `trace_id` box. Every line also carries
+   `session_id` and `request_id`, so you can widen from one request to the
+   whole session: `{service_name="hospital-ops-backend"} | session_id="<id>"`.
+
+The unknown-unknowns case: a question nobody built a panel for (say, "do
+grounding rejections cluster in one session?") can still be answered from
+spans and logs that already exist, with TraceQL or LogQL in Explore. No
+new instrumentation is needed. That is the difference between this and
+monitoring.
+
+#### Verification (2026-10-01, stack 0.34.0)
+
+Run: `generate_traffic.py` with defaults (3 iterations, 20 s apart), then
+every panel's query was sent to Grafana's `/api/ds/query` on port 3001, with
+the time range covering the run. **No panel was empty.** Exact counter
+values for that run's process (read with `max_over_time` on its `instance`,
+so no extrapolation):
+
+| Metric | Result |
+|---|---|
+| `chat_requests_total` | parser 15, domain_rejected 3, ineligible 3, jev 3, agent 30 (text) + 6 (voice), error 3 |
+| `http_server_request_duration_seconds_count` | `/api/chat` 200 ×54 and 500 ×3; each operations route and `/api/cost-comparison` 200 ×3; `unmatched` 404 ×3 |
+| `agent_terminations_total` | completed 27, too_many_invalid_calls 3, max_rounds_exceeded 3, llm_timeout 3 |
+| `agent_tool_calls_total` | search_appointments success 15 / failure (timeout) 3; search_scanners 6; get_scanner_availability success 3, grounding_rejected 3, invalid_argument 3; execute_command 3; unknown/unknown_tool 12 |
+| `llm_call_duration_seconds_count` | ok 66, timeout 3, error 3. `llm_tokens_total`: input 82,500, output 2,190 |
+| `jev_consultations_total` | matched 3, declined 3, failed 3. `jev_tokens_total`: input 2,100, output 30 (fake SDK) |
+| `voice_utterances_total` | routed 6. `voice_connections_dropped_total`: 3. `voice_connections_active` peaked at 1 |
+| `stt_duration_seconds` | 6 utterances, mean 0.68 s, p95 ≈ 2.05 s (the first includes model load); mean real-time factor 0.18 |
+| `checkpointer_operation_duration_seconds_count` | get_tuple 114, put 207, put_writes 153. `checkpointer_connection_up_ratio`: 1 |
+| `db_pool_connections` | size 5, checked_out 0 (between requests) |
+| Derived (dashboard stats) | parser hit rate 23.8%, LLM fallback 57.1%, Jev 4.8%, gate rejections 9.5%, errors 4.8%, voice 9.5%, 5xx share 4.0% |
+
+Exemplars: `http_server_request_duration_seconds`,
+`chat_request_duration_seconds` and `llm_call_duration_seconds` all carry
+`trace_id`/`span_id` exemplars (91, 69 and 23 in the first hour).
+
+**One trace, end to end.** The 4-round search turn, `request_id`
+`3fca22c6f697470ab4c191991b572618`, is found in Tempo with
+`{span.request_id="3fca22c6..."}` → trace `b094f638c029087832d1a9c5b28ab59e`,
+200 spans:
+
+```
+POST /api/chat [1081 ms]  request_id=3fca22c6...
+└─ chat.handle [1079 ms]  chat.route=agent, chat.channel=text, session.id=obs-traffic-9e4bbd-32multi-roun
+   ├─ domain_gate.check (in_domain=true) · parser.parse (matched=false) · eligibility.check (eligible=true)
+   ├─ checkpointer.get_tuple, SQL
+   └─ agent.run [872 ms]  agent.rounds=4, agent.termination=completed
+      ├─ agent.round 1 → llm.invoke (ok, 1200 input tokens) → tool.execute search_appointments (success) → SQL
+      ├─ agent.round 2 → llm.invoke (ok)                    → tool.execute search_scanners (success) → SQL
+      ├─ agent.round 3 → llm.invoke (ok)                    → tool.execute get_scanner_availability (success) → SQL
+      ├─ agent.round 4 → llm.invoke (ok, final answer)
+      └─ checkpointer.put / put_writes (×n), agent_events INSERTs
+```
+
+Loki, `{service_name="hospital-ops-backend"} | trace_id="b094f638c029087832d1a9c5b28ab59e"`,
+returns **12 lines**: `agent_invoked`, `llm_response` and `tool_executed`
+for rounds 1–3, then `agent_invoked` and `llm_response` for round 4, then
+`request_completed` (`route=/api/chat`). Every line carries the same
+`trace_id`, `request_id` and `session_id`. The dashboard's log panel, with
+the `trace_id` box set to that id, returns the same 12 lines.
+
+**PHI check.** Each traffic run sent two real seeded names, each three
+times:
+- `Anthony Martin`, as a parser `show patient` and as the patient-search
+  query string;
+- `David Davis`, inside an agent `execute_command`.
+
+After two full runs, the check fetched in full every trace Grafana's ranged
+Tempo query returned for the service over the last 2 h: **365 traces,
+22,721 spans**. That set includes all **24** requests that carried a name,
+each looked up by `request_id`. It also fetched every Loki record in the
+window with its structured metadata: **1,181 records**. All of it was
+searched, case-insensitively, for `Anthony Martin`, `David Davis`, their
+`+` and `%20` URL forms, and the bare surnames `Martin` and `Davis`.
+**0 hits in both.** As a control, the patient-search span keeps
+`http.target` and `http.url` as `/api/operations/patients` with the query
+string stripped, and its `request_completed` line carries only the route.
+(Tempo's `/api/search` without `start`/`end` covers only recent traces.
+Enumerate through Grafana's `/api/ds/query`, which sends the time range.)
+
+#### Findings from verification (reported, not fixed in Phase 5)
+
+- **`db.pool.connections{state="overflow"}` goes negative.** The gauge
+  reports SQLAlchemy's raw `QueuePool.overflow()`, which is `_overflow`. That
+  value starts at `-pool_size` and rises as connections are opened, so it
+  read **-4** with a pool of 5. The panel clamps at 0. The fix belongs in
+  `metrics.observe_sqlalchemy_pool`: report `max(0, pool.overflow())`.
+- **Agent log lines carry `agent.run`'s `span_id`**, not the `agent.round` or
+  `tool.execute` span they describe. Trace-level linking works fully. Span-level
+  "logs for this span" on a `tool.execute` span finds nothing.
+- **The last `agent.round` span includes post-round work.** It is ended by
+  `run_agent`'s `finally`, so round 4 above lasts 784 ms although its
+  `llm.invoke` took ~0 ms. The time is the final checkpoint writes. Read the
+  last round's width with that in mind.
+
 ## 3. Decisions
 
 - **Stack location: `observability/docker-compose.yml`, separate from the
-  root compose file.** The app must run with telemetry absent, so the stack
-  is opt-in rather than a dependency of `postgres`. Phase 5 finalizes this.
+  root compose file (final, Phase 5).** The app must run with telemetry
+  absent, so the stack is opt-in rather than a dependency of `postgres`:
+  `docker compose up` at the root never starts it, and stopping it never
+  touches the database container. It has its own compose project name
+  (`hospital-ops-observability`) and its own volume, so `down -v` on it
+  wipes only telemetry. It is one container (`grafana/otel-lgtm`) rather
+  than five separate services because, at this scale, the bundled
+  Collector → Prometheus/Tempo/Loki → Grafana wiring and its pre-linked
+  datasources are exactly what is needed, and the image's documented
+  extension points (a `/data` volume, a dashboard provider file,
+  `*_EXTRA_ARGS`) cover every customization made here. Its ports are bound
+  to `127.0.0.1` only, because Grafana runs with anonymous Admin access.
 - **`agent_events` stays as it is.** It is a product feature (the UI trace
   panel). OTel adds operator-facing telemetry alongside it and replaces
   nothing.

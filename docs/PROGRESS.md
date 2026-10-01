@@ -1322,3 +1322,23 @@ new empty `audit_log` table and the version bump; every other table's row
 count is unchanged, checkpoint tables included. Known limit: the trigger is
 row-level, so it blocks UPDATE/DELETE but not TRUNCATE by the table owner.
 Suite: 534 passed, 6 skipped.
+
+Phase 5 (the stack), delegated to one `general-purpose` subagent scoped to
+`observability/` and reviewed by the lead:
+- `grafana/otel-lgtm:0.34.0` runs from `observability/docker-compose.yml`,
+  bound to localhost, with Grafana on port 3001.
+- The dashboard `observability/dashboards/hospital-ops.json` is
+  provisioned read-only.
+- A free traffic script runs the real app in-process with scripted models
+  and the fake Jev SDK. All keys are blanked and the real provider is
+  patched to raise. It never calls `reschedule_appointment`.
+
+Every panel query returned data. The lead re-checked against the running
+stack: the dashboard is provisioned, the route counters hold data, and Loki
+has 287 `agent_invoked` lines but 0 lines containing either test patient's
+name or surname.
+
+Three app telemetry bugs were reported and fixed in the next commit:
+- the pool overflow gauge goes negative;
+- agent log lines carry `agent.run`'s span id instead of the tool's;
+- the last `agent.round` span absorbs the final checkpoint writes.

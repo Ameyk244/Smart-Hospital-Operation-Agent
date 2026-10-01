@@ -1,0 +1,16 @@
+# Grafana dashboard provider for the checked-in dashboards in
+# observability/dashboards/. Mounted read-only by
+# observability/docker-compose.yml into the otel-lgtm image's provisioning
+# folder, next to the image's own provider file.
+apiVersion: 1
+
+providers:
+  - name: "Hospital Ops"
+    folder: "Hospital Ops"
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /otel-lgtm/grafana/conf/provisioning/dashboards/hospital-ops
+      foldersFromFilesStructure: false

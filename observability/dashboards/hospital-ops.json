@@ -1,0 +1,2176 @@
+{
+  "uid": "hospital-ops",
+  "title": "Hospital Ops",
+  "description": "Smart Hospital Operations Agent: RED, routing mix, agent, Jev, voice/CPU, DB, traces and logs. Provisioned from observability/dashboards/hospital-ops.json; edit the file, not the UI.",
+  "tags": [
+    "hospital-ops",
+    "observability"
+  ],
+  "timezone": "browser",
+  "editable": false,
+  "graphTooltip": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "schemaVersion": 41,
+  "version": 1,
+  "links": [],
+  "annotations": {
+    "list": []
+  },
+  "templating": {
+    "list": [
+      {
+        "type": "textbox",
+        "name": "trace_id",
+        "label": "trace_id (filters the log panel)",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "hide": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "id": 1,
+      "title": "API: rate, errors, duration (RED)",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 2,
+      "title": "Request rate by endpoint",
+      "description": "Rate: HTTP requests per second, per route template (`http.route`; `unmatched` = no route, e.g. a 404 on an unknown path). From `http.server.request.duration` recorded by the request middleware.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (http_route) (rate(http_server_request_duration_seconds_count{service_name=\"hospital-ops-backend\"}[$__rate_interval]))",
+          "legendFormat": "{{http_route}}",
+          "range": true,
+          "instant": false,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 3,
+      "title": "5xx error share (all endpoints)",
+      "description": "Errors: share of HTTP responses with a 5xx status. 4xx (bad filters, unknown paths) are the client's fault and are not counted here; see 'Responses by status code'.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 1,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "(sum(rate(http_server_request_duration_seconds_count{service_name=\"hospital-ops-backend\", http_response_status_code=~\"5..\"}[$__rate_interval])) or vector(0)) / sum(rate(http_server_request_duration_seconds_count{service_name=\"hospital-ops-backend\"}[$__rate_interval]))",
+          "legendFormat": "5xx share",
+          "range": true,
+          "instant": false,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never"
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "red"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 4,
+      "title": "/api/chat latency p50 / p95 / p99",
+      "description": "Duration of POST /api/chat, every route included (parser answers in milliseconds, agent turns in seconds, so p50 and p99 differ by orders of magnitude). Exemplar dots link to the trace of one request in that bucket: click one, then 'Query with Tempo'.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 1,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(http_server_request_duration_seconds_bucket{service_name=\"hospital-ops-backend\", http_route=\"/api/chat\"}[$__rate_interval])))",
+          "legendFormat": "p50",
+          "range": true,
+          "instant": false,
+          "exemplar": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{service_name=\"hospital-ops-backend\", http_route=\"/api/chat\"}[$__rate_interval])))",
+          "legendFormat": "p95",
+          "range": true,
+          "instant": false,
+          "exemplar": false
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(http_server_request_duration_seconds_bucket{service_name=\"hospital-ops-backend\", http_route=\"/api/chat\"}[$__rate_interval])))",
+          "legendFormat": "p99",
+          "range": true,
+          "instant": false,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 5,
+      "title": "Responses by status code",
+      "description": "All endpoints, split by HTTP status. 404 = unknown path (route `unmatched`), 400 = a rejected filter on an operations endpoint, 500 = a chat turn that raised.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (http_response_status_code) (rate(http_server_request_duration_seconds_count{service_name=\"hospital-ops-backend\"}[$__rate_interval]))",
+          "legendFormat": "{{http_response_status_code}}",
+          "range": true,
+          "instant": false,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 6,
+      "title": "Voice: open WebSocket connections",
+      "description": "`voice.connections.active`, an up-down counter: how many voice connections are open right now.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 9,
+        "w": 5,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(voice_connections_active{service_name=\"hospital-ops-backend\"})",
+          "legendFormat": "open connections",
+          "range": true,
+          "instant": false,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "decimals": 0,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "lineInterpolation": "stepAfter"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "bargauge",
+      "id": 7,
+      "title": "Voice: utterances by outcome",
+      "description": "`voice.utterances{outcome}`: how many utterances reached routing (`routed`) versus ended in `empty_transcript`, `stt_failed` or `internal_error`. Totals over the dashboard's time range (increase over $__range), so pick a range that covers the traffic you care about.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 13,
+        "y": 9,
+        "w": 6,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (outcome) (increase(voice_utterances_total{service_name=\"hospital-ops-backend\"}[$__range]))",
+          "legendFormat": "{{outcome}}",
+          "range": false,
+          "instant": true,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "valueMode": "text",
+        "namePlacement": "left",
+        "minVizHeight": 16,
+        "maxVizHeight": 24
+      }
+    },
+    {
+      "type": "stat",
+      "id": 8,
+      "title": "Voice: dropped mid-utterance",
+      "description": "`voice.connections.dropped`: connections that closed while speech was being buffered, so the audio was thrown away. Totals over the dashboard's time range (increase over $__range), so pick a range that covers the traffic you care about.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 19,
+        "y": 9,
+        "w": 5,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(voice_connections_dropped_total{service_name=\"hospital-ops-backend\"}[$__range])) or vector(0)",
+          "legendFormat": "dropped",
+          "range": false,
+          "instant": true,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "type": "row",
+      "id": 9,
+      "title": "Routing mix: who answered each chat turn",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "id": 10,
+      "title": "Parser hit rate",
+      "description": "Share of chat turns answered by the deterministic regex parser: free, no model call. Totals over the dashboard's time range (increase over $__range), so pick a range that covers the traffic you care about.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 17,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(chat_requests_total{service_name=\"hospital-ops-backend\", route=~\"parser\"}[$__range])) / sum(increase(chat_requests_total{service_name=\"hospital-ops-backend\"}[$__range]))",
+          "legendFormat": "parser",
+          "range": false,
+          "instant": true,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 1,
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "type": "stat",
+      "id": 11,
+      "title": "Jev hit rate",
+      "description": "Share of chat turns answered by the Jev fast path (a confident Jev match run through CommandRunner). Totals over the dashboard's time range (increase over $__range), so pick a range that covers the traffic you care about.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 4,
+        "y": 17,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(chat_requests_total{service_name=\"hospital-ops-backend\", route=~\"jev\"}[$__range])) / sum(increase(chat_requests_total{service_name=\"hospital-ops-backend\"}[$__range]))",
+          "legendFormat": "jev",
+          "range": false,
+          "instant": true,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 1,
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "type": "stat",
+      "id": 12,
+      "title": "LLM fallback rate",
+      "description": "Share of chat turns that needed a full agent (Sonnet) turn: route `agent`. The number to keep low. Totals over the dashboard's time range (increase over $__range), so pick a range that covers the traffic you care about.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 17,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(chat_requests_total{service_name=\"hospital-ops-backend\", route=~\"agent\"}[$__range])) / sum(increase(chat_requests_total{service_name=\"hospital-ops-backend\"}[$__range]))",
+          "legendFormat": "agent",
+          "range": false,
+          "instant": true,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 1,
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "type": "stat",
+      "id": 13,
+      "title": "Gate rejection rate",
+      "description": "Share rejected for free before any model: off-topic (`domain_rejected`) or malformed/too long (`ineligible`). Totals over the dashboard's time range (increase over $__range), so pick a range that covers the traffic you care about.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 17,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(chat_requests_total{service_name=\"hospital-ops-backend\", route=~\"domain_rejected|ineligible\"}[$__range])) / sum(increase(chat_requests_total{service_name=\"hospital-ops-backend\"}[$__range]))",
+          "legendFormat": "rejected",
+          "range": false,
+          "instant": true,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 1,
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "type": "stat",
+      "id": 14,
+      "title": "Chat turn errors",
+      "description": "Share of chat turns whose handler raised (`route=error`, an HTTP 500 or a voice internal error). Totals over the dashboard's time range (increase over $__range), so pick a range that covers the traffic you care about.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 17,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "(sum(increase(chat_requests_total{service_name=\"hospital-ops-backend\", route=~\"error\"}[$__range])) / sum(increase(chat_requests_total{service_name=\"hospital-ops-backend\"}[$__range]))) or vector(0)",
+          "legendFormat": "error",
+          "range": false,
+          "instant": true,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 1,
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "type": "stat",
+      "id": 15,
+      "title": "Voice share",
+      "description": "Share of chat turns that arrived by voice (`channel=voice`) rather than typed. Totals over the dashboard's time range (increase over $__range), so pick a range that covers the traffic you care about.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 20,
+        "y": 17,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "(sum(increase(chat_requests_total{service_name=\"hospital-ops-backend\", channel=\"voice\"}[$__range])) or vector(0)) / sum(increase(chat_requests_total{service_name=\"hospital-ops-backend\"}[$__range]))",
+          "legendFormat": "voice",
+          "range": false,
+          "instant": true,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 1,
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 16,
+      "title": "Chat turns per second by route",
+      "description": "`chat.requests{route}`: parser / jev / domain_rejected / ineligible / agent / error, stacked.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 21,
+        "w": 9,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (route) (rate(chat_requests_total{service_name=\"hospital-ops-backend\"}[$__rate_interval]))",
+          "legendFormat": "{{route}}",
+          "range": true,
+          "instant": false,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 30,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 17,
+      "title": "Route share over time",
+      "description": "The same counter as a share of all chat turns at each point in time (stacks to 100%).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 9,
+        "y": 21,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (route) (rate(chat_requests_total{service_name=\"hospital-ops-backend\"}[$__rate_interval])) / scalar(sum(rate(chat_requests_total{service_name=\"hospital-ops-backend\"}[$__rate_interval])))",
+          "legendFormat": "{{route}}",
+          "range": true,
+          "instant": false,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 30,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "bargauge",
+      "id": 18,
+      "title": "Chat turns by route and channel",
+      "description": "Counts per (route, channel) pair: e.g. how many voice turns reached the agent. Totals over the dashboard's time range (increase over $__range), so pick a range that covers the traffic you care about.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 17,
+        "y": 21,
+        "w": 7,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (route, channel) (increase(chat_requests_total{service_name=\"hospital-ops-backend\"}[$__range]))",
+          "legendFormat": "{{route}} / {{channel}}",
+          "range": false,
+          "instant": true,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "valueMode": "text",
+        "namePlacement": "left",
+        "minVizHeight": 16,
+        "maxVizHeight": 24
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 19,
+      "title": "Chat turn latency p95 by route",
+      "description": "`chat.request.duration`: time to answer, by the route that answered. Parser and gate rejections should sit in milliseconds; the agent route carries the model's latency.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 29,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, route) (rate(chat_request_duration_seconds_bucket{service_name=\"hospital-ops-backend\"}[$__rate_interval])))",
+          "legendFormat": "{{route}}",
+          "range": true,
+          "instant": false,
+          "exemplar": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "id": 20,
+      "title": "Agent: rounds, terminations, tools, LLM",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 36,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "type": "bargauge",
+      "id": 21,
+      "title": "Rounds per agent turn",
+      "description": "`agent.rounds` histogram: how many model rounds each agent turn took (bucket upper bounds). Many turns at the top bucket means the loop limit is doing the stopping. Totals over the dashboard's time range (increase over $__range), so pick a range that covers the traffic you care about.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 37,
+        "w": 6,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (le) (increase(agent_rounds_bucket{service_name=\"hospital-ops-backend\"}[$__range]))",
+          "legendFormat": "{{le}}",
+          "range": false,
+          "instant": true,
+          "exemplar": false,
+          "format": "heatmap"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "vertical",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "valueMode": "text",
+        "namePlacement": "left",
+        "minVizHeight": 16,
+        "maxVizHeight": 24
+      }
+    },
+    {
+      "type": "bargauge",
+      "id": 22,
+      "title": "Agent terminations by type",
+      "description": "`agent.terminations{termination}`: completed vs the four ways a turn is cut short (max_rounds_exceeded, llm_timeout, max_tool_calls_exceeded, too_many_invalid_calls). Totals over the dashboard's time range (increase over $__range), so pick a range that covers the traffic you care about.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 37,
+        "w": 6,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (termination) (increase(agent_terminations_total{service_name=\"hospital-ops-backend\"}[$__range]))",
+          "legendFormat": "{{termination}}",
+          "range": false,
+          "instant": true,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "valueMode": "text",
+        "namePlacement": "left",
+        "minVizHeight": 16,
+        "maxVizHeight": 24
+      }
+    },
+    {
+      "type": "bargauge",
+      "id": 23,
+      "title": "Tool calls by tool and status",
+      "description": "`agent.tool.calls{tool_name, status}`: success / failure / rejected per tool. A model-invented tool name is recorded as `unknown`. Totals over the dashboard's time range (increase over $__range), so pick a range that covers the traffic you care about.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 37,
+        "w": 6,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (tool_name, status) (increase(agent_tool_calls_total{service_name=\"hospital-ops-backend\"}[$__range]))",
+          "legendFormat": "{{tool_name}} / {{status}}",
+          "range": false,
+          "instant": true,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "valueMode": "text",
+        "namePlacement": "left",
+        "minVizHeight": 16,
+        "maxVizHeight": 24
+      }
+    },
+    {
+      "type": "bargauge",
+      "id": 24,
+      "title": "Tool failures and rejections by category",
+      "description": "`agent.tool.calls` with `error_category != none`: grounding_rejected (the model used a code this session was never shown), invalid_argument, unknown_tool, timeout, budget_exhausted, or a tool error category. Totals over the dashboard's time range (increase over $__range), so pick a range that covers the traffic you care about.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 37,
+        "w": 6,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (error_category) (increase(agent_tool_calls_total{service_name=\"hospital-ops-backend\", error_category!=\"none\"}[$__range]))",
+          "legendFormat": "{{error_category}}",
+          "range": false,
+          "instant": true,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "orange"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "valueMode": "text",
+        "namePlacement": "left",
+        "minVizHeight": 16,
+        "maxVizHeight": 24
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 25,
+      "title": "LLM call latency p95",
+      "description": "`llm.call.duration`, p95 across all model calls, plus the p95 of each status (ok / timeout / error). A timeout sits at the configured LLM timeout.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 45,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(llm_call_duration_seconds_bucket{service_name=\"hospital-ops-backend\"}[$__rate_interval])))",
+          "legendFormat": "p95 (all)",
+          "range": true,
+          "instant": false,
+          "exemplar": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, status) (rate(llm_call_duration_seconds_bucket{service_name=\"hospital-ops-backend\"}[$__rate_interval])))",
+          "legendFormat": "p95 {{status}}",
+          "range": true,
+          "instant": false,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 26,
+      "title": "LLM calls per second by status",
+      "description": "`llm.call.duration` count by status: the timeout and error rate of the model provider.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 45,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (status) (rate(llm_call_duration_seconds_count{service_name=\"hospital-ops-backend\"}[$__rate_interval]))",
+          "legendFormat": "{{status}}",
+          "range": true,
+          "instant": false,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "bargauge",
+      "id": 27,
+      "title": "LLM tokens",
+      "description": "`llm.tokens{token_type, model}` from the response's usage metadata. Cost per token is in the app's /api/cost-comparison, not here. Totals over the dashboard's time range (increase over $__range), so pick a range that covers the traffic you care about.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 45,
+        "w": 8,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (token_type, model) (increase(llm_tokens_total{service_name=\"hospital-ops-backend\"}[$__range]))",
+          "legendFormat": "{{token_type}} ({{model}})",
+          "range": false,
+          "instant": true,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "valueMode": "text",
+        "namePlacement": "left",
+        "minVizHeight": 16,
+        "maxVizHeight": 24
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 28,
+      "title": "Tool latency p95 by tool",
+      "description": "`agent.tool.duration` (executed calls only, including grounding rejections; validation rejections never execute).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 49,
+        "w": 8,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, tool_name) (rate(agent_tool_duration_seconds_bucket{service_name=\"hospital-ops-backend\"}[$__rate_interval])))",
+          "legendFormat": "{{tool_name}}",
+          "range": true,
+          "instant": false,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "id": 29,
+      "title": "Jev fast path",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 53,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "type": "bargauge",
+      "id": 30,
+      "title": "Jev consultations by outcome",
+      "description": "`jev.consultations{outcome}`: matched (an agent turn saved), declined (low confidence, fell through to the agent), failed (the call did not complete). Empty when ENABLE_JEV_FAST_PATH is off. Totals over the dashboard's time range (increase over $__range), so pick a range that covers the traffic you care about.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 54,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (outcome) (increase(jev_consultations_total{service_name=\"hospital-ops-backend\"}[$__range]))",
+          "legendFormat": "{{outcome}}",
+          "range": false,
+          "instant": true,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "valueMode": "text",
+        "namePlacement": "left",
+        "minVizHeight": 16,
+        "maxVizHeight": 24
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 31,
+      "title": "Jev latency p95 by outcome",
+      "description": "`jev.duration`: only recorded when Jev was actually called.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 54,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, outcome) (rate(jev_duration_seconds_bucket{service_name=\"hospital-ops-backend\"}[$__rate_interval])))",
+          "legendFormat": "{{outcome}}",
+          "range": true,
+          "instant": false,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "bargauge",
+      "id": 32,
+      "title": "Jev tokens",
+      "description": "`jev.tokens{token_type}`: Jev token spend. Totals over the dashboard's time range (increase over $__range), so pick a range that covers the traffic you care about.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 54,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (token_type) (increase(jev_tokens_total{service_name=\"hospital-ops-backend\"}[$__range]))",
+          "legendFormat": "{{token_type}}",
+          "range": false,
+          "instant": true,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "valueMode": "text",
+        "namePlacement": "left",
+        "minVizHeight": 16,
+        "maxVizHeight": 24
+      }
+    },
+    {
+      "type": "row",
+      "id": 33,
+      "title": "Voice STT and CPU (USE)",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 61,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 34,
+      "title": "STT duration p95",
+      "description": "`stt.duration`: local faster-whisper time per utterance, by status. The first utterance after startup includes loading the model.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 62,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, status) (rate(stt_duration_seconds_bucket{service_name=\"hospital-ops-backend\"}[$__rate_interval])))",
+          "legendFormat": "p95 {{status}}",
+          "range": true,
+          "instant": false,
+          "exemplar": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 35,
+      "title": "STT real-time factor",
+      "description": "`stt.real_time_factor`: STT seconds per second of audio (p95 and mean). Above 1 (the dashed line) transcription is slower than speech: the CPU is saturated.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 62,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(stt_real_time_factor_bucket{service_name=\"hospital-ops-backend\"}[$__rate_interval])))",
+          "legendFormat": "p95",
+          "range": true,
+          "instant": false,
+          "exemplar": false
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(stt_real_time_factor_sum{service_name=\"hospital-ops-backend\"}[$__rate_interval])) / sum(rate(stt_real_time_factor_count{service_name=\"hospital-ops-backend\"}[$__rate_interval]))",
+          "legendFormat": "mean",
+          "range": true,
+          "instant": false,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "decimals": 2,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 36,
+      "title": "Process CPU (cores)",
+      "description": "`rate(process.cpu.time)` per backend process: CPU cores in use. Utilization for the CPU-bound STT. One line per process (`instance`), since a restart starts a new one.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 62,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (instance) (rate(process_cpu_time_seconds_total{service_name=\"hospital-ops-backend\"}[$__rate_interval]))",
+          "legendFormat": "process {{instance}}",
+          "range": true,
+          "instant": false,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "min": 0,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "id": 37,
+      "title": "Database: SQLAlchemy pool and LangGraph checkpointer",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 69,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 38,
+      "title": "SQLAlchemy pool connections",
+      "description": "`db.pool.connections{state}`: pool size, connections checked out, overflow in use. Checked-out near size + max overflow means requests queue for a connection. Clamped at 0: the app reports SQLAlchemy's raw `QueuePool.overflow()`, which is negative (minus the unopened pool slots) until the pool has opened all its connections.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 70,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "clamp_min(max by (state) (db_pool_connections{service_name=\"hospital-ops-backend\", pool=\"sqlalchemy\"}), 0)",
+          "legendFormat": "{{state}}",
+          "range": true,
+          "instant": false,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "lineInterpolation": "stepAfter"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 39,
+      "title": "Checkpointer operation latency p95",
+      "description": "`checkpointer.operation.duration{operation}`: get_tuple / put / put_writes, including the wait for the checkpointer's single-connection lock, so this is where its saturation shows.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 70,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(checkpointer_operation_duration_seconds_bucket{service_name=\"hospital-ops-backend\"}[$__rate_interval])))",
+          "legendFormat": "{{operation}}",
+          "range": true,
+          "instant": false,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 40,
+      "title": "Checkpointer connection open",
+      "description": "`checkpointer.connection.up` (Prometheus name `checkpointer_connection_up_ratio`): 1 while the checkpointer's psycopg connection is open, per backend process.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 70,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (instance) (checkpointer_connection_up_ratio{service_name=\"hospital-ops-backend\"})",
+          "legendFormat": "process {{instance}}",
+          "range": true,
+          "instant": false,
+          "exemplar": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "max": 1,
+          "decimals": 0,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "lineInterpolation": "stepAfter"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "id": 41,
+      "title": "Traces and logs: from a panel to one request",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 77,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "type": "table",
+      "id": 42,
+      "title": "Recent chat turns (Tempo)",
+      "description": "TraceQL: every `chat.handle` span of this service, newest first. Click a trace ID to open the full span tree in Explore (whose 'Logs for this span' button jumps to Loki), or to filter the log panel below to that trace.",
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 78,
+        "w": 12,
+        "h": 10
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "queryType": "traceql",
+          "limit": 20,
+          "tableType": "traces",
+          "query": "{resource.service.name=\"hospital-ops-backend\" && name=\"chat.handle\"} | select(span.chat.route, span.chat.channel)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "traceID"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open trace in Explore",
+                    "url": "/explore?left={\"datasource\":\"tempo\",\"queries\":[{\"refId\":\"A\",\"datasource\":{\"type\":\"tempo\",\"uid\":\"tempo\"},\"queryType\":\"traceql\",\"query\":\"${__value.raw}\"}],\"range\":{\"from\":\"now-6h\",\"to\":\"now\"}}"
+                  },
+                  {
+                    "title": "Show this trace's logs below",
+                    "url": "/d/hospital-ops/hospital-ops?${__url_time_range}&var-trace_id=${__value.raw}"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "type": "table",
+      "id": 43,
+      "title": "Agent tool calls that were rejected or failed (Tempo)",
+      "description": "TraceQL: `tool.execute` spans whose `tool.error_category` is not `none` (grounding rejections, tool errors, timeouts), plus model calls that timed out. The question no alert was written for: 'what did the agent try that the system refused?'",
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 78,
+        "w": 12,
+        "h": 10
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "queryType": "traceql",
+          "limit": 20,
+          "tableType": "traces",
+          "query": "{resource.service.name=\"hospital-ops-backend\" && ((name=\"tool.execute\" && span.tool.error_category!=\"none\") || span.llm.status=\"timeout\")} | select(span.tool.name, span.tool.error_category, span.llm.status)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "traceID"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open trace in Explore",
+                    "url": "/explore?left={\"datasource\":\"tempo\",\"queries\":[{\"refId\":\"A\",\"datasource\":{\"type\":\"tempo\",\"uid\":\"tempo\"},\"queryType\":\"traceql\",\"query\":\"${__value.raw}\"}],\"range\":{\"from\":\"now-6h\",\"to\":\"now\"}}"
+                  },
+                  {
+                    "title": "Show this trace's logs below",
+                    "url": "/d/hospital-ops/hospital-ops?${__url_time_range}&var-trace_id=${__value.raw}"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "type": "logs",
+      "id": 44,
+      "title": "Backend logs (Loki)",
+      "description": "OTLP log records of this service (already redacted before export). Set the `trace_id` box at the top (or click 'Show this trace's logs below' in a trace table) to see one request's lines. Each line with a trace_id links back to its trace in Tempo (the Loki datasource's derived field).",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 88,
+        "w": 24,
+        "h": 12
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "queryType": "range",
+          "expr": "{service_name=\"hospital-ops-backend\"} | trace_id=~\"${trace_id:regex}.*\""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": false,
+        "sortOrder": "Descending",
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": false
+      }
+    },
+    {
+      "type": "row",
+      "id": 45,
+      "title": "SLOs: reserved for Phase 7 (not built yet)",
+      "collapsed": true,
+      "gridPos": {
+        "x": 0,
+        "y": 100,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    }
+  ]
+}
