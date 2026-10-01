@@ -87,7 +87,9 @@ def _observe_pool(_options: CallbackOptions) -> Iterable[Observation]:
         return [
             Observation(pool.size(), {"pool": "sqlalchemy", "state": "size"}),
             Observation(pool.checkedout(), {"pool": "sqlalchemy", "state": "checked_out"}),
-            Observation(pool.overflow(), {"pool": "sqlalchemy", "state": "overflow"}),
+            # QueuePool.overflow() starts at -pool_size and counts up as
+            # connections are opened; only the part above zero is overflow.
+            Observation(max(0, pool.overflow()), {"pool": "sqlalchemy", "state": "overflow"}),
         ]
     except Exception:  # noqa: BLE001 - telemetry must never raise
         return []

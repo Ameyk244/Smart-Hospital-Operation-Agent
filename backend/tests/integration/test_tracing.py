@@ -408,3 +408,60 @@ async def test_with_telemetry_off_nothing_is_recorded_and_requests_work(client, 
     with spans.span("anything") as current:
         assert not current.is_recording()
     assert all("trace_id" not in line for line in captured_logs.lines())
+
+
+async def test_log_lines_carry_their_own_round_or_tool_span_and_rounds_end_on_time(
+    agent_client, span_exporter, captured_logs, checkpointer
+):
+    """Regression for two Phase 5 findings:
+    - agent log lines used to carry `agent.run`'s span_id, so "logs for this
+      span" on a tool or round span found nothing;
+    - the last `agent.round` was ended by run_agent's finally, so it
+      absorbed the turn's final checkpoint writes."""
+    model = ScriptedChatModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    _call("search_appointments", {"appointment_type": "MRI"}, "c1"),
+                    _call("search_scanners", {"type": "MRI"}, "c2"),
+                ],
+            ),
+            AIMessage(content="Done."),
+        ]
+    )
+    app.dependency_overrides[get_checkpointer] = lambda: checkpointer
+    with (
+        patch("app.api.routes.chat.get_settings", return_value=_settings()),
+        patch("app.api.routes.chat.get_default_chat_model", return_value=model),
+    ):
+        async with agent_client as client:
+            response = await client.post(
+                "/api/chat",
+                json={"text": "find MRI appointments", "session_id": f"trace-{uuid.uuid4().hex[:8]}"},
+            )
+    assert response.json()["handled_by"] == "agent"
+
+    finished = span_exporter.get_finished_spans()
+    named = _by_name(finished)
+    hex_id = lambda span_data: format(span_data.context.span_id, "016x")  # noqa: E731
+
+    tool_spans = {s.attributes["tool.name"]: hex_id(s) for s in named["tool.execute"]}
+    executed = captured_logs.events("tool_executed")
+    assert {line["tool_name"] for line in executed} == set(tool_spans)
+    for line in executed:
+        assert line["span_id"] == tool_spans[line["tool_name"]]
+
+    rounds = {s.attributes["agent.round"]: s for s in named["agent.round"]}
+    for line in captured_logs.events("agent_invoked"):
+        assert line["span_id"] == hex_id(rounds[line["round"]])
+
+    last_round = rounds[max(rounds)]
+    (last_llm,) = [s for s in named["llm.invoke"] if s.parent.span_id == last_round.context.span_id]
+    trailing_writes = [
+        s
+        for s in finished
+        if s.name.startswith("checkpointer.") and s.start_time >= last_llm.end_time
+    ]
+    assert trailing_writes, "expected the turn's final checkpoint writes"
+    assert all(last_round.end_time <= s.start_time for s in trailing_writes)

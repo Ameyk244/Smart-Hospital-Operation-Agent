@@ -394,6 +394,8 @@ def test_sqlalchemy_pool_gauge_reports_the_registered_engine(metric_reader):
         app_metrics.observe_sqlalchemy_pool(None)
     assert set(states) == {"size", "checked_out", "overflow"}
     assert states["size"] == engine.pool.size()
+    # QueuePool.overflow() starts at -pool_size; the gauge must not (Phase 5 finding).
+    assert states["overflow"] >= 0
 
 
 def test_process_cpu_time_is_observed(metric_reader):

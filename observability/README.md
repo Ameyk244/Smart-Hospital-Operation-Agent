@@ -754,20 +754,30 @@ string stripped, and its `request_completed` line carries only the route.
 (Tempo's `/api/search` without `start`/`end` covers only recent traces.
 Enumerate through Grafana's `/api/ds/query`, which sends the time range.)
 
-#### Findings from verification (reported, not fixed in Phase 5)
+#### Findings from verification (found in Phase 5, fixed right after)
 
-- **`db.pool.connections{state="overflow"}` goes negative.** The gauge
-  reports SQLAlchemy's raw `QueuePool.overflow()`, which is `_overflow`. That
-  value starts at `-pool_size` and rises as connections are opened, so it
-  read **-4** with a pool of 5. The panel clamps at 0. The fix belongs in
-  `metrics.observe_sqlalchemy_pool`: report `max(0, pool.overflow())`.
-- **Agent log lines carry `agent.run`'s `span_id`**, not the `agent.round` or
-  `tool.execute` span they describe. Trace-level linking works fully. Span-level
-  "logs for this span" on a `tool.execute` span finds nothing.
-- **The last `agent.round` span includes post-round work.** It is ended by
-  `run_agent`'s `finally`, so round 4 above lasts 784 ms although its
-  `llm.invoke` took ~0 ms. The time is the final checkpoint writes. Read the
-  last round's width with that in mind.
+The Phase 5 subagent reported these instead of changing app code. The lead
+fixed them in a separate commit. Each fix has a regression test that was
+confirmed to fail on the old code.
+
+- **`db.pool.connections{state="overflow"}` went negative.** SQLAlchemy's
+  `QueuePool.overflow()` starts at `-pool_size` and rises as connections
+  open, so the gauge read **-4** with a pool of 5. It now reports
+  `max(0, pool.overflow())`. Test:
+  `test_metrics.py::test_sqlalchemy_pool_gauge_reports_the_registered_engine` asserts it's never
+  negative.
+- **Agent log lines carried `agent.run`'s `span_id`**, not the round or tool
+  span they describe, so "logs for this span" on a `tool.execute` span found
+  nothing. Now the round span is current while `agent_node` runs and each
+  tool span is current while its call runs. Context is attached and
+  detached inside each node, in the same async context.
+- **The last `agent.round` absorbed post-round work.** It was ended by
+  `run_agent`'s `finally`, so the final round's width included the turn's
+  closing checkpoint writes (784 ms around a ~0 ms LLM call in the run
+  above). A round now ends when its work ends: after its tools, or at the
+  end of `agent_node` when the model asked for none. Test for both
+  agent-span fixes:
+  `test_tracing.py::test_log_lines_carry_their_own_round_or_tool_span_and_rounds_end_on_time`.
 
 ## 3. Decisions
 

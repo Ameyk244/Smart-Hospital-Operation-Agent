@@ -37,6 +37,7 @@ from typing import Any
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.graph import END, StateGraph
+from opentelemetry import context as otel_context
 from opentelemetry import trace
 from opentelemetry.context import Context
 from pydantic import ValidationError
@@ -99,9 +100,13 @@ class _RoundSpans:
 
     A round is one model call plus the tool calls it asked for, but those
     run in two different graph nodes, and a context manager can't stay open
-    across nodes. So agent_node starts the round span here, tool_node
-    parents its `tool.execute` spans on it explicitly, and the next round
-    (or the end of `run_agent`) ends it. One instance per graph build, so
+    across nodes. So agent_node starts the round span here (current while
+    agent_node runs), tool_node parents its `tool.execute` spans on it
+    explicitly, and the round ends when its work does: at the end of
+    agent_node if the model asked for no tools, else at the end of
+    tool_node. `run_agent`'s finally is only a safety net. Ending it there
+    used to make the last round absorb the turn's final checkpoint writes.
+    One instance per graph build, so
     concurrent turns never share it. The `tool.execute` span currently open
     is held here too, for the same reason: the tool loop has several exits
     per call, and one place to end it is simpler than one per exit."""
@@ -109,12 +114,25 @@ class _RoundSpans:
     def __init__(self) -> None:
         self.round: trace.Span | None = None
         self.tool: trace.Span | None = None
+        self._round_token: object | None = None
+        self._tool_token: object | None = None
 
     def start_round(self, round_num: int) -> None:
+        """Starts the round span and makes it *current* until
+        `deactivate_round`, so log lines written in agent_node carry its
+        span_id, not agent.run's."""
         self.end()
         self.round = spans.get_tracer().start_span(
             "agent.round", attributes={"agent.round": round_num}
         )
+        self._round_token = otel_context.attach(trace.set_span_in_context(self.round))
+
+    def deactivate_round(self) -> None:
+        """Detach (don't end) the round span. Called at the end of
+        agent_node, in the same context that attached it."""
+        if self._round_token is not None:
+            otel_context.detach(self._round_token)
+            self._round_token = None
 
     def context(self) -> Context | None:
         return trace.set_span_in_context(self.round) if self.round is not None else None
@@ -124,9 +142,14 @@ class _RoundSpans:
         self.tool = spans.get_tracer().start_span(
             "tool.execute", context=self.context(), attributes={"tool.name": tool_name}
         )
+        # Current until end_tool, so the tool's log lines carry its span_id.
+        self._tool_token = otel_context.attach(trace.set_span_in_context(self.tool))
         return self.tool
 
     def end_tool(self) -> None:
+        if self._tool_token is not None:
+            otel_context.detach(self._tool_token)
+            self._tool_token = None
         if self.tool is not None:
             self.tool.end()
             self.tool = None
@@ -204,6 +227,18 @@ def _make_agent_node(
             return response
 
     async def agent_node(state: AgentState) -> dict:
+        try:
+            update = await run_round(state)
+        finally:
+            round_spans.deactivate_round()
+        last = update.get("messages", [None])[-1]
+        if update.get("terminated_reason") or not (isinstance(last, AIMessage) and last.tool_calls):
+            # No tools to run: this round is finished now, so it doesn't
+            # absorb the final checkpoint writes that follow.
+            round_spans.end()
+        return update
+
+    async def run_round(state: AgentState) -> dict:
         if state["round_count"] >= settings.max_agent_rounds:
             async with session_factory() as session:
                 await record_event(
@@ -279,6 +314,15 @@ def _make_tool_node(
     round_spans: _RoundSpans,
 ) -> Callable[[AgentState], Any]:
     async def tool_node(state: AgentState) -> dict:
+        try:
+            return await run_tools(state)
+        finally:
+            # In this node's own context (where the tool span was attached);
+            # the round is complete once its tools have run.
+            round_spans.end_tool()
+            round_spans.end()
+
+    async def run_tools(state: AgentState) -> dict:
         last = state["messages"][-1]
         assert isinstance(last, AIMessage)
 
@@ -476,9 +520,7 @@ def _make_tool_node(
             if invalid_call_count >= settings.max_invalid_tool_calls:
                 terminated_reason = "too_many_invalid_calls"
 
-        # A tool span is otherwise ended by the next call's start_tool, or by
-        # run_agent's finally if something raised.
-        round_spans.end_tool()
+        # The last tool span is ended (and detached) by tool_node's finally.
         return {
             "messages": new_messages,
             "tool_call_count": tool_call_count,
