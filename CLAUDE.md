@@ -34,6 +34,33 @@ explicit in-turn approval regardless of task brief, subagents stay scoped to
 the files they were assigned, and every subagent's diff is reviewed -- with
 `git status`/diff checked against its intended scope -- before it's committed.
 
+## Observability (branch `observability`)
+Everything for this work lives under the top-level `observability/` folder
+(`README.md` is the master reference, `CONCEPT_MAP.md` maps the 10-module
+curriculum to the code, `dashboards/` holds the checked-in Grafana JSON,
+`docker-compose.yml` runs the stack). It adds the OpenTelemetry SDK
+(metrics + traces), a self-hosted `grafana/otel-lgtm` container, PHI/secret
+redaction on the existing logging/tracing, and an audit record for the one
+mutating tool. It requires **no new paid API or secret** -- every piece is
+local, self-hosted tooling.
+
+- **Never in the hospital UI.** No frontend link, button, or page references
+  Grafana or any telemetry endpoint, now or in a future deployment. Grafana
+  is opened directly at `localhost:3000`.
+- **Telemetry is optional at runtime.** The app and the offline test suite
+  must work with the collector down or absent; exporting failures never fail
+  a request.
+- **Redaction is fail-closed.** `app/observability/redaction.py` allowlists
+  what may be stored in `agent_events.arguments_json` and logs; anything not
+  on the list (free text such as `command_text`, patient-search queries,
+  preference values) is replaced, not passed through.
+- **Cardinality rule.** Metric labels are low-cardinality only (`route`,
+  `tool_name`, `status`, `error_category`, ...). Never `session_id`,
+  `request_id`, or any entity/patient code as a metric label -- those belong
+  on spans and log lines.
+- The existing `agent_events` table and trace panel stay exactly as they are;
+  OTel complements them.
+
 ## Jev read-only fast path
 The main request flow includes TypeSafe AI's Jev (`typesafe-sdk`) and a
 `TYPESAFE_API_KEY` env var, used to widen the

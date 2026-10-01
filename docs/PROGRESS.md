@@ -1245,3 +1245,16 @@ appointments (a cleanup, not a requirement).
 Deployment note: the backend gains `faster-whisper` (with `ctranslate2`,
 `onnxruntime`, `av`). The Whisper model downloads on first use, and the
 WebSocket has no authentication, like the rest of the API.
+
+## Observability (branch `observability`)
+
+Started 2026-10-01 from `56eda8d`. The earlier observability audit was
+re-verified against the code before building. `logging_config.py` and
+`tracing.py` were unchanged since the audit, and the event-type list held.
+The corrections are recorded in `observability/README.md` §1: the real
+voice event name is `voice_connection_dropped`; trace log lines never
+carried `arguments`, so the PHI exposure is the DB column; and there were
+extra leak vectors in free-text tool args and in uvicorn's access log
+(patient-search query strings). All observability work, docs, and dashboard
+JSON live under `observability/`. Phases 1–7 land one commit each. The
+baseline suite before Phase 1 was 461 passed, 6 skipped.
