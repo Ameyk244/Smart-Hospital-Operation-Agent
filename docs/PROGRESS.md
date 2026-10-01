@@ -1288,3 +1288,11 @@ asserts that no metric carries a session id, request id, entity code or
 name. Suite: 519 passed, 6 skipped. The subagent found that two existing
 e2e tests reach the real Jev service on every suite run; the fix is the
 next commit.
+
+Test hygiene fix: `tests/conftest.py` now forces `ENABLE_JEV_FAST_PATH=false`
+for the test process. Before this, two e2e tests in `test_chat_api.py`
+(the contextual follow-up and the bare-code reschedule) mocked only
+`run_agent`, so with the developer's real `TYPESAFE_API_KEY` in `.env`
+every suite run made two real Jev calls. This predates the observability
+branch. It was verified with a spy plugin that records which tests reach
+the real SDK path: two before the fix, none after.

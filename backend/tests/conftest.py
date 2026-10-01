@@ -21,9 +21,19 @@ that requests the `db_session` or `seeded_session` fixture. Unit tests
 """
 
 import asyncio
+import os
 import sys
 import types
 from collections.abc import AsyncGenerator
+
+# The developer's `.env` turns the Jev fast path on with a real key, and the
+# SDK is installed. A test that sends text past the parser and both gates
+# without patching `get_settings` (e.g. the e2e tests that only mock
+# `run_agent`) would make a real, paid Jev call on every suite run. Forced
+# off here, before any `Settings` is built (environment variables take
+# precedence over `.env`). Jev tests are unaffected: they patch
+# `get_settings` with explicit `jev_settings(...)`.
+os.environ["ENABLE_JEV_FAST_PATH"] = "false"
 
 import asyncpg
 import pytest
