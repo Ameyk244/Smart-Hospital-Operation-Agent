@@ -121,6 +121,15 @@ class Settings(BaseSettings):
     llm_timeout_seconds: int = 30
     max_invalid_tool_calls: int = 3
 
+    # --- Observability (see observability/README.md) ---
+    # Off by default so a fresh clone and the test suite never try to export.
+    # Turn on in .env when the local grafana/otel-lgtm stack is running.
+    # With it off the OTel API is a no-op; see app/observability/telemetry.py.
+    otel_enabled: bool = False
+    # OTLP/HTTP base URL of the collector; `/v1/metrics` is appended.
+    otel_exporter_otlp_endpoint: str = "http://localhost:4318"
+    otel_metric_export_interval_ms: int = 15_000
+
     # --- App ---
     app_env: Literal["development", "test", "production"] = "development"
     log_level: str = "INFO"

@@ -13,7 +13,8 @@ id is echoed back in the `X-Request-ID` response header so a client report
 
 It also writes one `request_completed` line per HTTP request (method, route
 template, status code, duration_ms), so the logs alone give RED (rate,
-errors, duration) per endpoint before any metrics exist.
+errors, duration) per endpoint. Since Phase 3 the same numbers also go to
+the `http.server.request.duration` histogram (`app/observability/metrics.py`).
 
 Deliberate choices:
 - Pure ASGI, not `BaseHTTPMiddleware`. `BaseHTTPMiddleware` runs the
@@ -48,6 +49,7 @@ from typing import Any
 
 import structlog
 
+from app.observability import metrics
 from app.observability.logging_config import get_logger
 
 _logger = get_logger("api.request")
@@ -121,9 +123,12 @@ class RequestContextMiddleware:
                 status_code = 500
             raise
         finally:
-            duration_ms = round((time.perf_counter() - started) * 1000, 1)
+            elapsed = time.perf_counter() - started
+            duration_ms = round(elapsed * 1000, 1)
             route = _route_template(scope)
             if scope_type == "http":
+                # Same numbers as the log line, as a histogram (Phase 3).
+                metrics.record_http_request(scope.get("method"), route, status_code, elapsed)
                 _logger.info(
                     "request_completed",
                     method=scope.get("method"),

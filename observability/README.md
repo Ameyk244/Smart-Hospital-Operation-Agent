@@ -11,7 +11,7 @@ file), not under `docs/`. Application code lives where application code
 always lives: `backend/app/observability/`.
 
 **Not part of the hospital UI.** Grafana is a separate tool, opened directly
-at <http://localhost:3000>. No page, link, or button in `frontend/` refers to
+at <http://localhost:3001>. No page, link, or button in `frontend/` refers to
 it or to any telemetry endpoint, and none should be added in any future
 deployment.
 
@@ -73,7 +73,7 @@ as each phase lands.
 |---|---|---|
 | 1 | PHI/secret redaction on existing trace + logs | Done |
 | 2 | Request-ID middleware; `request_id`/`session_id` bound into structlog | Done |
-| 3 | OTel metrics: routing counter, agent/tool/LLM, voice STT, both DB pools | Planned |
+| 3 | OTel metrics: routing counter, agent/tool/LLM, Jev, voice STT + CPU, HTTP RED, SQLAlchemy pool gauge + checkpointer operation timing | Done |
 | 4 | OTel traces: auto-instrumentation + manual spans along the request path | Planned |
 | 5 | `grafana/otel-lgtm` stack + checked-in dashboard, verified with real local traffic | Planned |
 | 6 | Audit record for `reschedule_appointment` (needs a migration, approval-gated) | Planned |
@@ -163,6 +163,113 @@ has the same `request_id`.
   `tests/conftest.py`. It patches the `print` that structlog's
   `PrintLogger` calls, so tests assert on the redacted JSON that really
   reaches stdout.
+
+### Phase 3: Metrics
+
+OpenTelemetry metrics, recorded through the OTel **API** and exported by
+the **SDK** only when `OTEL_ENABLED=true`.
+
+| Piece | Where |
+|---|---|
+| Every instrument, plus a one-line `record_*` helper per call site | `backend/app/observability/metrics.py` |
+| SDK setup: `Resource` (`service.name=hospital-ops-backend`, `service.version`, `deployment.environment.name`), `MeterProvider`, periodic OTLP/HTTP export to `OTEL_EXPORTER_OTLP_ENDPOINT` + `/v1/metrics` | `backend/app/observability/telemetry.py`, called from `app/main.py`'s lifespan |
+| Settings: `otel_enabled` (default **false**), `otel_exporter_otlp_endpoint` (default `http://localhost:4318`), `otel_metric_export_interval_ms` (default 15000) | `backend/app/config.py`, `backend/.env.example` |
+| Dependencies: `opentelemetry-api`, `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-http`, all `>=1.45,<1.46` (installed: 1.45.0) | `backend/requirements.txt` |
+
+**API vs SDK.** With telemetry off (the default), the instruments come from
+the API's no-op provider: every `add`/`record` is an empty call and nothing
+leaves the process. A fresh clone and the test suite never try to reach a
+collector. With it on, the SDK's periodic reader exports from a background
+thread. If the collector is down, exports fail there and are logged; they
+never raise into a request. Setup and shutdown are also wrapped so they
+never stop the app. Known cost: with the collector down, shutdown waits up
+to the 5 s export timeout.
+
+**Metrics.** Names are OTel names. Prometheus, behind the collector,
+rewrites them: dots become underscores, the unit is appended, and counters
+get `_total`. So `chat.requests` appears as `chat_requests_total`, and
+`llm.call.duration` (unit `s`) appears as `llm_call_duration_seconds_*`.
+
+| Metric | Type | Attributes | Question it answers |
+|---|---|---|---|
+| `chat.requests` | Counter | `route` (parser / jev / domain_rejected / ineligible / agent / error), `channel` (text / voice) | Parser hit rate, Jev hit rate, LLM fallback rate (share of `agent`), gate rejection rate, voice vs typed share |
+| `chat.request.duration` | Histogram (s) | `route`, `channel` | How long each route takes to answer: parser p95 vs agent p95 |
+| `http.server.request.duration` | Histogram (s) | `http.request.method`, `http.route` (template, or `unmatched`), `http.response.status_code` | RED per endpoint: rate = count, errors = 5xx share, duration = percentiles |
+| `voice.connections.active` | UpDownCounter | none | How many voice WebSockets are open now |
+| `voice.utterances` | Counter | `outcome` (routed / empty_transcript / stt_failed / internal_error) | How many utterances reach routing vs fail in STT/VAD |
+| `voice.connections.dropped` | Counter | none | Connections lost mid-utterance (audio thrown away) |
+| `stt.duration` | Histogram (s) | `status` (ok / error) | Local Whisper latency per utterance |
+| `stt.audio.duration` | Histogram (s) | `status` | How long utterances are (samples / 16000) |
+| `stt.real_time_factor` | Histogram (1) | `status` | STT seconds per audio second. Above 1 means slower than real time: the CPU is saturated. The first utterance after startup also includes loading the Whisper model, so expect one outlier |
+| `process.cpu.time` | Observable counter (s) | none | `rate()` = CPU cores this process uses. USE utilization for the CPU-bound STT. From `time.process_time()`, so no `psutil` dependency |
+| `jev.consultations` | Counter | `outcome` (matched / declined / failed) | How often Jev saves an agent turn, and how often it fails |
+| `jev.duration` | Histogram (s) | `outcome` | Jev latency. Only recorded when Jev was actually called, not for the early returns (missing key/SDK, unsupported filter) |
+| `jev.tokens` | Counter | `token_type` (input / output) | Jev token spend |
+| `agent.rounds` | Histogram | `termination` | Model rounds per agent turn |
+| `agent.terminations` | Counter | `termination` (completed / max_rounds_exceeded / llm_timeout / max_tool_calls_exceeded / too_many_invalid_calls) | How agent turns end. Includes the two terminations that never write an `agent_events` row |
+| `llm.call.duration` | Histogram (s) | `status` (ok / timeout / error), `model` (the one configured model name) | LLM latency and timeout rate |
+| `llm.tokens` | Counter | `token_type`, `model` | LLM token spend, from the response's `usage_metadata` |
+| `agent.tool.calls` | Counter | `tool_name` (registered name, or `unknown` for a model-invented one), `status` (success / failure / rejected), `error_category` (`none`, `grounding_rejected`, `invalid_argument`, `unknown_tool`, `timeout`, `budget_exhausted`, or a tool error category) | Tool failure rate, grounding-rejection rate, invalid-call rate per tool |
+| `agent.tool.duration` | Histogram (s) | `tool_name`, `status` | Tool latency (executed calls only, not validation rejections) |
+| `db.pool.connections` | Observable gauge | `pool=sqlalchemy`, `state` (size / checked_out / overflow) | SQLAlchemy `QueuePool` saturation: `checked_out` near `size` + max overflow means requests queue for a connection |
+| `checkpointer.operation.duration` | Histogram (s) | `operation` (get_tuple / put / put_writes), `status` | LangGraph checkpointer latency, including the wait for its lock |
+| `checkpointer.connection.up` | Observable gauge | none | 1 while the checkpointer's connection is open |
+
+**The DB is one pool plus one connection, not two pools.** The app's
+SQLAlchemy engine has a real `QueuePool`, which gets size, checked-out and
+overflow gauges. The LangGraph checkpointer is **one long-lived psycopg
+connection** (`AsyncPostgresSaver.from_conn_string`), and every
+checkpoint operation takes the saver's own `asyncio.Lock` first. It has no
+pool size or checked-out count. Its saturation shows up as a rising
+`checkpointer.operation.duration`: concurrent agent turns queue on that
+lock. That is what we measure, through `InstrumentedAsyncPostgresSaver` in
+`app/agent/checkpointer.py`. It is a subclass that only adds timing. We
+also report whether its connection is still open. It was deliberately not
+converted to a pool.
+
+**Cardinality.** Attributes come only from fixed sets. `session_id`,
+`request_id`, entity codes, patient names and user text never appear as
+attributes. A model-invented tool name is recorded as `unknown`, an
+unusual HTTP method as `_OTHER`, and an unmatched path as `unmatched`. The
+model attribute is the single configured model name.
+
+**How to see it:** with the Phase 5 stack running and `OTEL_ENABLED=true`,
+open Grafana at <http://localhost:3001> → Explore → Prometheus →
+`sum by (route) (rate(chat_requests_total[5m]))`. Without the stack, run
+`pytest tests/integration/test_metrics.py -v`.
+
+**Tests** (all use an in-memory reader, with no collector):
+- `tests/integration/test_metrics.py` (13 tests):
+  - each `chat.requests` route through the real HTTP app (parser,
+    domain_rejected, ineligible, jev, agent, error), plus HTTP RED
+  - Jev matched/declined/failed with the fake SDK, including tokens and
+    latency
+  - a scripted agent turn with a success, a grounding rejection, an
+    unknown tool and an invalid argument: tool counters, tool durations,
+    LLM durations and tokens, rounds, termination
+  - `too_many_invalid_calls`, which has no event row
+  - checkpointer operation timings and connection gauge against the real
+    checkpointer
+  - STT duration, audio length and RTF
+  - the pool gauge and process CPU
+  - a cardinality test that drives the app over HTTP (parser, patient
+    search with a name in the query, a session id in the path, a full
+    scripted agent turn) and asserts that no data point's attributes carry
+    the session id, the request id, a patient name or an entity code, and
+    that every attribute key is on an allowlist
+- `tests/unit/test_telemetry.py` (3 tests): off by default; disabled
+  installs nothing and recording is a no-op; enabled with no collector
+  listening never raises, at setup, recording or shutdown.
+- `tests/integration/test_voice_websocket.py::test_voice_turns_are_counted_with_channel_voice`.
+- The `metric_reader` fixture (`tests/conftest.py`) rebinds the
+  instruments to a fresh in-memory `MeterProvider` per test. OTel allows
+  the process-global provider to be set only once, so it is never set in
+  tests.
+- Checked against the old code: with every `record_*` call-site helper
+  stubbed to a no-op, 12 of the 13 new call-site tests fail (the gauges
+  and telemetry-switch tests don't go through call sites). Also, swapping
+  `unknown` back to the model's raw tool name makes the cardinality test
+  fail on `made_up_tool_PT-1001`.
 
 ## 3. Decisions
 

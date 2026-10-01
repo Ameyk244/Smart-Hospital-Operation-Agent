@@ -405,3 +405,62 @@ def captured_logs(monkeypatch):
 
     monkeypatch.setattr(structlog_output, "print", _capture, raising=False)
     return captured
+
+
+# --------------------------------------------------------------------------
+# In-memory OpenTelemetry metrics (observability Phase 3).
+#
+# Rebinds `app/observability/metrics.py`'s instruments to a fresh SDK
+# `MeterProvider` with an `InMemoryMetricReader` for one test, then back to
+# the no-op provider. Nothing touches the process-global provider (OTel
+# allows setting that only once per process), and nothing is exported:
+# no collector, no Docker, no network.
+# --------------------------------------------------------------------------
+
+
+class MetricsSnapshot:
+    def __init__(self, reader) -> None:
+        self._reader = reader
+
+    def points(self, name: str | None = None) -> list[tuple[str, dict, object]]:
+        """(metric name, attributes, data point) for every point collected
+        so far, optionally only for one metric name."""
+        data = self._reader.get_metrics_data()
+        found = []
+        if data is None:
+            return found
+        for resource_metrics in data.resource_metrics:
+            for scope_metrics in resource_metrics.scope_metrics:
+                for metric in scope_metrics.metrics:
+                    if name is not None and metric.name != name:
+                        continue
+                    for point in metric.data.data_points:
+                        found.append((metric.name, dict(point.attributes or {}), point))
+        return found
+
+    def value(self, name: str, **attributes) -> float:
+        """Sum of counter values (or histogram counts) whose attributes
+        include `attributes`."""
+        total = 0
+        for _name, attrs, point in self.points(name):
+            if all(attrs.get(k) == v for k, v in attributes.items()):
+                total += point.count if hasattr(point, "count") else point.value
+        return total
+
+
+@pytest.fixture
+def metric_reader():
+    from opentelemetry.metrics import NoOpMeterProvider
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+
+    from app.observability import metrics as app_metrics
+
+    reader = InMemoryMetricReader()
+    provider = MeterProvider(metric_readers=[reader])
+    app_metrics.use_meter_provider(provider)
+    try:
+        yield MetricsSnapshot(reader)
+    finally:
+        app_metrics.use_meter_provider(NoOpMeterProvider())
+        provider.shutdown()

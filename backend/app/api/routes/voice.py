@@ -69,6 +69,7 @@ from app.config import Settings, get_settings
 from app.db.models.agent import EventStatus
 from app.db.repositories.session_repository import SessionRepository
 from app.db.session import get_session_factory
+from app.observability import metrics
 from app.observability.logging_config import get_logger
 from app.observability.tracing import record_event
 from app.voice.stt import transcribe_array
@@ -145,6 +146,7 @@ async def _process_utterance(
     docstring for why the split is deliberate."""
     samples = _pcm_bytes_to_normalized_array(audio)
     if samples.size == 0:
+        metrics.record_voice_utterance("empty_transcript")
         # Defensive: unreachable in practice given UtteranceDetector only
         # ever finalizes a non-empty buffer (min_speech_ms > 0 guarantees
         # at least one above-threshold chunk was captured), but "the buffer
@@ -165,6 +167,7 @@ async def _process_utterance(
         text = await transcribe_array(samples, settings.voice_stt_model)
     except Exception as exc:  # noqa: BLE001 - third-party STT call, see module docstring
         _logger.warning("voice_stt_failed", error=type(exc).__name__)
+        metrics.record_voice_utterance("stt_failed")
         await websocket.send_json(
             {
                 "type": "error",
@@ -176,6 +179,7 @@ async def _process_utterance(
 
     text = text.strip()
     if not text:
+        metrics.record_voice_utterance("empty_transcript")
         await websocket.send_json(
             {
                 "type": "error",
@@ -201,7 +205,9 @@ async def _process_utterance(
             db=db,
             session_factory=session_factory,
             checkpointer=checkpointer,
+            channel="voice",
         )
+    metrics.record_voice_utterance("routed")
 
     await websocket.send_json(
         {"type": "chat_response", "response": response.model_dump(mode="json")}
@@ -220,12 +226,16 @@ async def voice_stream(
     # the lines `handle_chat_message` logs. The connection's request_id is
     # already bound by app/observability/request_context.py.
     with structlog.contextvars.bound_contextvars(session_id=session_id):
-        await _serve_voice_connection(
-            websocket,
-            session_id=session_id,
-            session_factory=session_factory,
-            checkpointer=checkpointer,
-        )
+        metrics.voice_connection_opened()
+        try:
+            await _serve_voice_connection(
+                websocket,
+                session_id=session_id,
+                session_factory=session_factory,
+                checkpointer=checkpointer,
+            )
+        finally:
+            metrics.voice_connection_closed()
 
 
 async def _serve_voice_connection(
@@ -250,6 +260,7 @@ async def _serve_voice_connection(
             # mode 3, see module docstring) rather than let it vanish
             # silently.
             if detector.is_in_speech():
+                metrics.record_voice_dropped()
                 await _record_dropped_connection(
                     session_factory, session_id, detector.buffered_ms()
                 )
@@ -277,12 +288,14 @@ async def _serve_voice_connection(
 
         except WebSocketDisconnect:
             if detector.is_in_speech():
+                metrics.record_voice_dropped()
                 await _record_dropped_connection(
                     session_factory, session_id, detector.buffered_ms()
                 )
             return
         except Exception as exc:  # noqa: BLE001 - see module docstring, failure mode 5
             _logger.exception("voice_websocket_unexpected_error", error=type(exc).__name__)
+            metrics.record_voice_utterance("internal_error")
             try:
                 await websocket.send_json(
                     {

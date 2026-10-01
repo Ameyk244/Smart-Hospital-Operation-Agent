@@ -38,9 +38,15 @@ has decided an utterance ended) and the Phase 2 fixed-file proof in
 """
 
 import asyncio
+import time
 from functools import lru_cache
 
 import numpy as np
+
+from app.observability import metrics
+
+# The voice contract's sample rate (app/api/routes/voice.py's audio contract).
+SAMPLE_RATE_HZ = 16_000
 
 
 @lru_cache
@@ -96,5 +102,18 @@ async def transcribe_array(samples: np.ndarray, model_size: str) -> str:
     Reuses the same cached `_load_model` loader and the same
     thread-offload pattern as `transcribe()` -- does not touch `transcribe`
     or `_transcribe_sync` at all, so Phase 2's file-based test keeps
-    exercising exactly the code path it always has."""
-    return await asyncio.to_thread(_transcribe_array_sync, model_size, samples)
+    exercising exactly the code path it always has.
+
+    Records `stt.duration`, `stt.audio.duration` and the real-time factor
+    (app/observability/metrics.py) for every call, failed ones included.
+    Audio length is `samples.size / 16000`: the voice contract is 16 kHz
+    mono (see app/api/routes/voice.py)."""
+    audio_seconds = samples.size / SAMPLE_RATE_HZ
+    started = time.perf_counter()
+    status = "error"
+    try:
+        text = await asyncio.to_thread(_transcribe_array_sync, model_size, samples)
+        status = "ok"
+        return text
+    finally:
+        metrics.record_stt(time.perf_counter() - started, audio_seconds, status)

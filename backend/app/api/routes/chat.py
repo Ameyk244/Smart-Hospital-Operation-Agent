@@ -22,6 +22,7 @@ What calls it: the frontend's chat UI; the voice WebSocket handler once
 it has a final transcript; `tests/e2e/*`.
 """
 
+import time
 import uuid
 from typing import Literal
 
@@ -43,6 +44,7 @@ from app.db.models.agent import EventStatus, MessageRole
 from app.db.repositories.session_repository import SessionRepository
 from app.db.session import get_db, get_session_factory
 from app.execution.commands import Command, CommandRunner
+from app.observability import metrics
 from app.observability.logging_config import get_logger
 from app.observability.tracing import record_event
 from app.parser.parser import parse
@@ -200,6 +202,7 @@ async def handle_chat_message(
     db: AsyncSession,
     session_factory,
     checkpointer,
+    channel: Literal["text", "voice"] = "text",
 ) -> ChatResponse:
     """The one routing implementation for a text message, regardless of
     which transport produced that text. Byte-for-byte the same logic the
@@ -212,16 +215,28 @@ async def handle_chat_message(
     the turn, so every log line it causes (agent rounds, tool calls, trace
     events) carries it alongside the middleware's `request_id`. Bound with
     `bound_contextvars`, which restores the previous value on exit, so it
-    never outlives this turn. See app/observability/request_context.py."""
+    never outlives this turn. See app/observability/request_context.py.
+
+    `channel` says which transport produced the text. It only labels the
+    `chat.requests` metric (app/observability/metrics.py); routing never
+    looks at it."""
     session_id = session_id or str(uuid.uuid4())
-    with structlog.contextvars.bound_contextvars(session_id=session_id):
-        return await _route_chat_message(
-            text=text,
-            session_id=session_id,
-            db=db,
-            session_factory=session_factory,
-            checkpointer=checkpointer,
-        )
+    started = time.perf_counter()
+    route = "error"
+    try:
+        with structlog.contextvars.bound_contextvars(session_id=session_id):
+            route, response = await _route_chat_message(
+                text=text,
+                session_id=session_id,
+                db=db,
+                session_factory=session_factory,
+                checkpointer=checkpointer,
+            )
+        return response
+    finally:
+        # One count per turn, by the route that answered it ("error" if the
+        # handler raised): parser / Jev / agent shares come from this.
+        metrics.record_chat_request(route, channel, time.perf_counter() - started)
 
 
 async def _route_chat_message(
@@ -231,9 +246,12 @@ async def _route_chat_message(
     db: AsyncSession,
     session_factory,
     checkpointer,
-) -> ChatResponse:
+) -> tuple[str, ChatResponse]:
     """The body of `handle_chat_message`, split out only so the contextvar
-    binding above can wrap it without re-indenting the routing logic."""
+    binding above can wrap it without re-indenting the routing logic.
+    Returns the metric route name alongside the response, because
+    `handled_by="rejected"` alone can't tell the domain gate from the
+    eligibility gate."""
     session_repo = SessionRepository(db)
     await session_repo.get_or_create(session_id)
 
@@ -262,7 +280,7 @@ async def _route_chat_message(
             session_factory=session_factory,
             checkpointer=checkpointer,
         )
-        return ChatResponse(
+        return "parser", ChatResponse(
             session_id=session_id,
             handled_by="deterministic",
             message=message,
@@ -286,14 +304,14 @@ async def _route_chat_message(
         )
         await session_repo.append_message(session_id, MessageRole.ASSISTANT, message)
         await db.commit()
-        return ChatResponse(session_id=session_id, handled_by="rejected", message=message)
+        return "domain_rejected", ChatResponse(session_id=session_id, handled_by="rejected", message=message)
 
     eligibility = check_eligibility(text)
     if not eligibility.eligible:
         message = f"Sorry, I can't process that request ({eligibility.reason})."
         await session_repo.append_message(session_id, MessageRole.ASSISTANT, message)
         await db.commit()
-        return ChatResponse(session_id=session_id, handled_by="rejected", message=message)
+        return "ineligible", ChatResponse(session_id=session_id, handled_by="rejected", message=message)
 
     settings = get_settings()
 
@@ -308,6 +326,7 @@ async def _route_chat_message(
         from app.agent.jev_fast_path import try_jev_fast_path
 
         jev = await try_jev_fast_path(text, settings)
+        metrics.record_jev_consultation(jev)
         jev_arguments = {
             "choice": jev.choice,
             "confidence": jev.confidence,
@@ -346,7 +365,7 @@ async def _route_chat_message(
                 session_factory=session_factory,
                 checkpointer=checkpointer,
             )
-            return ChatResponse(
+            return "jev", ChatResponse(
                 session_id=session_id,
                 handled_by="jev",
                 message=message,
@@ -394,7 +413,7 @@ async def _route_chat_message(
     reply_text = extract_text_content(last_message.content)
     await session_repo.append_message(session_id, MessageRole.ASSISTANT, reply_text)
     await db.commit()
-    return ChatResponse(
+    return "agent", ChatResponse(
         session_id=session_id,
         handled_by="agent",
         message=reply_text,

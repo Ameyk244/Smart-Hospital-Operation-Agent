@@ -44,6 +44,15 @@ faster-whisper==1.2.1
 
 # Observability
 structlog>=24.4,<25
+# OpenTelemetry metrics (observability Phase 3): the API that call sites
+# record through, the SDK that turns it into real data when OTEL_ENABLED is
+# set, and the OTLP/HTTP exporter that pushes to the local collector. With
+# OTEL_ENABLED unset the API stays a no-op and nothing is exported. Kept on
+# one minor version: the Phase 4 instrumentation packages (0.66b0) are
+# released in lockstep with SDK 1.45 and must match it exactly.
+opentelemetry-api>=1.45,<1.46
+opentelemetry-sdk>=1.45,<1.46
+opentelemetry-exporter-otlp-proto-http>=1.45,<1.46
 
 # Utilities
 python-dotenv>=1.0,<2

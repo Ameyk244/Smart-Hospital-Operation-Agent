@@ -48,6 +48,7 @@ from app.config import Settings
 from app.db.models.agent import EventStatus
 from app.db.repositories.preference_repository import PreferenceRepository
 from app.db.repositories.session_repository import SessionRepository
+from app.observability import metrics
 from app.observability.tracing import record_event
 
 SYSTEM_PROMPT = (
@@ -83,10 +84,19 @@ SYSTEM_PROMPT = (
 )
 
 
+def _model_label(settings: Settings) -> str:
+    """The configured model name: one fixed value per process, so it is
+    safe as a metric attribute."""
+    if settings.llm_provider == "openrouter":
+        return settings.openrouter_model
+    return settings.anthropic_model
+
+
 def _make_agent_node(
     chat_model: BaseChatModel, session_factory: async_sessionmaker[AsyncSession], settings: Settings
 ) -> Callable[[AgentState], Any]:
     model_with_tools = chat_model.bind_tools(all_tool_dicts())
+    model_label = _model_label(settings)
 
     async def agent_node(state: AgentState) -> dict:
         if state["round_count"] >= settings.max_agent_rounds:
@@ -112,11 +122,13 @@ def _make_agent_node(
             )
             await session.commit()
 
+        llm_started = time.perf_counter()
         try:
             response = await asyncio.wait_for(
                 model_with_tools.ainvoke(state["messages"]), timeout=settings.llm_timeout_seconds
             )
         except TimeoutError:
+            metrics.record_llm_call(time.perf_counter() - llm_started, "timeout", model_label)
             async with session_factory() as session:
                 await record_event(
                     session,
@@ -132,6 +144,16 @@ def _make_agent_node(
                 "messages": [AIMessage(content="(the model timed out)")],
                 "terminated_reason": "llm_timeout",
             }
+        except Exception:
+            # Propagates (see module docstring), but is still counted.
+            metrics.record_llm_call(time.perf_counter() - llm_started, "error", model_label)
+            raise
+        metrics.record_llm_call(
+            time.perf_counter() - llm_started,
+            "ok",
+            model_label,
+            getattr(response, "usage_metadata", None),
+        )
 
         async with session_factory() as session:
             await record_event(
@@ -190,6 +212,11 @@ def _make_tool_node(
             # to max_agent_rounds instead of stopping at max_invalid_tool_calls.
             if terminated_reason is not None or tool_call_count >= settings.max_tool_calls:
                 terminated_reason = terminated_reason or "max_tool_calls_exceeded"
+                metrics.record_tool_call(
+                    call["name"] if call["name"] in TOOL_REGISTRY else metrics.UNKNOWN_TOOL,
+                    EventStatus.REJECTED.value,
+                    "budget_exhausted",
+                )
                 new_messages.append(
                     ToolMessage(
                         content="Not executed: this session's tool-call budget is exhausted.",
@@ -201,6 +228,10 @@ def _make_tool_node(
             spec = TOOL_REGISTRY.get(call["name"])
             if spec is None:
                 invalid_call_count += 1
+                # Not the model's tool name: it is invented, so unbounded.
+                metrics.record_tool_call(
+                    metrics.UNKNOWN_TOOL, EventStatus.REJECTED.value, "unknown_tool"
+                )
                 async with session_factory() as session:
                     await record_event(
                         session,
@@ -223,6 +254,7 @@ def _make_tool_node(
                 validated_args = spec.args_schema.model_validate(call["args"])
             except ValidationError as exc:
                 invalid_call_count += 1
+                metrics.record_tool_call(spec.name, EventStatus.REJECTED.value, "invalid_argument")
                 async with session_factory() as session:
                     await record_event(
                         session,
@@ -253,6 +285,9 @@ def _make_tool_node(
                     await session.rollback()
                     tool_call_count += 1
                     latency_ms = int((time.monotonic() - start) * 1000)
+                    metrics.record_tool_call(
+                        spec.name, EventStatus.FAILURE.value, "timeout", time.monotonic() - start
+                    )
                     await record_event(
                         session,
                         session_id=state["session_id"],
@@ -273,6 +308,12 @@ def _make_tool_node(
                     tool_call_count += 1
                     invalid_call_count += 1
                     latency_ms = int((time.monotonic() - start) * 1000)
+                    metrics.record_tool_call(
+                        spec.name,
+                        EventStatus.REJECTED.value,
+                        "grounding_rejected",
+                        time.monotonic() - start,
+                    )
                     await record_event(
                         session,
                         session_id=state["session_id"],
@@ -290,6 +331,9 @@ def _make_tool_node(
                     await session.rollback()
                     tool_call_count += 1
                     latency_ms = int((time.monotonic() - start) * 1000)
+                    metrics.record_tool_call(
+                        spec.name, EventStatus.FAILURE.value, exc.category, time.monotonic() - start
+                    )
                     await record_event(
                         session,
                         session_id=state["session_id"],
@@ -307,6 +351,9 @@ def _make_tool_node(
                     await session.commit()
                     tool_call_count += 1
                     latency_ms = int((time.monotonic() - start) * 1000)
+                    metrics.record_tool_call(
+                        spec.name, EventStatus.SUCCESS.value, None, time.monotonic() - start
+                    )
                     await record_event(
                         session,
                         session_id=state["session_id"],
@@ -443,7 +490,12 @@ async def run_agent(
         "terminated_reason": None,
         "touched_entity_codes": [],
     }
-    return await compiled.ainvoke(initial_state, config=config)
+    final_state = await compiled.ainvoke(initial_state, config=config)
+    # Counted here, from final state, because two of the terminations
+    # (max_tool_calls_exceeded, too_many_invalid_calls) never write an
+    # agent_events row; this is the only place all five are visible.
+    metrics.record_agent_turn(final_state["round_count"], final_state.get("terminated_reason"))
+    return final_state
 
 
 class _StateOnlyModel:

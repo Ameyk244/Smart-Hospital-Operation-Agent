@@ -27,7 +27,7 @@ Entries are updated as each phase lands.
 | Concept | What it is | Where / how to see it | Fit | Status |
 |---|---|---|---|---|
 | Logs | Discrete events with context | structlog JSON on stdout (`logging_config.py`) | Core | Done (pre-existing) |
-| Metrics | Numeric time series, cheap to aggregate | OTel meter (Phase 3) | Core | Planned (3) |
+| Metrics | Numeric time series, cheap to aggregate | `app/observability/metrics.py` (instruments), `telemetry.py` (SDK + OTLP export). See it: `pytest tests/integration/test_metrics.py -v` | Core | Done (3) |
 | Traces / spans | One request's causal tree | OTel tracer (Phase 4) | Core | Planned (4) |
 
 ## Module 3: Structured logging
@@ -44,12 +44,12 @@ Entries are updated as each phase lands.
 
 | Concept | What it is | Where / how to see it | Fit | Status |
 |---|---|---|---|---|
-| Counter | Monotonic count; graph its rate | `chat_requests_total{route}` | Core | Planned (3) |
-| Histogram / percentiles | Latency distribution → p50/p95/p99 | request, LLM, tool, STT duration histograms | Core | Planned (3) |
-| Gauge | A current value | DB pool checked-out connections | Core | Planned (3) |
-| RED | Rate, Errors, Duration per endpoint | `/api/chat` + voice WebSocket. Logs-only RED exists now: one `request_completed` line per request (route template, status, duration_ms) | Core | Partial (2: logs; metrics 3/5) |
-| Labels and cardinality | Labels multiply series; IDs as labels explode them | Only `route`/`tool_name`/`status`/`error_category`; never `session_id` or codes | Core | Planned (3) |
-| Business metrics | Domain outcomes | Routing mix (parser/Jev/agent), reschedules | Core | Planned (3) |
+| Counter | Monotonic count; graph its rate | `chat.requests{route,channel}` (`chat_requests_total` in Prometheus), `agent.tool.calls`, `jev.consultations` | Core | Done (3) |
+| Histogram / percentiles | Latency distribution → p50/p95/p99 | `http.server.request.duration`, `chat.request.duration`, `llm.call.duration`, `agent.tool.duration`, `stt.duration`, `jev.duration`, all in seconds with explicit buckets | Core | Done (3) |
+| Gauge | A current value | `db.pool.connections{state}` (observable gauge), `voice.connections.active` (up-down counter), `checkpointer.connection.up` | Core | Done (3) |
+| RED | Rate, Errors, Duration per endpoint | `http.server.request.duration{http.request.method, http.route, http.response.status_code}` from the request middleware, plus the `request_completed` log line; voice: `voice.connections.active`, `voice.utterances{outcome}`, `voice.connections.dropped` | Core | Done (2/3; panels in 5) |
+| Labels and cardinality | Labels multiply series; IDs as labels explode them | Fixed attribute sets only; model-invented tool names become `unknown`. See it: `test_no_metric_attribute_carries_ids_codes_or_free_text` | Core | Done (3) |
+| Business metrics | Domain outcomes | Routing mix: `chat.requests{route}`; reschedules: `agent.tool.calls{tool_name="reschedule_appointment",status="success"}` | Core | Done (3) |
 | Throughput / queue depth | | No queue in this system | Theory | Not built (by design) |
 
 ## Module 5: Distributed tracing
@@ -67,9 +67,9 @@ Entries are updated as each phase lands.
 
 | Concept | What it is | Where / how to see it | Fit | Status |
 |---|---|---|---|---|
-| API vs SDK, Tracer/MeterProvider | Instrument against the API; the SDK decides export | `app/observability/` OTel setup | Core | Planned (3/4) |
+| API vs SDK, Tracer/MeterProvider | Instrument against the API; the SDK decides export | `metrics.py` records via the API (no-op by default); `telemetry.py` installs the SDK `MeterProvider` only when `OTEL_ENABLED=true`. See it: `tests/unit/test_telemetry.py` | Core | Done for metrics (3); tracer (4) |
 | Auto vs manual instrumentation | Library hooks vs explicit spans | FastAPI/SQLAlchemy/asyncpg/httpx auto; request path manual | Core | Planned (4) |
-| Resource attributes | `service.name` etc. | OTel setup | Core | Planned (3) |
+| Resource attributes | `service.name` etc. | `telemetry.build_resource`: `service.name=hospital-ops-backend`, `service.version`, `deployment.environment.name` | Core | Done (3) |
 | OTLP exporter + Collector | Wire protocol and the routing hop | `grafana/otel-lgtm` bundles the Collector | Core | Planned (5) |
 | Collector processor pipelines | | Image defaults are enough here | Theory | Not built (by design) |
 
@@ -77,18 +77,18 @@ Entries are updated as each phase lands.
 
 | Concept | What it is | Where / how to see it | Fit | Status |
 |---|---|---|---|---|
-| Connection pool saturation | Pool exhaustion queues every request | Gauges for **both** pools: SQLAlchemy/asyncpg and the psycopg checkpointer | Core | Planned (3) |
+| Connection pool saturation | Pool exhaustion queues every request | SQLAlchemy `QueuePool`: `db.pool.connections{state=size/checked_out/overflow}`. The checkpointer is one psycopg connection behind a lock, not a pool: its saturation is `checkpointer.operation.duration` (lock wait included), plus `checkpointer.connection.up` | Core | Done (3) |
 | DB query latency | | SQLAlchemy/asyncpg auto-instrumentation spans | Core | Planned (4) |
-| USE (CPU) | Utilization/Saturation/Errors of a resource | Voice STT is CPU-bound: real-time factor plus process CPU | Core | Planned (3/5) |
-| Event-loop blocking | CPU work stalling every other request | STT duration vs. request latency during voice | Core | Planned (3) |
-| Timeouts | | `llm_timeout`, tool timeouts as metric categories | Core | Planned (3) |
+| USE (CPU) | Utilization/Saturation/Errors of a resource | Utilization: `rate(process.cpu.time)`; saturation: `stt.real_time_factor` > 1; errors: `stt.duration{status="error"}` | Core | Done (3; panels in 5) |
+| Event-loop blocking | CPU work stalling every other request | Compare `stt.duration` with `http.server.request.duration` during voice use (STT runs in `asyncio.to_thread`, so it should not stall the loop) | Core | Done (3; panel in 5) |
+| Timeouts | | `llm.call.duration{status="timeout"}`, `agent.tool.calls{error_category="timeout"}`, `agent.terminations{termination="llm_timeout"}` | Core | Done (3) |
 | Locks / deadlocks / retry storms | | One write path, no retries | Theory | Not built (by design) |
 
 ## Module 8: Errors and SLOs
 
 | Concept | What it is | Where / how to see it | Fit | Status |
 |---|---|---|---|---|
-| Error categories | validation / dependency / programming | `error_category` (already on `agent_events`) as a metric label | Core | Planned (3) |
+| Error categories | validation / dependency / programming | `error_category` on `agent.tool.calls`; `outcome=failed` on `jev.consultations`; `route=error` on `chat.requests` | Core | Done (3) |
 | SLI / SLO | Measurement / target | 2–3 dashboard panels | Light | Planned (7) |
 | Error budget | Allowed failure under the SLO | SLO panels | Light | Planned (7) |
 | Burn-rate multi-window alerts, severity tiers | | Overkill for one developer | Theory | Not built (by design) |
@@ -110,9 +110,9 @@ Entries are updated as each phase lands.
 | Concept | What it is | Where / how to see it | Fit | Status |
 |---|---|---|---|---|
 | Action trace without chain-of-thought | Record decisions, not reasoning | `tracing.py` + `agent_events` + trace panel | Core | Done (pre-existing) |
-| Parser hit rate / LLM fallback rate | Share of requests answered without Sonnet | `chat_requests_total{route}` | Core | Planned (3) |
-| Jev consultation telemetry | Confidence, tokens, latency, outcome | `jev_invoked` events (pre-existing) + metrics | Core | Partial (events exist) |
-| LLM latency / tokens / cost | | LLM duration + token histograms | Core | Planned (3) |
-| Tool latency / failure / invalid calls | | `tool_executed`/`tool_requested` events (pre-existing) + metrics | Core | Partial (events exist) |
-| Grounding rejection rate | | `error_category="grounding_rejected"` | Core | Partial (events exist) |
-| Agent rounds / loop limits / timeouts | | rounds histogram, termination counter | Core | Planned (3) |
+| Parser hit rate / LLM fallback rate | Share of requests answered without Sonnet | `chat.requests{route}`: parser share = `route="parser"` / all | Core | Done (3) |
+| Jev consultation telemetry | Confidence, tokens, latency, outcome | `jev_invoked` events + `jev.consultations{outcome}`, `jev.duration`, `jev.tokens{token_type}` | Core | Done (3) |
+| LLM latency / tokens / cost | | `llm.call.duration{status,model}`, `llm.tokens{token_type,model}`; cost stays in `/api/cost-comparison` | Core | Done (3) |
+| Tool latency / failure / invalid calls | | events + `agent.tool.calls{tool_name,status,error_category}`, `agent.tool.duration` | Core | Done (3) |
+| Grounding rejection rate | | `agent.tool.calls{error_category="grounding_rejected"}` | Core | Done (3) |
+| Agent rounds / loop limits / timeouts | | `agent.rounds` histogram, `agent.terminations{termination}` (all five, including the two with no event row) | Core | Done (3) |

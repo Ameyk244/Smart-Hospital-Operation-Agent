@@ -596,3 +596,38 @@ def test_voice_connection_log_lines_carry_request_and_session_id(
         line for line in captured_logs.lines() if line.get("event") != "websocket_closed"
     ]
     assert {line.get("request_id") for line in handler_lines} == {"voice-conn-1"}
+
+
+def test_voice_turns_are_counted_with_channel_voice(
+    voice_client, voice_session_id, metric_reader
+):
+    """Observability Phase 3: a failed and a routed utterance are counted
+    by outcome, the routed one reaches `chat.requests` as channel=voice,
+    and the active-connection count returns to zero after close."""
+    loud_chunk = _noise_pcm(300, amplitude=0.15, seed=7)
+    trailing_silence = _silence_pcm(1000)
+    call_count = {"n": 0}
+
+    async def flaky_transcribe(samples, model_size):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise RuntimeError("synthetic STT failure")
+        return "list departments"
+
+    with patch("app.api.routes.voice.transcribe_array", new=flaky_transcribe):
+        with voice_client.websocket_connect(f"/api/voice/{voice_session_id}") as ws:
+            assert ws.receive_json() == {"type": "ready"}
+            for _ in range(2):
+                ws.send_bytes(loud_chunk)
+                ws.send_bytes(trailing_silence)
+                _drain_until_ready(ws)
+            assert metric_reader.value("voice.connections.active") == 1
+
+    assert metric_reader.value("voice.utterances", outcome="stt_failed") == 1
+    assert metric_reader.value("voice.utterances", outcome="routed") == 1
+    assert metric_reader.value("chat.requests", route="parser", channel="voice") == 1
+    assert metric_reader.value("chat.requests", channel="text") == 0
+    deadline = time.monotonic() + 2
+    while metric_reader.value("voice.connections.active") != 0 and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert metric_reader.value("voice.connections.active") == 0

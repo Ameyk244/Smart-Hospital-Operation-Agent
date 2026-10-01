@@ -1271,3 +1271,20 @@ HTTP request and WebSocket connection, and `session_id` is bound per turn
 and per voice connection. There is one `request_completed` line per
 request, logged by route template. The lead confirmed the new e2e tests
 fail with the middleware removed. Suite: 502 passed, 6 skipped.
+
+Phase 3 (metrics), delegated to the same backend subagent and reviewed by
+the lead. OTel API + SDK 1.45 is added, with export off by default
+(`OTEL_ENABLED`). Metrics cover:
+- the routing counter (parser / jev / domain_rejected / ineligible / agent / error, by channel);
+- HTTP RED;
+- Jev, LLM, tool, agent-turn and termination counts;
+- voice STT real-time factor and process CPU;
+- the SQLAlchemy pool gauge.
+
+The checkpointer is one psycopg connection, not a pool (the audit had
+this wrong). It is measured by operation duration, which includes the
+saver's lock wait, plus a connection-open gauge. A cardinality test
+asserts that no metric carries a session id, request id, entity code or
+name. Suite: 519 passed, 6 skipped. The subagent found that two existing
+e2e tests reach the real Jev service on every suite run; the fix is the
+next commit.

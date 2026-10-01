@@ -3,8 +3,9 @@
 Why it exists: process entrypoint (`uvicorn app.main:app`). Deliberately
 thin — route logic lives in `app/api/routes/*`, this module only wires them
 together plus cross-cutting concerns (CORS for the local frontend dev
-server, request-ID correlation for logs, health check, and building the
-long-lived LangGraph checkpointer for the process lifetime).
+server, request-ID correlation for logs, OpenTelemetry setup, health
+check, and building the long-lived LangGraph checkpointer for the process
+lifetime).
 """
 
 import asyncio
@@ -24,8 +25,10 @@ if sys.platform == "win32":
 from app.agent.checkpointer import build_checkpointer  # noqa: E402
 from app.api.routes import chat, commands, cost, operations, sessions, voice  # noqa: E402
 from app.config import get_settings  # noqa: E402
+from app.db.session import engine  # noqa: E402
 from app.observability.logging_config import configure_logging  # noqa: E402
 from app.observability.request_context import RequestContextMiddleware  # noqa: E402
+from app.observability.telemetry import setup_telemetry, shutdown_telemetry  # noqa: E402
 
 configure_logging()
 settings = get_settings()
@@ -33,9 +36,15 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    async with build_checkpointer(settings.database_url) as checkpointer:
-        app.state.checkpointer = checkpointer
-        yield
+    # A no-op unless OTEL_ENABLED is set; never raises. See
+    # app/observability/telemetry.py.
+    telemetry = setup_telemetry(settings, engine=engine)
+    try:
+        async with build_checkpointer(settings.database_url) as checkpointer:
+            app.state.checkpointer = checkpointer
+            yield
+    finally:
+        shutdown_telemetry(telemetry)
 
 
 app = FastAPI(title="Smart Hospital Operations Agent", lifespan=lifespan)
