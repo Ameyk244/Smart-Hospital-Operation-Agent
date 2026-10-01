@@ -10,6 +10,7 @@ from app.db.models.agent import (
     Preference,
     SessionGroundedEntity,
 )
+from app.db.models.audit import AuditRecord
 from app.db.models.hospital import (
     Appointment,
     AppointmentStatus,
@@ -27,6 +28,7 @@ __all__ = [
     "AgentSession",
     "Appointment",
     "AppointmentStatus",
+    "AuditRecord",
     "ConversationMessage",
     "Department",
     "EventStatus",

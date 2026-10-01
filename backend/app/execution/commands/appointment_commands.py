@@ -14,6 +14,11 @@ Business rules enforced here (not by any caller):
 - it must currently be AVAILABLE.
 A violation raises `CommandError`, which `CommandRunner` turns into a
 `CommandResult(success=False, ...)` instead of a raw DB write.
+
+Every successful reassignment writes an audit record (who / what / before /
+after) in the same transaction, before `CommandRunner` commits. A
+rejected one changes nothing, so it writes nothing; its attempt is already in
+the agent trace. See `app/db/models/audit.py`.
 """
 
 from datetime import datetime, timedelta
@@ -21,7 +26,8 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models.hospital import AppointmentStatus, ScannerStatus
+from app.db.models.hospital import Appointment, AppointmentStatus, ScannerStatus
+from app.db.repositories.audit_repository import AuditRepository
 from app.db.repositories.appointment_repository import AppointmentRepository
 from app.db.repositories.scanner_repository import ScannerRepository
 from app.execution.commands.base import CommandError, register
@@ -53,8 +59,18 @@ async def list_delayed_appointments(session: AsyncSession, args: dict[str, Any])
     return [AppointmentOut.model_validate(a).model_dump(mode="json") for a in appointments]
 
 
-@register("reassign_scanner")
-async def reassign_scanner(session: AsyncSession, args: dict[str, Any]) -> dict:
+def _audit_state(appointment: Appointment) -> dict[str, Any]:
+    """Only the fields a reassignment changes, never patient data."""
+    return {
+        "scanner_code": appointment.scanner.code if appointment.scanner else None,
+        "scheduled_start": appointment.scheduled_start.isoformat(),
+        "scheduled_end": appointment.scheduled_end.isoformat(),
+        "status": appointment.status.value,
+    }
+
+
+@register("reassign_scanner", audited=True)
+async def reassign_scanner(session: AsyncSession, args: dict[str, Any], *, actor: str) -> dict:
     appointment_code = args.get("appointment_code")
     scanner_code = args.get("scanner_code")
     if not appointment_code or not scanner_code:
@@ -90,10 +106,19 @@ async def reassign_scanner(session: AsyncSession, args: dict[str, Any]) -> dict:
         new_start = datetime.fromisoformat(new_start_raw)
     else:
         new_start = appointment.scheduled_start
+    before = _audit_state(appointment)
     duration = appointment.scheduled_end - appointment.scheduled_start
     new_end = new_start + (duration if duration > timedelta(0) else timedelta(minutes=45))
 
     updated = await appt_repo.reassign_scanner(
         appointment_code, new_scanner_id=scanner.id, new_start=new_start, new_end=new_end
+    )
+    await AuditRepository(session).record(
+        actor=actor,
+        action="reassign_scanner",
+        entity_type="appointment",
+        entity_code=appointment_code,
+        before=before,
+        after=_audit_state(updated),
     )
     return AppointmentOut.model_validate(updated).model_dump(mode="json")

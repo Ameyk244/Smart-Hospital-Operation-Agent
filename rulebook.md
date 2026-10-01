@@ -103,6 +103,20 @@ so they consume API tokens even when no tool is called.
 cannot create or delete appointments, edit patients, change scanner status,
 modify departments, or execute arbitrary SQL.
 
+Every successful reschedule also writes one `audit_log` row in the same
+transaction. The row records:
+- **actor:** `agent_session:<id>`;
+- **action and appointment code;**
+- **before/after:** scanner code, start and end times, and status;
+- **correlation:** `request_id` and `trace_id`.
+
+It never records patient data. A rejected reschedule changes nothing and
+writes no audit row; the attempt is in the agent trace. The audit write
+happens in the `reassign_scanner` command, not the tool, so any future
+caller of that command is audited too. A caller that gives no actor is
+recorded as `unattributed`. `audit_log` is append-only: a database trigger
+rejects UPDATE and DELETE.
+
 Example agent messages:
 
 ```text

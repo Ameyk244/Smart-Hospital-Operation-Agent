@@ -49,7 +49,10 @@ async def handle_reschedule_appointment(
     if args.new_start:
         command_args["new_start"] = args.new_start
 
-    result = await CommandRunner(session).execute(Command("reassign_scanner", command_args))
+    # The actor is recorded on the mutation's audit record (Phase 6).
+    result = await CommandRunner(session, actor=f"agent_session:{session_id}").execute(
+        Command("reassign_scanner", command_args)
+    )
     if not result.success:
         raise ToolExecutionError(
             result.error or "reschedule_appointment failed", result.error_category or "tool_error"

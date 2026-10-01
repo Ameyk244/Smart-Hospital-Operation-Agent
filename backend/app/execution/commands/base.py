@@ -21,6 +21,13 @@ Fails: a handler raises `CommandError` for a business-rule violation (e.g.
 propagate to the caller. Everything else (a real bug) is deliberately left
 to propagate; a `CommandResult` should never hide a programming error as a
 graceful failure.
+
+Audited commands (observability Phase 6): a command registered with
+`audited=True` mutates hospital data and must write an audit record. Its
+handler receives the `actor` keyword as well, which `CommandRunner` passes
+explicitly. A caller that didn't say who it is gets `UNATTRIBUTED_ACTOR`,
+never a skipped record. Doing this here, at the chokepoint, means any
+future entry point to a mutation is audited without having to remember to.
 """
 
 from collections.abc import Awaitable, Callable
@@ -58,9 +65,12 @@ class CommandResult:
 CommandHandler = Callable[[AsyncSession, dict[str, Any]], Awaitable[Any]]
 
 _REGISTRY: dict[str, CommandHandler] = {}
+_AUDITED: set[str] = set()
+
+UNATTRIBUTED_ACTOR = "unattributed"
 
 
-def register(name: str) -> Callable[[CommandHandler], CommandHandler]:
+def register(name: str, *, audited: bool = False) -> Callable[[CommandHandler], CommandHandler]:
     """Decorator each command module uses to add itself to the registry.
     Raises at import time (not at call time) if a name is reused — a
     duplicate command name is always a programming error, never a valid
@@ -70,6 +80,8 @@ def register(name: str) -> Callable[[CommandHandler], CommandHandler]:
         if name in _REGISTRY:
             raise ValueError(f"Command {name!r} is already registered")
         _REGISTRY[name] = fn
+        if audited:
+            _AUDITED.add(name)
         return fn
 
     return decorator
@@ -79,11 +91,16 @@ def known_command_names() -> list[str]:
     return sorted(_REGISTRY)
 
 
+def is_audited(name: str) -> bool:
+    return name in _AUDITED
+
+
 class CommandRunner:
     """The single execution entrypoint. See module docstring."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, *, actor: str | None = None) -> None:
         self._session = session
+        self._actor = actor
 
     async def execute(self, command: Command) -> CommandResult:
         handler = _REGISTRY.get(command.name)
@@ -94,7 +111,12 @@ class CommandRunner:
                 error_category="unknown_command",
             )
         try:
-            data = await handler(self._session, command.args)
+            if command.name in _AUDITED:
+                data = await handler(  # type: ignore[call-arg]
+                    self._session, command.args, actor=self._actor or UNATTRIBUTED_ACTOR
+                )
+            else:
+                data = await handler(self._session, command.args)
         except CommandError as exc:
             await self._session.rollback()
             return CommandResult(success=False, error=str(exc), error_category=exc.category)

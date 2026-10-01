@@ -1308,3 +1308,17 @@ strings and exception messages from every exported span. Log lines carry
 to Loki. Telemetry setup moved to import time, because FastAPI must be
 instrumented before Starlette builds its middleware. The test conftest
 also forces `OTEL_ENABLED=false`. Suite: 527 passed, 6 skipped.
+
+Phase 6 (mutation audit log), done by the lead session directly. Successful
+`reassign_scanner` runs write an append-only `audit_log` row (who / what /
+before / after / request_id / trace_id, no patient data) in the same
+transaction as the change. The write happens at the command level through an
+`audited=True` registration, with the actor passed explicitly by
+`CommandRunner`. Test runs create the table in the test database via
+`create_all`; the permission check flagged that schema change, and the user
+approved it. With the user's in-turn approval, migration `5d3e9a1b7c20` was
+then applied to the dev database. A before/after snapshot shows only the
+new empty `audit_log` table and the version bump; every other table's row
+count is unchanged, checkpoint tables included. Known limit: the trigger is
+row-level, so it blocks UPDATE/DELETE but not TRUNCATE by the table owner.
+Suite: 534 passed, 6 skipped.
