@@ -36,9 +36,6 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # A no-op unless OTEL_ENABLED is set; never raises. See
-    # app/observability/telemetry.py.
-    telemetry = setup_telemetry(settings, engine=engine)
     try:
         async with build_checkpointer(settings.database_url) as checkpointer:
             app.state.checkpointer = checkpointer
@@ -67,6 +64,13 @@ app.include_router(operations.router)
 app.include_router(sessions.router)
 app.include_router(cost.router)
 app.include_router(voice.router)
+
+# A no-op unless OTEL_ENABLED is set; never raises. Runs here, at import,
+# not in the lifespan: FastAPI instrumentation must be installed before the
+# app builds its middleware stack, and Starlette builds it on the very first
+# ASGI call, which is the lifespan startup itself. See
+# app/observability/telemetry.py. Flushed and shut down by `lifespan`.
+telemetry = setup_telemetry(settings, engine=engine, app=app)
 
 
 @app.get("/api/health")

@@ -20,7 +20,8 @@ using it. So there is no pool size or checked-out count to report. What is
 real is (a) how long each checkpoint operation takes, lock wait included,
 which is where contention between concurrent agent turns shows up, and (b)
 whether the connection is still open. `InstrumentedAsyncPostgresSaver`
-records (a); `metrics.observe_checkpointer` registers the saver for (b).
+records (a), as a metric and as a `checkpointer.<operation>` span;
+`metrics.observe_checkpointer` registers the saver for (b).
 It is a subclass rather than a wrapper so LangGraph sees an ordinary
 `AsyncPostgresSaver`; only timing is added, behavior is unchanged.
 
@@ -37,7 +38,7 @@ from typing import Any
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
-from app.observability import metrics
+from app.observability import metrics, spans
 
 
 def to_psycopg_conn_string(database_url: str) -> str:
@@ -53,14 +54,17 @@ class InstrumentedAsyncPostgresSaver(AsyncPostgresSaver):
     async def _timed(self, operation: str, coro: Any) -> Any:
         started = time.perf_counter()
         status = "error"
-        try:
-            result = await coro
-            status = "ok"
-            return result
-        finally:
-            metrics.record_checkpointer_operation(
-                operation, time.perf_counter() - started, status
-            )
+        # A span too (Phase 4): psycopg is not auto-instrumented, so without
+        # it checkpoint time would be an unexplained gap in an agent trace.
+        with spans.span(f"checkpointer.{operation}"):
+            try:
+                result = await coro
+                status = "ok"
+                return result
+            finally:
+                metrics.record_checkpointer_operation(
+                    operation, time.perf_counter() - started, status
+                )
 
     async def aget_tuple(self, config):  # type: ignore[override]
         return await self._timed("get_tuple", super().aget_tuple(config))

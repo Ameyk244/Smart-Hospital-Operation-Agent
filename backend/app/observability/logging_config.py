@@ -11,6 +11,10 @@ Every line passes through `redaction.make_log_redactor` last, just before
 rendering, so that no log line carries a credential or a known free-text
 field. The uvicorn access log gets a filter that drops query strings (see
 `app/observability/redaction.py`).
+
+Since observability Phase 4, a line written inside an OpenTelemetry span
+also carries `trace_id`/`span_id`, and with OTEL_ENABLED the redacted line
+is also exported over OTLP (to Loki). See `otel_logs.py`.
 """
 
 import logging
@@ -19,6 +23,7 @@ import sys
 import structlog
 
 from app.config import get_settings
+from app.observability.otel_logs import add_trace_context, export_to_otlp
 from app.observability.redaction import (
     AccessLogQueryStringFilter,
     make_log_redactor,
@@ -34,11 +39,15 @@ def configure_logging() -> None:
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
+            add_trace_context,
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
             structlog.processors.StackInfoRenderer(),
             structlog.processors.format_exc_info,
             make_log_redactor(secret_values_from_settings(settings)),
+            # After the redactor on purpose: only the redacted dict is
+            # exported. A no-op unless OTEL_ENABLED. See otel_logs.py.
+            export_to_otlp,
             structlog.processors.JSONRenderer(),
         ],
         wrapper_class=structlog.make_filtering_bound_logger(

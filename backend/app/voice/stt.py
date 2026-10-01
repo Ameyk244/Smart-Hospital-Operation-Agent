@@ -43,7 +43,7 @@ from functools import lru_cache
 
 import numpy as np
 
-from app.observability import metrics
+from app.observability import metrics, spans
 
 # The voice contract's sample rate (app/api/routes/voice.py's audio contract).
 SAMPLE_RATE_HZ = 16_000
@@ -111,9 +111,23 @@ async def transcribe_array(samples: np.ndarray, model_size: str) -> str:
     audio_seconds = samples.size / SAMPLE_RATE_HZ
     started = time.perf_counter()
     status = "error"
-    try:
-        text = await asyncio.to_thread(_transcribe_array_sync, model_size, samples)
-        status = "ok"
-        return text
-    finally:
-        metrics.record_stt(time.perf_counter() - started, audio_seconds, status)
+    # The transcript itself is never a span attribute. `asyncio.to_thread`
+    # copies the current context into the worker thread, so this span is
+    # current there too (tests/integration/test_tracing.py checks it).
+    with spans.span(
+        "stt.transcribe", {"stt.model": model_size, "stt.audio_seconds": audio_seconds}
+    ) as stt_span:
+        try:
+            text = await asyncio.to_thread(_transcribe_array_sync, model_size, samples)
+            status = "ok"
+            return text
+        finally:
+            elapsed = time.perf_counter() - started
+            metrics.record_stt(elapsed, audio_seconds, status)
+            spans.set_attributes(
+                stt_span,
+                **{
+                    "stt.status": status,
+                    "stt.real_time_factor": elapsed / audio_seconds if audio_seconds else None,
+                },
+            )

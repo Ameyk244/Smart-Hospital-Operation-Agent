@@ -53,6 +53,16 @@ structlog>=24.4,<25
 opentelemetry-api>=1.45,<1.46
 opentelemetry-sdk>=1.45,<1.46
 opentelemetry-exporter-otlp-proto-http>=1.45,<1.46
+# Auto-instrumentation for traces (observability Phase 4): the FastAPI
+# server span, one span per SQL statement (SQLAlchemy and the asyncpg
+# driver), and outbound httpx calls (the LLM provider). Only activated by
+# app/observability/telemetry.py when OTEL_ENABLED is set. Pinned exactly:
+# contrib packages are released as 0.Nb0 betas in lockstep with one SDK
+# minor (0.66b0 <-> 1.45) and are not guaranteed to work across versions.
+opentelemetry-instrumentation-fastapi==0.66b0
+opentelemetry-instrumentation-sqlalchemy==0.66b0
+opentelemetry-instrumentation-asyncpg==0.66b0
+opentelemetry-instrumentation-httpx==0.66b0
 
 # Utilities
 python-dotenv>=1.0,<2

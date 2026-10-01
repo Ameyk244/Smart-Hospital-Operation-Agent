@@ -74,7 +74,7 @@ as each phase lands.
 | 1 | PHI/secret redaction on existing trace + logs | Done |
 | 2 | Request-ID middleware; `request_id`/`session_id` bound into structlog | Done |
 | 3 | OTel metrics: routing counter, agent/tool/LLM, Jev, voice STT + CPU, HTTP RED, SQLAlchemy pool gauge + checkpointer operation timing | Done |
-| 4 | OTel traces: auto-instrumentation + manual spans along the request path | Planned |
+| 4 | OTel traces: auto-instrumentation + manual spans along the request path; trace_id on logs; OTLP log export | Done |
 | 5 | `grafana/otel-lgtm` stack + checked-in dashboard, verified with real local traffic | Planned |
 | 6 | Audit record for `reschedule_appointment` (needs a migration, approval-gated) | Planned |
 | 7 | 2–3 SLIs/SLOs as dashboard panels | Planned |
@@ -270,6 +270,175 @@ open Grafana at <http://localhost:3001> → Explore → Prometheus →
   and telemetry-switch tests don't go through call sites). Also, swapping
   `unknown` back to the model's raw tool name makes the cardinality test
   fail on `made_up_tool_PT-1001`.
+
+### Phase 4: Distributed tracing
+
+One `/api/chat` request is now one connected trace, from the HTTP server
+span down to each SQL statement. Spans are created through the OTel API
+and exported only when `OTEL_ENABLED=true`, by the same switch as metrics.
+
+| Piece | Where |
+|---|---|
+| Span helper (`span()`, error marking without messages) and export-side redaction (`RedactingSpanExporter`) | `backend/app/observability/spans.py` |
+| `TracerProvider` + `BatchSpanProcessor` + OTLP/HTTP span exporter (`/v1/traces`); `LoggerProvider` + batch OTLP/HTTP log exporter (`/v1/logs`); auto-instrumentation | `backend/app/observability/telemetry.py` (now called at import in `app/main.py`; see below) |
+| `trace_id`/`span_id` on log lines, OTLP log export | `backend/app/observability/otel_logs.py`, wired into `logging_config.py` |
+| Manual spans | `chat.py`, `graph.py`, `voice.py`, `stt.py`, `checkpointer.py`; `request_id` on the root span from `request_context.py` |
+| Dependencies: `opentelemetry-instrumentation-{fastapi,sqlalchemy,asyncpg,httpx}==0.66b0` (pulled in `-asgi`, `-instrumentation`, `util-http` 0.66b0, `wrapt` 2.5.0, `asgiref` 3.12.1) | `backend/requirements.txt` |
+
+**The span tree of one agent chat request:**
+
+```
+POST /api/chat                      FastAPI auto (SERVER), root; request_id
+└─ chat.handle                      chat.route, chat.channel, chat.handled_by, session.id
+   ├─ parser.parse                  parser.matched, command.name
+   ├─ domain_gate.check             domain_gate.in_domain
+   ├─ eligibility.check             eligibility.eligible, eligibility.reason
+   ├─ jev.consult                   jev.matched/choice/confidence/failure_reason/tokens (when enabled)
+   └─ agent.run                     agent.rounds, agent.tool_calls, agent.termination
+      ├─ checkpointer.put / .put_writes  (with a checkpointer; the initial
+      │                                  get_tuple runs just before agent.run)
+      ├─ agent.round                agent.round = 1
+      │  ├─ llm.invoke              gen_ai.request.model, gen_ai.usage.*_tokens, llm.status
+      │  │  └─ POST (httpx auto)    the provider API call, with traceparent
+      │  ├─ tool.execute            tool.name, tool.status, tool.error_category
+      │  │  └─ SELECT ... (SQLAlchemy auto) └─ asyncpg auto
+      │  └─ tool.execute            e.g. grounding_rejected
+      └─ agent.round                agent.round = 2
+         └─ llm.invoke
+```
+
+A parser hit has `parser.parse` → `command.execute` (`command.name`,
+`command.success`) instead of the gates and the agent. A voice utterance is
+its **own trace**: `voice.utterance` (root; `session.id`, `request_id`,
+`voice.audio_seconds`, plus a *link* to the WebSocket connection's server
+span) → `stt.transcribe` (`stt.audio_seconds`, `stt.real_time_factor`,
+`stt.status`) → the same `chat.handle` tree. One trace per connection would
+grow without bound, so utterances link to the connection instead of being
+its children.
+
+**How to read one trace** (Grafana at <http://localhost:3001> → Explore →
+Tempo, once Phase 5 runs the stack):
+1. Find the trace by `request_id` (the `X-Request-ID` response header) or
+   by `session.id` on `chat.handle`.
+2. `chat.handle`'s `chat.route` says which path answered. If it is
+   `agent`, the gate spans before `agent.run` say why the parser and Jev
+   didn't (`parser.matched=false`, `jev.failure_reason=low_confidence`, ...).
+3. Under `agent.run`, each `agent.round` is one model call plus the tools
+   it requested. A wide `llm.invoke` is model latency. A wide
+   `tool.execute` shows its SQL spans underneath, so DB time is visible.
+   A `tool.error_category` of `grounding_rejected` is the model using an
+   unseen code.
+4. Copy the `trace_id` into Loki to get every log line of that request.
+   OTLP log attributes land as structured metadata, so the query is
+   `{service_name="hospital-ops-backend"} | trace_id="<id>"`. Phase 5
+   verifies the exact label names against the running stack. In the other
+   direction, every log line written inside a span has `trace_id`.
+
+**Design decisions:**
+- **Rounds span two graph nodes.** A round's model call happens in
+  `agent_node` and its tool calls in `tool_node`, and a context manager
+  can't stay open across nodes. A small per-run holder (`_RoundSpans` in
+  `graph.py`) starts `agent.round` in `agent_node`, and `tool_node` parents
+  `tool.execute` on it explicitly. The next round, or `run_agent`'s
+  `finally`, ends it. LangGraph runs each node in a task that copies the
+  context, so `agent.round` correctly nests under `agent.run`; the tests
+  check this rather than assume it.
+- **`asyncio.to_thread` copies contextvars**, so `stt.transcribe` is the
+  current span inside the faster-whisper worker thread. Verified in a test
+  that reads the current span from inside the thread.
+- **Rejections are not errors.** Span status ERROR is set for failures:
+  LLM timeout, tool timeout or tool error, failed Jev call, and any
+  exception escaping a span. Grounding, invalid-argument, unknown-tool and
+  budget rejections are the system working as designed. They stay UNSET
+  and are searchable by `tool.error_category`.
+- **PHI on spans.** Call sites only set enums, counts, durations, the
+  session id, fixed config values and entity-free command names. Never
+  user text, transcripts, tool arguments or a model-invented tool name
+  (`unknown` instead). Exceptions are recorded as the **type only**. A
+  `RedactingSpanExporter` in front of the real exporter also covers spans
+  we don't write ourselves: it strips query strings from `http.*`/`url.*`
+  attributes (the ASGI instrumentation records
+  `?query=<patient name>`), drops `url.query`, and removes
+  `exception.message`/`exception.stacktrace` from events. FastAPI's
+  instrumentation records those in full. SQL spans carry parameterized
+  statements only: SQLAlchemy's commenter is off and asyncpg doesn't
+  capture parameters.
+- **FastAPI instrumentation is traces only** (a no-op `MeterProvider`), so
+  `http.server.request.duration` is not double-counted. `/api/health` is
+  excluded, and so are the per-message ASGI `receive`/`send` spans, which
+  would add hundreds of spans per voice connection.
+- **Setup moved from the lifespan to import time** in `app/main.py`.
+  FastAPI instrumentation wraps the app's middleware stack, and Starlette
+  builds that stack on the first ASGI call, which is the lifespan startup
+  itself, so instrumenting there was too late. Shutdown still happens in
+  the lifespan.
+- **SQLAlchemy and asyncpg both produce a span per query.** That is
+  redundant but cheap, and the nested pair separates ORM time from driver
+  time. psycopg (the checkpointer) is not auto-instrumented; the manual
+  `checkpointer.*` spans cover it.
+- `agent_events` / `record_event` are unchanged. The trace panel and Tempo
+  are different readers of overlapping facts.
+
+**Log export to Loki.** The structlog chain is now:
+
+```
+merge_contextvars → add_trace_context → add_log_level → TimeStamper →
+StackInfoRenderer → format_exc_info → redactor → export_to_otlp → JSONRenderer
+```
+
+`export_to_otlp` sits after the redactor, so the OTLP record (body = event
+name, attributes = the remaining fields) is exactly the already-redacted
+dict that is printed. Stdout output is unchanged apart from the new
+`trace_id`/`span_id` fields. It is a no-op until `telemetry.py` binds a
+logger, and it never raises. Why this and not a stdlib `logging` handler
+bridge: there is no second formatting path that could drift from the
+redaction. Honest caveats:
+- The OTel Python logs API still lives in underscore modules
+  (`opentelemetry._logs`, `opentelemetry.sdk._logs`), which upstream
+  hasn't declared stable. Every use is confined to `otel_logs.py` and
+  `telemetry.py`, and the SDK pin is narrow.
+- stdlib-only loggers (uvicorn's access log) are not exported. The
+  structured `request_completed` line covers the same requests.
+
+**Tests** (`tests/integration/test_tracing.py`, 8 tests; in-memory span
+exporter through the production `build_tracer_provider`, so through the
+redacting exporter):
+- A scripted agent chat over HTTP is one trace. It checks the parent chain
+  `chat.handle → agent.run → agent.round → llm.invoke / tool.execute`, the
+  gate spans under `chat.handle`, SQL auto-spans nested under
+  `tool.execute`, a grounding rejection that is not an error, token and
+  model attributes, and `agent.trace` log lines carrying the trace's
+  `trace_id`.
+- No span carries a patient's name: the `test_trace_redaction.py`
+  scenario, with SQL instrumentation on.
+- On a throwaway FastAPI app with real instrumentation: `request_id` on
+  the root span, no query string, and no exception message on the error
+  span.
+- A voice utterance is its own trace, linked to the connection.
+  `stt.transcribe` is current inside the worker thread, `chat.handle` is
+  its child, and the transcript appears nowhere.
+- `span()` errors record the type, never the message.
+- Log lines inside a span carry its `trace_id`/`span_id`; lines outside
+  carry neither.
+- The OTLP log record is the redacted dict (`user_text: "[REDACTED]"`)
+  with the span's trace id.
+- Telemetry off: no recording spans, requests work, no `trace_id` on
+  log lines.
+- `tests/unit/test_telemetry.py` now also checks that enabling with no
+  collector sets up all three signals and that recording a span and a log
+  line, then shutting down, never raises. Measured cost: about 8 s of
+  shutdown while the three exporters time out.
+- `tests/conftest.py` forces `OTEL_ENABLED=false` at import, like the Jev
+  fix, so a developer's `.env` can't make the suite export.
+- Checked against the old code with pytest plugins that replace the new
+  code with no-ops:
+  - no manual spans and no log processors: 6 of 8 tests fail;
+  - export-side redaction made a pass-through: the FastAPI
+    query/exception test fails;
+  - the `request_id` root-span line removed: the same test fails.
+  The patient-name test passes without the redacting exporter, because
+  the call sites themselves never put the name on a span. It guards the
+  call sites, and the FastAPI test guards the exporter.
 
 ## 3. Decisions
 

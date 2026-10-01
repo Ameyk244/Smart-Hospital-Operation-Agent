@@ -20,7 +20,7 @@ Entries are updated as each phase lands.
 |---|---|---|---|---|
 | Observability vs monitoring | Monitoring answers known questions; observability lets you ask new ones of telemetry you already have | The whole folder. Monitoring = dashboard panels; observability = drilling from a panel into one request's trace and logs | Core | Planned (5) |
 | White-box instrumentation | Telemetry emitted from inside the code | `app/observability/*` and the call sites in `chat.py` / `graph.py` | Core | Partial (logs + trace + correlation) |
-| Unknown-unknowns debugging | Investigating failures nobody wrote an alert for, e.g. "why did this go to Sonnet?" | Grafana Explore → Tempo trace for one request | Core | Planned (4/5) |
+| Unknown-unknowns debugging | Investigating failures nobody wrote an alert for, e.g. "why did this go to Sonnet?" | One trace per request: the gate spans say why it reached `agent.run` (`parser.matched=false`, `jev.failure_reason`). Grafana Explore → Tempo | Core | Done (4; UI in 5) |
 
 ## Module 2: Logs, metrics, traces
 
@@ -28,7 +28,7 @@ Entries are updated as each phase lands.
 |---|---|---|---|---|
 | Logs | Discrete events with context | structlog JSON on stdout (`logging_config.py`) | Core | Done (pre-existing) |
 | Metrics | Numeric time series, cheap to aggregate | `app/observability/metrics.py` (instruments), `telemetry.py` (SDK + OTLP export). See it: `pytest tests/integration/test_metrics.py -v` | Core | Done (3) |
-| Traces / spans | One request's causal tree | OTel tracer (Phase 4) | Core | Planned (4) |
+| Traces / spans | One request's causal tree | `app/observability/spans.py` + `telemetry.py`. See it: `pytest tests/integration/test_tracing.py -v` | Core | Done (4) |
 
 ## Module 3: Structured logging
 
@@ -56,19 +56,19 @@ Entries are updated as each phase lands.
 
 | Concept | What it is | Where / how to see it | Fit | Status |
 |---|---|---|---|---|
-| Parent/child spans | The causal tree of one request | parser → domain gate → Jev → agent round → tool → DB | Core | Planned (4) |
-| Span attributes / events / status | Searchable context and error state on a span | route, tool name, grounding outcome | Core | Planned (4) |
-| Async context propagation | Context surviving `await` and task boundaries | OTel contextvars through the LangGraph loop | Core | Planned (4) |
-| Request vs trace vs session ID | Three different scopes of identity | Request = one HTTP call or one WebSocket connection (`request_id`); session = LangGraph thread (`session_id`, spans many requests); trace id comes in Phase 4 | Core | Partial (2: request + session; trace 4) |
-| Cross-service propagation | `traceparent` across HTTP hops | Outbound LLM/Jev calls only, via httpx instrumentation | Light | Planned (4) |
+| Parent/child spans | The causal tree of one request | `POST /api/chat` → `chat.handle` → gates / `jev.consult` → `agent.run` → `agent.round` → `llm.invoke` / `tool.execute` → SQL. Tree in README §2 Phase 4 | Core | Done (4) |
+| Span attributes / events / status | Searchable context and error state on a span | `chat.route`, `tool.name`, `tool.error_category`, token counts; ERROR for failures and timeouts only; exceptions recorded as type only | Core | Done (4) |
+| Async context propagation | Context surviving `await` and task boundaries | Through LangGraph's node tasks (`agent.round` under `agent.run`), `asyncio.wait_for` (SQL under `tool.execute`) and `asyncio.to_thread` (STT thread inside `stt.transcribe`), all asserted in `test_tracing.py`. Rounds that span two nodes are parented explicitly (`_RoundSpans`) | Core | Done (4) |
+| Request vs trace vs session ID | Three different scopes of identity | `request_id` = one HTTP call or WebSocket connection (log field + root span attribute); `trace_id` = one request's span tree, or one voice utterance; `session.id` = LangGraph thread, across many traces | Core | Done (2/4) |
+| Cross-service propagation | `traceparent` across HTTP hops | httpx auto-instrumentation: the LLM provider call is a CLIENT span under `llm.invoke` and carries `traceparent` (Jev too, if its SDK uses httpx) | Light | Done (4) |
 | Head / tail sampling | Dropping traces to save cost | 100% kept at this volume | Theory | Not built (by design) |
 
 ## Module 6: OpenTelemetry
 
 | Concept | What it is | Where / how to see it | Fit | Status |
 |---|---|---|---|---|
-| API vs SDK, Tracer/MeterProvider | Instrument against the API; the SDK decides export | `metrics.py` records via the API (no-op by default); `telemetry.py` installs the SDK `MeterProvider` only when `OTEL_ENABLED=true`. See it: `tests/unit/test_telemetry.py` | Core | Done for metrics (3); tracer (4) |
-| Auto vs manual instrumentation | Library hooks vs explicit spans | FastAPI/SQLAlchemy/asyncpg/httpx auto; request path manual | Core | Planned (4) |
+| API vs SDK, Tracer/MeterProvider | Instrument against the API; the SDK decides export | `metrics.py`/`spans.py`/`otel_logs.py` use the API (no-op by default); `telemetry.py` installs the SDK Meter/Tracer/LoggerProviders only when `OTEL_ENABLED=true`. See it: `tests/unit/test_telemetry.py` | Core | Done (3/4) |
+| Auto vs manual instrumentation | Library hooks vs explicit spans | Auto: FastAPI (traces only), SQLAlchemy, asyncpg, httpx in `telemetry.instrument_libraries`. Manual: the request path via `spans.span()` | Core | Done (4) |
 | Resource attributes | `service.name` etc. | `telemetry.build_resource`: `service.name=hospital-ops-backend`, `service.version`, `deployment.environment.name` | Core | Done (3) |
 | OTLP exporter + Collector | Wire protocol and the routing hop | `grafana/otel-lgtm` bundles the Collector | Core | Planned (5) |
 | Collector processor pipelines | | Image defaults are enough here | Theory | Not built (by design) |
@@ -78,7 +78,7 @@ Entries are updated as each phase lands.
 | Concept | What it is | Where / how to see it | Fit | Status |
 |---|---|---|---|---|
 | Connection pool saturation | Pool exhaustion queues every request | SQLAlchemy `QueuePool`: `db.pool.connections{state=size/checked_out/overflow}`. The checkpointer is one psycopg connection behind a lock, not a pool: its saturation is `checkpointer.operation.duration` (lock wait included), plus `checkpointer.connection.up` | Core | Done (3) |
-| DB query latency | | SQLAlchemy/asyncpg auto-instrumentation spans | Core | Planned (4) |
+| DB query latency | | SQLAlchemy + asyncpg spans (parameterized statements, never values), nested under the `tool.execute` that ran them; `checkpointer.*` spans for psycopg | Core | Done (4) |
 | USE (CPU) | Utilization/Saturation/Errors of a resource | Utilization: `rate(process.cpu.time)`; saturation: `stt.real_time_factor` > 1; errors: `stt.duration{status="error"}` | Core | Done (3; panels in 5) |
 | Event-loop blocking | CPU work stalling every other request | Compare `stt.duration` with `http.server.request.duration` during voice use (STT runs in `asyncio.to_thread`, so it should not stall the loop) | Core | Done (3; panel in 5) |
 | Timeouts | | `llm.call.duration{status="timeout"}`, `agent.tool.calls{error_category="timeout"}`, `agent.terminations{termination="llm_timeout"}` | Core | Done (3) |
@@ -99,7 +99,7 @@ Entries are updated as each phase lands.
 | Concept | What it is | Where / how to see it | Fit | Status |
 |---|---|---|---|---|
 | Dashboard as code | Reproducible dashboards | `observability/dashboards/*.json` | Core | Planned (5) |
-| Metric → trace → logs | The investigation path | Grafana exemplars → Tempo → Loki via `trace_id` | Core | Planned (4/5) |
+| Metric → trace → logs | The investigation path | Trace → logs works now: `trace_id`/`span_id` on every log line inside a span, and logs exported over OTLP (to Loki) when enabled. Grafana wiring and exemplars in Phase 5 | Core | Partial (4: trace↔logs; 5: dashboard) |
 | PHI redaction / allowlisting | Store only fields proven safe, not everything except known-bad ones | `redaction.redact_arguments` on every `agent_events` write. See it: trace panel shows `command_text: "[REDACTED]"` after a `show patient` tool call; `tests/integration/test_trace_redaction.py` | Core | Done (1) |
 | Secrets out of logs | Credentials never in telemetry | `redaction.make_log_redactor` scrubs API keys + DB password from every field incl. tracebacks; `hide_parameters=True` on the engine | Core | Done (1) |
 | Observability vs audit logs | Sampled, operator-facing vs complete, who/what/before/after | `reschedule_appointment` audit table | Core | Planned (6) |

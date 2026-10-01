@@ -1296,3 +1296,15 @@ for the test process. Before this, two e2e tests in `test_chat_api.py`
 every suite run made two real Jev calls. This predates the observability
 branch. It was verified with a spy plugin that records which tests reach
 the real SDK path: two before the fix, none after.
+
+Phase 4 (distributed tracing), delegated to the same backend subagent and
+reviewed by the lead. OTel tracing is added, with auto-instrumentation for
+FastAPI (traces only), SQLAlchemy, asyncpg and httpx. Manual spans cover
+chat.handle → parser/gates → jev.consult → agent.run → agent.round →
+llm.invoke / tool.execute → SQL. Each voice utterance is its own trace,
+linked to its connection. A redacting span exporter strips URL query
+strings and exception messages from every exported span. Log lines carry
+`trace_id`/`span_id`, and the already-redacted line is exported over OTLP
+to Loki. Telemetry setup moved to import time, because FastAPI must be
+instrumented before Starlette builds its middleware. The test conftest
+also forces `OTEL_ENABLED=false`. Suite: 527 passed, 6 skipped.

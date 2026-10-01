@@ -37,6 +37,8 @@ from typing import Any
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.graph import END, StateGraph
+from opentelemetry import trace
+from opentelemetry.context import Context
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -48,7 +50,7 @@ from app.config import Settings
 from app.db.models.agent import EventStatus
 from app.db.repositories.preference_repository import PreferenceRepository
 from app.db.repositories.session_repository import SessionRepository
-from app.observability import metrics
+from app.observability import metrics, spans
 from app.observability.tracing import record_event
 
 SYSTEM_PROMPT = (
@@ -92,11 +94,114 @@ def _model_label(settings: Settings) -> str:
     return settings.anthropic_model
 
 
+class _RoundSpans:
+    """Holds the open `agent.round` span (observability Phase 4).
+
+    A round is one model call plus the tool calls it asked for, but those
+    run in two different graph nodes, and a context manager can't stay open
+    across nodes. So agent_node starts the round span here, tool_node
+    parents its `tool.execute` spans on it explicitly, and the next round
+    (or the end of `run_agent`) ends it. One instance per graph build, so
+    concurrent turns never share it. The `tool.execute` span currently open
+    is held here too, for the same reason: the tool loop has several exits
+    per call, and one place to end it is simpler than one per exit."""
+
+    def __init__(self) -> None:
+        self.round: trace.Span | None = None
+        self.tool: trace.Span | None = None
+
+    def start_round(self, round_num: int) -> None:
+        self.end()
+        self.round = spans.get_tracer().start_span(
+            "agent.round", attributes={"agent.round": round_num}
+        )
+
+    def context(self) -> Context | None:
+        return trace.set_span_in_context(self.round) if self.round is not None else None
+
+    def start_tool(self, tool_name: str) -> trace.Span:
+        self.end_tool()
+        self.tool = spans.get_tracer().start_span(
+            "tool.execute", context=self.context(), attributes={"tool.name": tool_name}
+        )
+        return self.tool
+
+    def end_tool(self) -> None:
+        if self.tool is not None:
+            self.tool.end()
+            self.tool = None
+
+    def end(self) -> None:
+        self.end_tool()
+        if self.round is not None:
+            self.round.end()
+            self.round = None
+
+
+def _tool_outcome(
+    tool_span: trace.Span,
+    tool_name: str,
+    status: str,
+    error_category: str | None = None,
+    seconds: float | None = None,
+) -> None:
+    """One tool call's outcome, to both the metric and its span. Failures
+    (timeouts, tool errors) mark the span ERROR; rejections (grounding,
+    invalid or unknown calls, exhausted budget) are the system working as
+    designed and stay unset, findable by `tool.error_category`."""
+    metrics.record_tool_call(tool_name, status, error_category, seconds)
+    spans.set_attributes(
+        tool_span,
+        **{"tool.status": status.lower(), "tool.error_category": error_category},
+    )
+    if status == EventStatus.FAILURE.value:
+        spans.mark_error(tool_span, error_category or "tool_error")
+
+
 def _make_agent_node(
-    chat_model: BaseChatModel, session_factory: async_sessionmaker[AsyncSession], settings: Settings
+    chat_model: BaseChatModel,
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    round_spans: _RoundSpans,
 ) -> Callable[[AgentState], Any]:
     model_with_tools = chat_model.bind_tools(all_tool_dicts())
     model_label = _model_label(settings)
+
+    async def invoke_model(messages: list[Any], round_num: int) -> AIMessage | None:
+        """The LLM call inside an `llm.invoke` span. None means it timed
+        out. Attributes: model name, round, status, token counts."""
+        with spans.span(
+            "llm.invoke",
+            {"gen_ai.request.model": model_label, "agent.round": round_num},
+            context=round_spans.context(),
+        ) as llm_span:
+            llm_started = time.perf_counter()
+            try:
+                response = await asyncio.wait_for(
+                    model_with_tools.ainvoke(messages), timeout=settings.llm_timeout_seconds
+                )
+            except TimeoutError:
+                metrics.record_llm_call(time.perf_counter() - llm_started, "timeout", model_label)
+                llm_span.set_attribute("llm.status", "timeout")
+                spans.mark_error(llm_span, "timeout")
+                return None
+            except Exception:
+                # Propagates (see module docstring), but is still counted.
+                metrics.record_llm_call(time.perf_counter() - llm_started, "error", model_label)
+                llm_span.set_attribute("llm.status", "error")
+                raise
+            usage = getattr(response, "usage_metadata", None)
+            metrics.record_llm_call(time.perf_counter() - llm_started, "ok", model_label, usage)
+            spans.set_attributes(
+                llm_span,
+                **{
+                    "llm.status": "ok",
+                    "gen_ai.usage.input_tokens": (usage or {}).get("input_tokens"),
+                    "gen_ai.usage.output_tokens": (usage or {}).get("output_tokens"),
+                    "llm.tool_call_count": len(response.tool_calls),
+                },
+            )
+            return response
 
     async def agent_node(state: AgentState) -> dict:
         if state["round_count"] >= settings.max_agent_rounds:
@@ -112,6 +217,7 @@ def _make_agent_node(
             return {"terminated_reason": "max_rounds_exceeded"}
 
         round_num = state["round_count"] + 1
+        round_spans.start_round(round_num)
         async with session_factory() as session:
             await record_event(
                 session,
@@ -122,13 +228,8 @@ def _make_agent_node(
             )
             await session.commit()
 
-        llm_started = time.perf_counter()
-        try:
-            response = await asyncio.wait_for(
-                model_with_tools.ainvoke(state["messages"]), timeout=settings.llm_timeout_seconds
-            )
-        except TimeoutError:
-            metrics.record_llm_call(time.perf_counter() - llm_started, "timeout", model_label)
+        response = await invoke_model(state["messages"], round_num)
+        if response is None:
             async with session_factory() as session:
                 await record_event(
                     session,
@@ -144,16 +245,6 @@ def _make_agent_node(
                 "messages": [AIMessage(content="(the model timed out)")],
                 "terminated_reason": "llm_timeout",
             }
-        except Exception:
-            # Propagates (see module docstring), but is still counted.
-            metrics.record_llm_call(time.perf_counter() - llm_started, "error", model_label)
-            raise
-        metrics.record_llm_call(
-            time.perf_counter() - llm_started,
-            "ok",
-            model_label,
-            getattr(response, "usage_metadata", None),
-        )
 
         async with session_factory() as session:
             await record_event(
@@ -183,7 +274,9 @@ def _route_after_agent(state: AgentState) -> str:
 
 
 def _make_tool_node(
-    session_factory: async_sessionmaker[AsyncSession], settings: Settings
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    round_spans: _RoundSpans,
 ) -> Callable[[AgentState], Any]:
     async def tool_node(state: AgentState) -> dict:
         last = state["messages"][-1]
@@ -202,6 +295,10 @@ def _make_tool_node(
         touched_seen = set(touched_entity_codes)
 
         for call in last.tool_calls:
+            # Registered name or "unknown": a model-invented name is free
+            # text and never goes on a span or a metric.
+            tool_label = call["name"] if call["name"] in TOOL_REGISTRY else metrics.UNKNOWN_TOOL
+            tool_span = round_spans.start_tool(tool_label)
             # Every branch below funnels through the bottom of this loop
             # body rather than `continue`-ing early, specifically so the
             # invalid-call-limit check at the end always runs exactly once
@@ -212,11 +309,7 @@ def _make_tool_node(
             # to max_agent_rounds instead of stopping at max_invalid_tool_calls.
             if terminated_reason is not None or tool_call_count >= settings.max_tool_calls:
                 terminated_reason = terminated_reason or "max_tool_calls_exceeded"
-                metrics.record_tool_call(
-                    call["name"] if call["name"] in TOOL_REGISTRY else metrics.UNKNOWN_TOOL,
-                    EventStatus.REJECTED.value,
-                    "budget_exhausted",
-                )
+                _tool_outcome(tool_span, tool_label, EventStatus.REJECTED.value, "budget_exhausted")
                 new_messages.append(
                     ToolMessage(
                         content="Not executed: this session's tool-call budget is exhausted.",
@@ -228,10 +321,7 @@ def _make_tool_node(
             spec = TOOL_REGISTRY.get(call["name"])
             if spec is None:
                 invalid_call_count += 1
-                # Not the model's tool name: it is invented, so unbounded.
-                metrics.record_tool_call(
-                    metrics.UNKNOWN_TOOL, EventStatus.REJECTED.value, "unknown_tool"
-                )
+                _tool_outcome(tool_span, tool_label, EventStatus.REJECTED.value, "unknown_tool")
                 async with session_factory() as session:
                     await record_event(
                         session,
@@ -254,7 +344,7 @@ def _make_tool_node(
                 validated_args = spec.args_schema.model_validate(call["args"])
             except ValidationError as exc:
                 invalid_call_count += 1
-                metrics.record_tool_call(spec.name, EventStatus.REJECTED.value, "invalid_argument")
+                _tool_outcome(tool_span, spec.name, EventStatus.REJECTED.value, "invalid_argument")
                 async with session_factory() as session:
                     await record_event(
                         session,
@@ -277,16 +367,25 @@ def _make_tool_node(
             start = time.monotonic()
             async with session_factory() as session:
                 try:
-                    result = await asyncio.wait_for(
-                        spec.handler(session, state["session_id"], validated_args),
-                        timeout=settings.tool_timeout_seconds,
-                    )
+                    # Current while the handler runs, so its SQL spans nest
+                    # under this tool call (wait_for's task copies context).
+                    # Outcome is recorded by _tool_outcome below, not here.
+                    with trace.use_span(
+                        tool_span,
+                        end_on_exit=False,
+                        record_exception=False,
+                        set_status_on_exception=False,
+                    ):
+                        result = await asyncio.wait_for(
+                            spec.handler(session, state["session_id"], validated_args),
+                            timeout=settings.tool_timeout_seconds,
+                        )
                 except TimeoutError:
                     await session.rollback()
                     tool_call_count += 1
                     latency_ms = int((time.monotonic() - start) * 1000)
-                    metrics.record_tool_call(
-                        spec.name, EventStatus.FAILURE.value, "timeout", time.monotonic() - start
+                    _tool_outcome(
+                        tool_span, spec.name, EventStatus.FAILURE.value, "timeout", time.monotonic() - start
                     )
                     await record_event(
                         session,
@@ -308,7 +407,8 @@ def _make_tool_node(
                     tool_call_count += 1
                     invalid_call_count += 1
                     latency_ms = int((time.monotonic() - start) * 1000)
-                    metrics.record_tool_call(
+                    _tool_outcome(
+                        tool_span,
                         spec.name,
                         EventStatus.REJECTED.value,
                         "grounding_rejected",
@@ -331,8 +431,8 @@ def _make_tool_node(
                     await session.rollback()
                     tool_call_count += 1
                     latency_ms = int((time.monotonic() - start) * 1000)
-                    metrics.record_tool_call(
-                        spec.name, EventStatus.FAILURE.value, exc.category, time.monotonic() - start
+                    _tool_outcome(
+                        tool_span, spec.name, EventStatus.FAILURE.value, exc.category, time.monotonic() - start
                     )
                     await record_event(
                         session,
@@ -351,8 +451,8 @@ def _make_tool_node(
                     await session.commit()
                     tool_call_count += 1
                     latency_ms = int((time.monotonic() - start) * 1000)
-                    metrics.record_tool_call(
-                        spec.name, EventStatus.SUCCESS.value, None, time.monotonic() - start
+                    _tool_outcome(
+                        tool_span, spec.name, EventStatus.SUCCESS.value, None, time.monotonic() - start
                     )
                     await record_event(
                         session,
@@ -376,6 +476,9 @@ def _make_tool_node(
             if invalid_call_count >= settings.max_invalid_tool_calls:
                 terminated_reason = "too_many_invalid_calls"
 
+        # A tool span is otherwise ended by the next call's start_tool, or by
+        # run_agent's finally if something raised.
+        round_spans.end_tool()
         return {
             "messages": new_messages,
             "tool_call_count": tool_call_count,
@@ -398,10 +501,12 @@ def build_graph(
     session_factory: async_sessionmaker[AsyncSession],
     settings: Settings,
     checkpointer: Any | None = None,
+    round_spans: _RoundSpans | None = None,
 ):
+    round_spans = round_spans or _RoundSpans()
     graph = StateGraph(AgentState)
-    graph.add_node("agent", _make_agent_node(chat_model, session_factory, settings))
-    graph.add_node("tools", _make_tool_node(session_factory, settings))
+    graph.add_node("agent", _make_agent_node(chat_model, session_factory, settings, round_spans))
+    graph.add_node("tools", _make_tool_node(session_factory, settings, round_spans))
     graph.set_entry_point("agent")
     graph.add_conditional_edges("agent", _route_after_agent, {"tools": "tools", END: END})
     graph.add_conditional_edges("tools", _route_after_tools, {"agent": "agent", END: END})
@@ -446,7 +551,10 @@ async def run_agent(
         await SessionRepository(session).get_or_create(session_id)
         await session.commit()
 
-    compiled = build_graph(chat_model, session_factory, settings, checkpointer=checkpointer)
+    round_spans = _RoundSpans()
+    compiled = build_graph(
+        chat_model, session_factory, settings, checkpointer=checkpointer, round_spans=round_spans
+    )
     recursion_limit = settings.max_agent_rounds * 4 + 10
 
     if checkpointer is not None:
@@ -490,7 +598,24 @@ async def run_agent(
         "terminated_reason": None,
         "touched_entity_codes": [],
     }
-    final_state = await compiled.ainvoke(initial_state, config=config)
+    # `agent.run` is current while the graph runs; LangGraph runs each node
+    # in a task that copies the context, so `agent.round` spans started in
+    # agent_node are its children.
+    with spans.span("agent.run", {"session.id": session_id}) as run_span:
+        try:
+            final_state = await compiled.ainvoke(initial_state, config=config)
+        finally:
+            round_spans.end()
+        termination = final_state.get("terminated_reason") or "completed"
+        spans.set_attributes(
+            run_span,
+            **{
+                "agent.rounds": final_state["round_count"],
+                "agent.tool_calls": final_state["tool_call_count"],
+                "agent.invalid_calls": final_state["invalid_call_count"],
+                "agent.termination": termination,
+            },
+        )
     # Counted here, from final state, because two of the terminations
     # (max_tool_calls_exceeded, too_many_invalid_calls) never write an
     # agent_events row; this is the only place all five are visible.

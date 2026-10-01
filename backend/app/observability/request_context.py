@@ -48,6 +48,7 @@ import uuid
 from typing import Any
 
 import structlog
+from opentelemetry import trace
 
 from app.observability import metrics
 from app.observability.logging_config import get_logger
@@ -100,6 +101,10 @@ class RequestContextMiddleware:
         request_id = resolve_request_id(_incoming_request_id(scope))
         header = (_REQUEST_ID_HEADER_BYTES, request_id.encode("latin-1"))
         tokens = structlog.contextvars.bind_contextvars(request_id=request_id)
+        # Phase 4: also on the request's root span (FastAPI's server span,
+        # current here when tracing is on; a no-op otherwise). Spans may
+        # carry per-request ids; metrics never do.
+        trace.get_current_span().set_attribute("request_id", request_id)
         started = time.perf_counter()
         status_code: int | None = None
 

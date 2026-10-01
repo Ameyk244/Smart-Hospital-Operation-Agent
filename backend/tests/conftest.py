@@ -34,6 +34,12 @@ from collections.abc import AsyncGenerator
 # precedence over `.env`). Jev tests are unaffected: they patch
 # `get_settings` with explicit `jev_settings(...)`.
 os.environ["ENABLE_JEV_FAST_PATH"] = "false"
+# Same reason for OpenTelemetry export: a developer running the Grafana
+# stack sets OTEL_ENABLED=true in `.env`, and importing `app.main` would
+# then install the SDK, instrument libraries globally and export the test
+# suite's traffic to the collector. Tests that need telemetry bind
+# in-memory providers explicitly (`metric_reader`, `span_exporter`).
+os.environ["OTEL_ENABLED"] = "false"
 
 import asyncpg
 import pytest
@@ -473,4 +479,35 @@ def metric_reader():
         yield MetricsSnapshot(reader)
     finally:
         app_metrics.use_meter_provider(NoOpMeterProvider())
+        provider.shutdown()
+
+
+# --------------------------------------------------------------------------
+# In-memory OpenTelemetry spans (observability Phase 4).
+#
+# Binds `app/observability/spans.py` to a fresh SDK `TracerProvider` built
+# by the production `build_tracer_provider` (so spans pass through the same
+# `RedactingSpanExporter`), exporting synchronously into an
+# `InMemorySpanExporter`. The global tracer provider is never set.
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def span_exporter():
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from app.observability import spans as app_spans
+    from app.observability.telemetry import build_tracer_provider
+
+    exporter = InMemorySpanExporter()
+    provider = build_tracer_provider(
+        Resource.create({"service.name": "test"}), exporter, batch=False
+    )
+    app_spans.use_tracer_provider(provider)
+    exporter.provider = provider
+    try:
+        yield exporter
+    finally:
+        app_spans.use_tracer_provider(None)
         provider.shutdown()

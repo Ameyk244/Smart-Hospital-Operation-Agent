@@ -62,6 +62,9 @@ control, a separate subagent) is built against exactly this event contract.
 import numpy as np
 import structlog
 from fastapi import APIRouter, Depends
+from opentelemetry import trace
+from opentelemetry.context import Context
+from opentelemetry.trace import Link
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from app.api.routes.chat import get_checkpointer, handle_chat_message
@@ -69,7 +72,7 @@ from app.config import Settings, get_settings
 from app.db.models.agent import EventStatus
 from app.db.repositories.session_repository import SessionRepository
 from app.db.session import get_session_factory
-from app.observability import metrics
+from app.observability import metrics, spans
 from app.observability.logging_config import get_logger
 from app.observability.tracing import record_event
 from app.voice.stt import transcribe_array
@@ -130,6 +133,42 @@ async def _record_dropped_connection(
 
 
 async def _process_utterance(
+    audio: bytes,
+    *,
+    websocket: WebSocket,
+    session_id: str,
+    session_factory,
+    checkpointer,
+    settings: Settings,
+) -> None:
+    """One utterance = one trace (observability Phase 4). The WebSocket
+    connection has its own long-lived server span; parenting every utterance
+    on it would make one ever-growing trace per connection, so each
+    `voice.utterance` starts a new trace (empty parent context) and *links*
+    to the connection span instead. `stt.transcribe` and `chat.handle` are
+    its children."""
+    connection = trace.get_current_span().get_span_context()
+    with spans.span(
+        "voice.utterance",
+        {
+            "session.id": session_id,
+            "request_id": structlog.contextvars.get_contextvars().get("request_id"),
+            "voice.audio_seconds": len(audio) / 2 / 16_000,
+        },
+        context=Context(),
+        links=[Link(connection)] if connection.is_valid else None,
+    ):
+        await _handle_utterance(
+            audio,
+            websocket=websocket,
+            session_id=session_id,
+            session_factory=session_factory,
+            checkpointer=checkpointer,
+            settings=settings,
+        )
+
+
+async def _handle_utterance(
     audio: bytes,
     *,
     websocket: WebSocket,

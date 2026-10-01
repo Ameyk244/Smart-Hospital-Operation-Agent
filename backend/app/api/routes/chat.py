@@ -44,7 +44,7 @@ from app.db.models.agent import EventStatus, MessageRole
 from app.db.repositories.session_repository import SessionRepository
 from app.db.session import get_db, get_session_factory
 from app.execution.commands import Command, CommandRunner
-from app.observability import metrics
+from app.observability import metrics, spans
 from app.observability.logging_config import get_logger
 from app.observability.tracing import record_event
 from app.parser.parser import parse
@@ -218,13 +218,22 @@ async def handle_chat_message(
     never outlives this turn. See app/observability/request_context.py.
 
     `channel` says which transport produced the text. It only labels the
-    `chat.requests` metric (app/observability/metrics.py); routing never
-    looks at it."""
+    `chat.requests` metric (app/observability/metrics.py) and the
+    `chat.handle` span; routing never looks at it.
+
+    The whole turn runs inside one `chat.handle` span (observability
+    Phase 4), the parent of every gate/Jev/agent span below. Its attributes
+    are the route, channel and session id, never the text."""
     session_id = session_id or str(uuid.uuid4())
     started = time.perf_counter()
     route = "error"
     try:
-        with structlog.contextvars.bound_contextvars(session_id=session_id):
+        with (
+            structlog.contextvars.bound_contextvars(session_id=session_id),
+            spans.span(
+                "chat.handle", {"chat.channel": channel, "session.id": session_id}
+            ) as handle_span,
+        ):
             route, response = await _route_chat_message(
                 text=text,
                 session_id=session_id,
@@ -232,11 +241,40 @@ async def handle_chat_message(
                 session_factory=session_factory,
                 checkpointer=checkpointer,
             )
+            spans.set_attributes(
+                handle_span, **{"chat.route": route, "chat.handled_by": response.handled_by}
+            )
         return response
     finally:
         # One count per turn, by the route that answered it ("error" if the
         # handler raised): parser / Jev / agent shares come from this.
         metrics.record_chat_request(route, channel, time.perf_counter() - started)
+
+
+def _parse(text: str):
+    with spans.span("parser.parse") as parse_span:
+        outcome = parse(text)
+        spans.set_attributes(
+            parse_span,
+            **{
+                "parser.matched": outcome.matched,
+                "command.name": outcome.command.name if outcome.command else None,
+            },
+        )
+        return outcome
+
+
+async def _execute_command(db: AsyncSession, command: Command):
+    """`CommandRunner.execute` inside a `command.execute` span. Only the
+    command name and outcome are attributes, never its arguments (a patient
+    search's arguments are a name)."""
+    with spans.span("command.execute", {"command.name": command.name}) as command_span:
+        result = await CommandRunner(db).execute(command)
+        spans.set_attributes(
+            command_span,
+            **{"command.success": result.success, "error.category": result.error_category},
+        )
+        return result
 
 
 async def _route_chat_message(
@@ -265,11 +303,11 @@ async def _route_chat_message(
     await session_repo.append_message(session_id, MessageRole.USER, text)
     await db.commit()
 
-    outcome = parse(text)
+    outcome = _parse(text)
     if outcome.matched:
         command = outcome.command
         assert command is not None
-        result = await CommandRunner(db).execute(command)
+        result = await _execute_command(db, command)
         message = _format_deterministic_message(command, result.success, result.error, result.data)
         await session_repo.append_message(session_id, MessageRole.ASSISTANT, message)
         await db.commit()
@@ -294,9 +332,11 @@ async def _route_chat_message(
     prior_user_messages = [
         row.content for row in prior_rows if row.role == MessageRole.USER
     ]
-    domain_gate = check_domain_gate(
-        text, prior_user_messages=prior_user_messages
-    )
+    with spans.span("domain_gate.check") as gate_span:
+        domain_gate = check_domain_gate(
+            text, prior_user_messages=prior_user_messages
+        )
+        gate_span.set_attribute("domain_gate.in_domain", domain_gate.in_domain)
     if not domain_gate.in_domain:
         message = (
             "I only handle hospital scheduling and operations — try asking "
@@ -306,7 +346,12 @@ async def _route_chat_message(
         await db.commit()
         return "domain_rejected", ChatResponse(session_id=session_id, handled_by="rejected", message=message)
 
-    eligibility = check_eligibility(text)
+    with spans.span("eligibility.check") as eligibility_span:
+        eligibility = check_eligibility(text)
+        spans.set_attributes(
+            eligibility_span,
+            **{"eligibility.eligible": eligibility.eligible, "eligibility.reason": eligibility.reason},
+        )
     if not eligibility.eligible:
         message = f"Sorry, I can't process that request ({eligibility.reason})."
         await session_repo.append_message(session_id, MessageRole.ASSISTANT, message)
@@ -325,7 +370,24 @@ async def _route_chat_message(
     if settings.enable_jev_fast_path:
         from app.agent.jev_fast_path import try_jev_fast_path
 
-        jev = await try_jev_fast_path(text, settings)
+        with spans.span("jev.consult") as jev_span:
+            jev = await try_jev_fast_path(text, settings)
+            # choice is one of the fixed command labels Jev is asked to pick
+            # from (or "none"), never free text.
+            spans.set_attributes(
+                jev_span,
+                **{
+                    "jev.matched": jev.matched,
+                    "jev.choice": jev.choice,
+                    "jev.confidence": jev.confidence,
+                    "jev.failure_reason": jev.failure_reason,
+                    "jev.model": jev.model,
+                    "jev.input_tokens": jev.input_tokens,
+                    "jev.output_tokens": jev.output_tokens,
+                },
+            )
+            if jev.is_failure:
+                spans.mark_error(jev_span, jev.failure_reason or "jev_failure")
         metrics.record_jev_consultation(jev)
         jev_arguments = {
             "choice": jev.choice,
@@ -342,7 +404,7 @@ async def _route_chat_message(
             assert command is not None
             # The *same* trusted chokepoint the deterministic branch above
             # calls — deliberately not a second execution path.
-            result = await CommandRunner(db).execute(command)
+            result = await _execute_command(db, command)
             message = _format_deterministic_message(
                 command, result.success, result.error, result.data
             )
