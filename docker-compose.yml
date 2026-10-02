@@ -10,7 +10,9 @@ services:
     ports:
       # Host port defaults to 5433, not 5432: a native PostgreSQL service may
       # already own 5432 on the host (it does in this project's dev env).
-      - "${POSTGRES_PORT:-5433}:5432"
+      # Bound to 127.0.0.1: the dev password is a public default in this
+      # repo, so the database must not be reachable from the local network.
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
     volumes:
       - hospital_agent_pgdata:/var/lib/postgresql/data
     healthcheck:
