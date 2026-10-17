@@ -64,5 +64,8 @@ opentelemetry-instrumentation-sqlalchemy==0.66b0
 opentelemetry-instrumentation-asyncpg==0.66b0
 opentelemetry-instrumentation-httpx==0.66b0
 
+# Harness runtime: the bridge calls the harness over HTTP.
+httpx==0.28.1
+
 # Utilities
 python-dotenv>=1.0,<2

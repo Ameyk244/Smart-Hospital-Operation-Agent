@@ -36,6 +36,7 @@ from app.agent.domain_gate import check_domain_gate
 from app.agent.eligibility import check_eligibility
 from app.agent.entity_codes import extract_entity_codes
 from app.agent.graph import record_non_agent_turn, run_agent
+from app.agent.harness_bridge import run_agent_via_harness
 from app.agent.history import to_langchain_messages
 from app.agent.message_text import extract_text_content
 from app.agent.providers.factory import get_default_chat_model
@@ -454,16 +455,26 @@ async def _route_chat_message(
         )
         await db.commit()
 
-    chat_model = get_default_chat_model()
-    final_state = await run_agent(
-        session_id=session_id,
-        user_text=text,
-        chat_model=chat_model,
-        session_factory=session_factory,
-        settings=settings,
-        history=history,
-        checkpointer=checkpointer,
-    )
+    if settings.agent_runtime == "harness":
+        final_state = await run_agent_via_harness(
+            session_id=session_id,
+            user_text=text,
+            session_factory=session_factory,
+            settings=settings,
+            history=history,
+            checkpointer=checkpointer,
+        )
+    else:
+        chat_model = get_default_chat_model()
+        final_state = await run_agent(
+            session_id=session_id,
+            user_text=text,
+            chat_model=chat_model,
+            session_factory=session_factory,
+            settings=settings,
+            history=history,
+            checkpointer=checkpointer,
+        )
     last_message = final_state["messages"][-1]
     # NOT `str(last_message.content)`: when a model turn includes a
     # `thinking` block alongside its `text` block, `.content` is a list of

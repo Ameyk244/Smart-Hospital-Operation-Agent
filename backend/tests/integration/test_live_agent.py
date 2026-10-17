@@ -90,7 +90,7 @@ async def test_live_preference_injection_across_separate_runs(agent_session_fact
     LangGraph run — for the same session_id. If the second run answers
     correctly *without needing to call any tool*, the preference can only
     have come from the injected system message built by
-    `_build_system_message`, not from the model "being good at inferring
+    `build_system_message`, not from the model "being good at inferring
     preferences" within one conversation. This is exactly what makes memory
     injection a system-level guarantee rather than an LLM party trick, so
     it's worth keeping as a named regression test rather than only having

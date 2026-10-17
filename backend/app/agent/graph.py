@@ -333,7 +333,7 @@ def build_graph(
     return graph.compile(checkpointer=checkpointer)
 
 
-async def _build_system_message(
+async def build_system_message(
     session_factory: async_sessionmaker[AsyncSession], session_id: str
 ) -> SystemMessage:
     """Base system prompt, plus this session's remembered preferences
@@ -393,13 +393,13 @@ async def run_agent(
         }
         existing = await compiled.aget_state(config)
         is_new_thread = not existing.values
-        system_message = await _build_system_message(session_factory, session_id)
+        system_message = await build_system_message(session_factory, session_id)
         messages: list[Any] = (
             [system_message] if is_new_thread else []
         ) + [HumanMessage(content=user_text)]
     else:
         config = {"recursion_limit": recursion_limit}
-        system_message = await _build_system_message(session_factory, session_id)
+        system_message = await build_system_message(session_factory, session_id)
         # `history` (concepts 35, 42): prior turns from ConversationMessage,
         # already converted to LangChain messages by the caller — the
         # fallback path for when no checkpointer is configured, so a
@@ -452,6 +452,51 @@ class _StateOnlyModel:
         return self
 
 
+def _state_graph(
+    session_factory: async_sessionmaker[AsyncSession], settings: Settings, checkpointer: Any
+):
+    return build_graph(_StateOnlyModel(), session_factory, settings, checkpointer=checkpointer)  # type: ignore[arg-type]
+
+
+async def get_thread_messages(
+    *,
+    session_id: str,
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    checkpointer: Any,
+) -> list[Any]:
+    """The checkpoint thread's stored messages, empty for a new thread."""
+    compiled = _state_graph(session_factory, settings, checkpointer)
+    existing = await compiled.aget_state({"configurable": {"thread_id": session_id}})
+    return list(existing.values.get("messages", []))
+
+
+async def record_turn_messages(
+    *,
+    session_id: str,
+    messages: list[Any],
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    checkpointer: Any | None,
+) -> None:
+    """Append already-finished messages to the session's checkpoint thread.
+
+    No-op without a checkpointer: then `run_agent` gets the full transcript
+    from `ConversationMessage` rows. Never runs a node, so no model is built.
+    """
+    if checkpointer is None:
+        return
+    compiled = _state_graph(session_factory, settings, checkpointer)
+    config = {"configurable": {"thread_id": session_id}}
+    existing = await compiled.aget_state(config)
+    to_write: list[Any] = []
+    if not existing.values:
+        # Same first-message rule as run_agent: a thread's first message is
+        # the system prompt, and run_agent skips adding it once state exists.
+        to_write.append(await build_system_message(session_factory, session_id))
+    await compiled.aupdate_state(config, {"messages": to_write + messages}, as_node="agent")
+
+
 async def record_non_agent_turn(
     *,
     session_id: str,
@@ -470,20 +515,13 @@ async def record_non_agent_turn(
     never seen either message and answered "I haven't run any searches yet".
     Recording the exchange keeps one conversation, whichever path answered.
 
-    No-op without a checkpointer: then `run_agent` gets the full transcript
-    from `ConversationMessage` rows, which already include these turns.
     Only the user text and the reply text are written, never tool state: the
     exchange grounds no entity codes, exactly as before.
     """
-    if checkpointer is None:
-        return
-    compiled = build_graph(_StateOnlyModel(), session_factory, settings, checkpointer=checkpointer)  # type: ignore[arg-type]
-    config = {"configurable": {"thread_id": session_id}}
-    existing = await compiled.aget_state(config)
-    messages: list[Any] = []
-    if not existing.values:
-        # Same first-message rule as run_agent: a thread's first message is
-        # the system prompt, and run_agent skips adding it once state exists.
-        messages.append(await _build_system_message(session_factory, session_id))
-    messages += [HumanMessage(content=user_text), AIMessage(content=assistant_text)]
-    await compiled.aupdate_state(config, {"messages": messages}, as_node="agent")
+    await record_turn_messages(
+        session_id=session_id,
+        messages=[HumanMessage(content=user_text), AIMessage(content=assistant_text)],
+        session_factory=session_factory,
+        settings=settings,
+        checkpointer=checkpointer,
+    )
