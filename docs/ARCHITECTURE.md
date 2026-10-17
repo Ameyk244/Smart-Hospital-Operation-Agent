@@ -251,6 +251,17 @@ counters, termination reason, and touched entity codes. Messages use
 LangGraph's `add_messages` reducer; counters and touched codes reset for every
 new user turn.
 
+### Harness runtime
+
+With `AGENT_RUNTIME=harness` the graph is not used: `run_agent_via_harness()`
+sends the turn to a separate harness process, which runs the model loop and
+calls `POST /internal/v1/turns/{turn_id}/tool_calls` once per tool call. Both
+runtimes execute tool calls through the same model-free `ToolTurn`
+(`app/agent/turn.py`), so validation, grounding, caps, timeouts, events and
+audit cannot drift. The bridge writes the finished turn into the same
+checkpoint thread. Design, contract and omissions:
+`docs/harness-smart-hospital-operations.md`.
+
 ## 8. Grounding By Rejection
 
 Grounding is a code-level authorization rule for entity references:
@@ -337,6 +348,7 @@ persist conversation messages but do not create LangGraph tool traces.
 | `GET /api/sessions/{id}/messages` | Restore persisted conversation messages |
 | `GET /api/sessions/{id}/trace` | Read agent action events |
 | `GET /api/health` | Health check |
+| `POST /internal/v1/turns/{turn_id}/tool_calls` | Harness runtime only: token-guarded tool-call callback; never published by a proxy |
 
 ## 13. Verification Strategy
 

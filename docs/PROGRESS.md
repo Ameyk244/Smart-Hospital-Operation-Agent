@@ -1354,3 +1354,78 @@ correctly shows red. No burn-rate alerting, by design. The Phase 6
 audit-log docs landed in `observability/README.md` at the same time.
 
 Branch `observability` is complete and left unmerged for review.
+
+## Harness runtime (branch `harness-smartgateway`)
+
+Goal: let the agent's model loop run in a separate harness process (a plugin on
+a fork of DeepSeek Harness) while every tool rule stays in this backend, using
+`docs/harness-refrence.md` as the pattern. Design, contract and the list of
+deliberate omissions are in `docs/harness-smart-hospital-operations.md`.
+
+Part 1 (this repo) is built first; Part 2 (the fork's `hospital-gateway/`
+folder) starts only after Part 1 is verified.
+
+Decisions made before any code, and why:
+- This app has no browser socket to relay, and its tools run on FastAPI's own
+  loop, so most of the reference gateway (socket relay, door, step fence,
+  command-thread channel) does not apply. The backend calls the harness after
+  the gates; the harness calls back once per tool call.
+- Tool rules move into a model-free `ToolTurn` shared by both runtimes, so the
+  two cannot drift. The extraction must leave the existing suite unmodified.
+- No schema change, so no migration and nothing needing DB approval.
+- Default stays `in_process`; no silent fallback if the harness is down.
+
+Timeline (updated as work happens):
+- Branch created; reference read; design agreed; docs written (CLAUDE.md,
+  harness doc, SKILLS.md, this entry). Baseline offline suite started before
+  any code change.
+- Baseline offline suite on the pre-change code: 534 passed, 6 live-LLM tests
+  deselected. One fixture error (`DELETE FROM scanners` foreign-key violation)
+  was test-DB contention with concurrent subagent runs; the file passes alone.
+  Lesson: concurrent subagent pytest runs share one test database and slow
+  each other badly (a 20-minute targeted run), so later waves ran one at a time.
+- Wave 1, two subagents in parallel on disjoint files, both reviewed by the lead:
+  - `ToolTurn` extracted from `graph.py` into `app/agent/turn.py`
+    (`graph.py` -250/+29). Existing tests pass unmodified. The lead removed an
+    unused `call_id` parameter from `ToolTurn.call` (the harness side needs
+    `call_id`, but only in the bridge's recording wrapper).
+  - Settings (fail-fast token validator), turn registry, token-guarded
+    `/internal/v1` tool-call route, seven contract fixtures and tests. The
+    subagent found that pydantic echoes the whole input, token included, in
+    settings errors, and fixed it with `hide_input_in_errors`.
+- Wave 2, one subagent: `app/agent/harness_bridge.py`, OpenAI-format history
+  conversion, `get_thread_messages` / `record_turn_messages` in `graph.py`
+  (`record_non_agent_turn` now reuses it), the runtime switch in `chat.py`,
+  `httpx` as a direct runtime requirement. Reviewed by the lead; the contract
+  gaps it had to decide (fixed reply sentences for backend end-turn reasons,
+  event categories, unknown stop reasons treated as malformed) are recorded in
+  the harness doc.
+- Docs updated: `AGENT.md`, `rulebook.md`, `docs/ARCHITECTURE.md`.
+- Wave 3, one subagent: `tests/integration/test_harness_world.py` (13 tests).
+  The real app, route, DB, checkpointer, `ToolTurn` and bridge run with only
+  the one HTTP call to the harness replaced by a scripted fake that drives the
+  real internal route. The subagent also found why test runs were so slow: a
+  plain Postgres connect to `localhost` takes exactly 10 s here (likely IPv6
+  resolution), and `PGHOSTADDR=127.0.0.1` removes it (full suite 35 min -> 12).
+- Full offline suite: 594 passed (534 baseline + 60 new), ruff clean.
+- App check on the running app. Harness mode against a stand-in harness
+  (stdlib script): a real agent turn made one real tool call through
+  `/internal/v1`, searched the dev DB, and replied; the follow-up continued the
+  session; the trace panel showed `agent_invoked` and `tool_executed`; with the
+  stub killed the reply was the fixed unavailable sentence. `in_process` mode
+  started and served a deterministic request; the internal route answered 404
+  with nothing registered; `AGENT_RUNTIME=harness` without a token failed at
+  startup with a message that does not contain the token. First attempt hit the
+  Jev path (on by default, one live Jev call), so Jev was disabled for the rest
+  of the check. No live agent LLM call was made.
+- Code review (`/code-review high`), 8 findings. Fixed: a tool call still in
+  flight when the bridge gave up on the harness (the bridge now waits for it);
+  parallel or replayed tool calls could overshoot a cap or run a write twice
+  (calls are serialised and a repeated `(round, call_id)` returns the stored
+  result); a blank model reply (now a harness error); unreported served calls
+  placed after the final answer (now before); tool spans not parented on
+  `harness.turn`. Not changed, on purpose: the state-only graph is compiled
+  twice per turn (milliseconds against a model turn), unparseable arguments are
+  logged without a marker (debugging nicety), and the startup validator also
+  affects tools that import config (intended fail-closed, only when
+  `AGENT_RUNTIME=harness`).

@@ -6,8 +6,10 @@ Vite) are separate concerns. See `docs/ARCHITECTURE.md` for the full
 design, `AGENT.md` for the runtime agent contract, `JEV.md` for the read-only
 fast path, `docs/voice.md` for the streaming voice input layer (design, measurements, test findings),
 `docs/PROGRESS.md` for
-the implementation timeline, and `rulebook.md` for the current command,
-tool, routing, grounding, and manual verification reference.
+the implementation timeline, `rulebook.md` for the current command,
+tool, routing, grounding, and manual verification reference, and
+`docs/harness-smart-hospital-operations.md` for the harness runtime (design,
+contract, what changed and why).
 
 ## Voice input (merged from the `voice` branch)
 Streaming voice input runs alongside the text pipeline: a WebSocket transport
@@ -116,6 +118,41 @@ minimum number actually needed.
 - `reschedule_appointment` is the only tool in the whole system that
   mutates hospital data. Everything else is either read-only or writes to
   session-scoped preference memory, not the hospital schema.
+
+## Harness runtime (branch `harness-smartgateway`)
+The agent's model loop can run in a separate harness process (a plugin on a
+fork of DeepSeek Harness) while all tool rules stay here. The full design and
+the **[contract]** sections live in `docs/harness-smart-hospital-operations.md`;
+the pattern reference is `docs/harness-refrence.md`. Two parts: Part 1 is this
+repo (`ToolTurn` extraction, `/internal/v1` route, bridge, runtime switch);
+Part 2 is the fork's `hospital-gateway/` folder, built only after Part 1 is
+verified. It needs **no new paid API or secret** (a local shared token only).
+
+- `AGENT_RUNTIME=in_process` stays the default and must behave exactly as
+  before. The harness runtime may never weaken a gate: it sits where
+  `run_agent` sits, after the parser, domain gate, eligibility gate and Jev.
+- `ToolTurn` (`app/agent/turn.py`) is the one place tool-call rules live
+  (validation, grounding, caps, timeout, audit, events). LangGraph's tool node
+  and the internal route both call it; never duplicate those rules elsewhere.
+- Change the contract by editing the doc first, then the code and fixtures.
+- No schema change is part of this work. Any migration or DDL still needs
+  explicit approval in that turn.
+- Harness logs and spans carry ids and enums only; provider or harness error
+  text is never shown to the user.
+
+### How to finish a unit of harness work (standing instruction to myself)
+1. After Part 1's code is in, **start the app** (backend in `harness` mode
+   against a stub harness, and in `in_process` mode) and confirm a real request
+   works. A passing test suite alone is not "done".
+2. Then run a **code review** (`/code-review`) over the whole branch diff and
+   fix what it finds.
+3. **Production-level code only**: the feature must work properly, with no
+   unnecessary lines. No speculative options, dead code, defensive branches for
+   states that cannot happen, re-explaining comments or wrappers that add
+   nothing. Match the surrounding comment density and idiom. When in doubt,
+   leave it out and note it in the doc's "not built" list.
+4. Report progress as work happens (what is done, what is next), and update
+   `docs/PROGRESS.md` and `SKILLS.md` as it happens.
 
 ## Process norms
 - Commit only when explicitly asked; never `git add -A`/`.` blindly —

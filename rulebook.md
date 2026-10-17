@@ -81,6 +81,15 @@ The agent handles normal hospital-related language that does not match the
 strict parser grammar. Agent turns return `handled_by: agent` and use the LLM,
 so they consume API tokens even when no tool is called.
 
+`AGENT_RUNTIME=in_process` (default) runs the LangGraph loop in the backend.
+`AGENT_RUNTIME=harness` runs the model loop in a separate harness process
+(needs `HARNESS_TOKEN` of at least 32 characters, or startup fails). Only the
+loop moves: routing, gates, tools, grounding, caps and audit are unchanged, and
+`handled_by` is still `agent`. If the harness is down the reply is a fixed
+"temporarily unavailable" sentence with `terminated_reason:
+harness_unavailable`; there is no fallback to the in-process runtime. Contract:
+`docs/harness-smart-hospital-operations.md`.
+
 ### Agent read tools
 
 | Tool | Domain | Purpose |

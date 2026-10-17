@@ -39,6 +39,11 @@ Every `POST /api/chat` request follows this order:
    read command. A match runs through `CommandRunner` and stops.
 9. If Jev declines, lacks confidence, is unavailable, or cannot represent the
    request, create the configured agent model and start LangGraph.
+10. With `AGENT_RUNTIME=harness`, step 9 instead sends the turn to the harness
+    process, which runs the model loop and calls back into this backend for
+    every tool call. The gates above, the tools, grounding and the bounds in
+    section 11 are the same code in both runtimes. See
+    `docs/harness-smart-hospital-operations.md`.
 
 The response identifies the selected route:
 
