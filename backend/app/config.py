@@ -17,13 +17,16 @@ three requests later.
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        hide_input_in_errors=True,
     )
 
     # --- Database ---
@@ -120,6 +123,24 @@ class Settings(BaseSettings):
     tool_timeout_seconds: int = 15
     llm_timeout_seconds: int = 30
     max_invalid_tool_calls: int = 3
+
+    # --- Harness runtime (see docs/harness-smart-hospital-operations.md) ---
+    agent_runtime: Literal["in_process", "harness"] = "in_process"
+    harness_url: str = "http://127.0.0.1:8890"
+    harness_token: str | None = None
+    harness_model: str = "anthropic/claude-sonnet-5"
+    # Whole-turn budget; replaces llm_timeout_seconds in harness mode.
+    harness_turn_timeout_seconds: int = 120
+
+    @model_validator(mode="after")
+    def require_harness_token(self) -> "Settings":
+        """The token guards the internal tool-call route, so a harness runtime
+        without a strong one must not start. The message omits the value."""
+        if self.agent_runtime == "harness" and len(self.harness_token or "") < 32:
+            raise ValueError(
+                "HARNESS_TOKEN must be set to at least 32 characters when AGENT_RUNTIME=harness"
+            )
+        return self
 
     # --- Observability (see observability/README.md) ---
     # Off by default so a fresh clone and the test suite never try to export.

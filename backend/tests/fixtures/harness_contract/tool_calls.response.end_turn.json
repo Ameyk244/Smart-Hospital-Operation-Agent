@@ -1,0 +1,4 @@
+{
+  "content": "Not executed: too many invalid tool calls this turn.",
+  "end_turn": "too_many_invalid_calls"
+}

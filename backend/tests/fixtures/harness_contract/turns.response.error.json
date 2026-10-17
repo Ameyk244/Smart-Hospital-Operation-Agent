@@ -1,0 +1,13 @@
+{
+  "turn_id": "3f2b8c1e9a4d4e6f8b7a1c2d3e4f5a6b",
+  "stop_reason": "error",
+  "error": "upstream model returned HTTP 529",
+  "model_text": "",
+  "rounds": 1,
+  "usage": {
+    "prompt_tokens": 812,
+    "completion_tokens": 0,
+    "cached_tokens": 0
+  },
+  "assistant_rounds": []
+}

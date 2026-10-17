@@ -23,7 +23,15 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from app.agent.checkpointer import build_checkpointer  # noqa: E402
-from app.api.routes import chat, commands, cost, operations, sessions, voice  # noqa: E402
+from app.api.routes import (  # noqa: E402
+    chat,
+    commands,
+    cost,
+    internal_harness,
+    operations,
+    sessions,
+    voice,
+)
 from app.config import get_settings  # noqa: E402
 from app.db.session import engine  # noqa: E402
 from app.observability.logging_config import configure_logging  # noqa: E402
@@ -64,6 +72,7 @@ app.include_router(operations.router)
 app.include_router(sessions.router)
 app.include_router(cost.router)
 app.include_router(voice.router)
+app.include_router(internal_harness.router)
 
 # A no-op unless OTEL_ENABLED is set; never raises. Runs here, at import,
 # not in the lifespan: FastAPI instrumentation must be installed before the

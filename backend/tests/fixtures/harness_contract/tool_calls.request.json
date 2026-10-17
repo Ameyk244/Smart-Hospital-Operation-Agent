@@ -1,0 +1,6 @@
+{
+  "round": 1,
+  "call_id": "call_02",
+  "name": "reschedule_appointment",
+  "arguments": "{\"appointment_code\":\"APT-2001\",\"new_start\":\"2026-10-18T09:00:00\"}"
+}

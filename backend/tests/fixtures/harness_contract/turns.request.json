@@ -1,0 +1,79 @@
+{
+  "turn_id": "3f2b8c1e9a4d4e6f8b7a1c2d3e4f5a6b",
+  "system": "You are the Smart Hospital Operations Agent. Remembered preferences: preferred_scanner_type=MRI.",
+  "history": [
+    {
+      "role": "user",
+      "content": "Find appointments for scanner SCN-3"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "call_01",
+          "type": "function",
+          "function": {
+            "name": "search_appointments",
+            "arguments": "{\"scanner_code\": \"SCN-3\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": "[{\"code\": \"APT-2001\", \"scanner_code\": \"SCN-3\"}]",
+      "tool_call_id": "call_01"
+    },
+    {
+      "role": "assistant",
+      "content": "SCN-3 has one appointment: APT-2001."
+    }
+  ],
+  "user": "Move APT-2001 to tomorrow at 9am",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "search_appointments",
+        "description": "Search appointments by scanner, status or type.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "scanner_code": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "reschedule_appointment",
+        "description": "Move an appointment to a new start time.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "appointment_code": {
+              "type": "string"
+            },
+            "new_start": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "appointment_code",
+            "new_start"
+          ]
+        }
+      }
+    }
+  ],
+  "llm": {
+    "model": "anthropic/claude-sonnet-5",
+    "max_tokens": 4096,
+    "deadline_in_ms": 120000,
+    "max_rounds": 6
+  }
+}

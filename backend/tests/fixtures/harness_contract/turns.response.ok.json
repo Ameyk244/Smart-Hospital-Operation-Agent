@@ -1,0 +1,30 @@
+{
+  "turn_id": "3f2b8c1e9a4d4e6f8b7a1c2d3e4f5a6b",
+  "stop_reason": null,
+  "error": null,
+  "model_text": "APT-2001 is now rescheduled to tomorrow at 09:00.",
+  "rounds": 2,
+  "usage": {
+    "prompt_tokens": 812,
+    "completion_tokens": 64,
+    "cached_tokens": 640
+  },
+  "assistant_rounds": [
+    {
+      "round": 1,
+      "text": "",
+      "tool_calls": [
+        {
+          "id": "call_02",
+          "name": "reschedule_appointment",
+          "arguments": "{\"appointment_code\":\"APT-2001\",\"new_start\":\"2026-10-18T09:00:00\"}"
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "text": "APT-2001 is now rescheduled to tomorrow at 09:00.",
+      "tool_calls": []
+    }
+  ]
+}
