@@ -126,3 +126,15 @@ export interface CostComparison {
   net_savings_usd: number | null;
   assumptions: Record<string, number | string | null> | null;
 }
+
+// --- /api/status ---
+
+// on = working, off = not configured or switched off, down = configured but
+// not answering.
+export type Light = "on" | "off" | "down";
+
+export interface StatusResponse {
+  agent: { runtime: "in_process" | "harness"; status: Light };
+  harness: { status: Light };
+  jev: { status: Exclude<Light, "down"> };
+}

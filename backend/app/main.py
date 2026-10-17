@@ -30,6 +30,7 @@ from app.api.routes import (  # noqa: E402
     internal_harness,
     operations,
     sessions,
+    status,
     voice,
 )
 from app.config import get_settings  # noqa: E402
@@ -71,6 +72,7 @@ app.include_router(chat.router)
 app.include_router(operations.router)
 app.include_router(sessions.router)
 app.include_router(cost.router)
+app.include_router(status.router)
 app.include_router(voice.router)
 app.include_router(internal_harness.router)
 

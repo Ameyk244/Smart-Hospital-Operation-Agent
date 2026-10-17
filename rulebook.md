@@ -308,6 +308,20 @@ routing as typed text: parser, domain gate, Jev, agent. Typed text is not
 corrected. Ambiguous homophones such as `four`/`for` are deliberately left
 alone. A leading 300 ms pre-roll keeps soft word onsets from being clipped.
 
+### Status lights
+
+The header shows three lights fed by `GET /api/status`, refreshed every 15 s:
+
+| Light | Green (`on`) | Grey (`off`) | Red (`down`) |
+|---|---|---|---|
+| Agent | The answering runtime can answer: a provider key (in-process) or a healthy gateway (harness) | No provider key configured | Harness runtime selected and the gateway is not answering |
+| Harness | Harness runtime selected and the gateway's `/healthz` is `ok` for the expected model | `AGENT_RUNTIME=in_process` | Harness runtime selected, gateway not answering or wrong model |
+| Jev | `ENABLE_JEV_FAST_PATH` is on and `TYPESAFE_API_KEY` is set | Disabled or no key | never (see below) |
+
+Jev is reported from configuration only: probing it would be a paid call on
+every refresh, so a configured Jev whose service is down still shows green. A
+dashed hollow dot means the status request itself failed.
+
 ## 7. Minimal Manual Check
 
 Use this small set to avoid unnecessary API usage:

@@ -4,7 +4,9 @@ import { OperationsView } from "./components/OperationsView";
 import { ChatPanel } from "./components/ChatPanel";
 import { TracePanel } from "./components/TracePanel";
 import { CostComparisonPage } from "./components/CostComparisonPage";
+import { StatusLights } from "./components/StatusLights";
 import { useTrace } from "./hooks/useTrace";
+import { useStatus } from "./hooks/useStatus";
 
 // There's no router in this project and this doesn't justify adding one:
 // a single secondary page is a view switch, not a navigation graph.
@@ -28,6 +30,7 @@ function App() {
   const [touchedEntityCodes, setTouchedEntityCodes] = useState<string[]>([]);
   const [view, setView] = useState<View>("console");
   const trace = useTrace(sessionId, traceRefreshToken);
+  const status = useStatus();
 
   function handleTurnComplete(codes: string[]) {
     setTraceRefreshToken((t) => t + 1);
@@ -39,11 +42,14 @@ function App() {
       <header className="app-header">
         <div className="app-header-row">
           <h1>Smart Hospital Operations Agent</h1>
-          {view === "console" && (
-            <button type="button" className="chat-new-button" onClick={() => setView("cost")}>
-              Cost comparison
-            </button>
-          )}
+          <div className="app-header-actions">
+            {view === "console" && (
+              <button type="button" className="chat-new-button" onClick={() => setView("cost")}>
+                Cost comparison
+              </button>
+            )}
+            <StatusLights state={status} />
+          </div>
         </div>
         <p className="muted">
           A window into a deterministic-parser + LangGraph-agent backend — not a hospital

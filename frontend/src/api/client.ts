@@ -7,6 +7,7 @@ import type {
   Department,
   Patient,
   Scanner,
+  StatusResponse,
 } from "./types";
 
 // Configurable via VITE_API_BASE_URL (see .env.example); defaults to the
@@ -107,6 +108,10 @@ export const api = {
   // all-sessions total; passing one scopes it to that session.
   getCostComparison(sessionId?: string): Promise<CostComparison> {
     return request(`/api/cost-comparison${buildQuery({ session_id: sessionId })}`);
+  },
+
+  getStatus(): Promise<StatusResponse> {
+    return request("/api/status");
   },
 };
 
