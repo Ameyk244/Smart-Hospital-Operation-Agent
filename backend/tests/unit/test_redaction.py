@@ -108,6 +108,7 @@ def test_secret_values_include_api_keys_and_db_password():
     settings = Settings(
         database_url="postgresql+asyncpg://u:db-pass-xyz@localhost:5433/db",
         anthropic_api_key="sk-ant-secret-abc",
+        openrouter_api_key=None,
         typesafe_api_key="ts-secret-def",
     )
     assert set(secret_values_from_settings(settings)) == {
