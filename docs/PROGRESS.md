@@ -1429,3 +1429,78 @@ Timeline (updated as work happens):
   logged without a marker (debugging nicety), and the startup validator also
   affects tools that import config (intended fail-closed, only when
   `AGENT_RUNTIME=harness`).
+
+Part 1 committed as four commits (`b143ca1` ToolTurn extraction, `348485b`
+settings and route, `d43a583` bridge and runtime switch, `25165b4` docs); the reference file stays
+untracked until the whole project is done.
+
+Part 2 (the fork). The user forked `deepseek-ai/deepseek-harness` to
+`Ameyk244/harness-smart-agent` (a fork cannot be made private; MIT license, and
+the repo only ever holds the gateway, no secrets or hospital data). The fork's
+`master` is at upstream `dsh-v0.2.1-alpha.5`, but the reference was written
+against `alpha.2`, and dsh is pre-stable with exact-version pins, so the working
+branch `hospital-gateway` is cut from `dsh-v0.2.1-alpha.2` (`d743267`) with only
+upstream's 23 workflows and `dependabot.yml` removed, as the reference did. The
+layout was checked against the reference before any code: every path exists, the
+package versions equal the gateway's exact peer pins, and one path differs
+(`session-projection` is under `packages/session/`, not `core/`). The clone is in
+`C:\dev` because pnpm junctions use absolute paths. `pnpm install` takes about 30
+seconds and pnpm switched itself to the pinned 11.28.5. Design for the gateway:
+section 11 of `docs/harness-smart-hospital-operations.md`.
+
+Part 2 build, four subagents in the fork (`hospital-gateway/`), each reviewed by
+the lead, run in dependency order with the two independent ones in parallel:
+- G1: tooling, `cordis.patch.yml`, config, protocol guards, whitelist logging,
+  launcher (Windows junction instead of a directory symlink), contract fixtures
+  copied byte-for-byte, the contract sync script, unit tests (90).
+- G2 (in parallel with G3a): backend client, seed builder, raw-argument
+  collector, tool proxy, agent driver, HTTP server, plugin. Built against the
+  real dsh source, which differed from the reference in several places (recorded
+  in section 11.3): unknown tools are forwarded from `tools/execute` so the
+  backend's text stays unprefixed, `agent/request` is not needed, the provider
+  config shape differs.
+- G3a: fake backend and mock LLM with self-tests; the mock was checked against
+  the real pi-ai provider.
+- G3b: 27 end-to-end tests through the real launcher and real dsh against the
+  fakes. It also fixed a launcher bug found by G2: readiness accepted any 2xx
+  from `/healthz`, so an unrelated harness on the same port could fake it (this
+  machine really runs one on 8890, which is why our default is now 8891).
+- Real chain with no model spend: this backend in `harness` mode, the real
+  launcher and dsh, and the mock LLM. One request ran a real tool through
+  `/internal/v1` and produced the reply and the normal trace.
+- Code review of the gateway commit, 10 findings. Fixed: the watchdog (10 s) was
+  shorter than the backend's 15 s tool timeout and the worst case overran the
+  bridge's HTTP timeout, so the watchdog is 20 s and the bridge grace 40 s; the
+  raw-argument collector keyed text by an id that can arrive late (now by block
+  index, id learned as it appears); a gateway that finished starting after
+  dispose was left listening; `whenIdle()` was taken before `followup()`; no
+  upper bound on the deadline; backend `.env` keys were matched case-sensitively.
+  Documented, not changed (section 11.6): a truncated final answer is reported as
+  complete (as in-process), history arguments are re-serialised compactly, the
+  launcher readiness can still be briefly fooled by a stale gateway with the same
+  model, the orphan watchdog needs a POSIX run, the outbound-call guard is only
+  exercised by tests.
+- Final verification: gateway typecheck clean, 197 unit and 27 end-to-end tests,
+  contract sync identical (7 files); backend offline suite; live checks of the
+  parser, Jev (one live call), the in-process agent (one live call) and the
+  harness path against the mock model. Not done: a live-model harness smoke,
+  because the backend `.env` has an Anthropic key but an empty
+  `OPENROUTER_API_KEY`, and the gateway is wired to OpenRouter.
+
+Status lights (UI). The header gets three small lights, Agent / Harness / Jev,
+from a new `GET /api/status`: green on, grey off, red down. The contract was
+frozen first and implemented on both sides: the backend endpoint
+(`app/api/routes/status.py`, 13 tests including a real local stand-in for the
+gateway's `/healthz`), and the UI by the no-Bash `frontend-worker` agent
+(`StatusLights`, `useStatus`, 6 tests). The agent could not run anything; the lead
+ran the build, lint and tests, which caught a type error (`null` where
+`undefined` was expected) and two hook tests that updated state outside `act`;
+both fixed. Jev is configuration-only on purpose (a probe would cost a paid call
+per refresh). Checked on the running app: `/api/status` in five states (defaults,
+Jev off, harness mode with and without the real gateway, gateway stopped again),
+and headless-Chrome screenshots of the header in the normal and harness-down
+states.
+Same session: the live-model smoke of the harness path first failed with an
+OpenRouter 402 (balance cannot cover 4096 tokens per round); `max_tokens` was a
+hardcoded constant, so it became `HARNESS_MAX_TOKENS` (default unchanged), and the
+smoke then passed with 1000.

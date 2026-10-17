@@ -139,6 +139,16 @@ verified. It needs **no new paid API or secret** (a local shared token only).
   explicit approval in that turn.
 - Harness logs and spans carry ids and enums only; provider or harness error
   text is never shown to the user.
+- Part 2 lives in a **separate repo**: the public fork
+  `github.com/Ameyk244/harness-smart-agent`, cloned at
+  `C:\dev\harness-smart-agent` (outside OneDrive: pnpm's absolute-path
+  junctions break if the folder is renamed or moved after install), branch
+  `hospital-gateway` on upstream tag `dsh-v0.2.1-alpha.2`. **Never edit dsh's
+  own source**; all gateway code goes under `hospital-gateway/`. Design: section
+  11 of the harness doc. Subagents working there still never run anything
+  destructive against the dev database, and every subagent diff is reviewed
+  (`git status`/diff in both repos) before it is committed. The gateway's
+  tests use a mock LLM; the single live smoke is the only paid call.
 
 ### How to finish a unit of harness work (standing instruction to myself)
 1. After Part 1's code is in, **start the app** (backend in `harness` mode

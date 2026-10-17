@@ -1,8 +1,7 @@
 # Harness runtime for the Smart Hospital Operations Agent
 
-Branch `harness-smartgateway`. Status: **Part 1 (this repo) built and verified (offline suite, app
-check in both runtimes, code review); Part 2 (the DeepSeek Harness fork) not
-started.** Pattern reference:
+Branch `harness-smartgateway`. Status: **Part 1 (this repo) built, verified and committed. Part 2 (the
+DeepSeek Harness fork, section 11) in progress.** Pattern reference:
 `docs/harness-refrence.md` (an audit of the tattrex/agentic-pacs harness). This
 document is the design for *this* project, what changed and why, and the
 **contract** both halves implement. Sections marked **[contract]** change only by
@@ -74,9 +73,10 @@ No schema change and no migration: the registry is in memory, and
 | Setting (env) | Default | Meaning |
 |---|---|---|
 | `AGENT_RUNTIME` | `in_process` | `in_process` or `harness` |
-| `HARNESS_URL` | `http://127.0.0.1:8890` | Where the backend reaches the harness |
+| `HARNESS_URL` | `http://127.0.0.1:8891` | Where the backend reaches the harness |
 | `HARNESS_TOKEN` | unset | Shared secret, at least 32 characters. Local only; **not** a paid API key. Required when `AGENT_RUNTIME=harness`; startup **fails fast** if it is missing or short (`Settings` validator) |
 | `HARNESS_MODEL` | `anthropic/claude-sonnet-5` | The model id the harness must serve. Sent per turn; the harness refuses a mismatch |
+| `HARNESS_MAX_TOKENS` | `4096` | `llm.max_tokens` sent per turn: the cap on one model round. OpenRouter refuses a request whose cap the account balance cannot cover (HTTP 402), so lower it for a small balance |
 | `HARNESS_TURN_TIMEOUT_SECONDS` | `120` | Whole-turn budget. Sent as `deadline_in_ms`; the backend's HTTP timeout is this plus a fixed grace |
 
 `LLM_TIMEOUT_SECONDS` applies to the in-process loop only. In harness mode the
@@ -97,7 +97,7 @@ Header `x-harness-token: <token>`. Body (JSON):
   "user": "<the new user message>",
   "tools": [ {"type": "function",
               "function": {"name": "...", "description": "...", "parameters": {}}} ],
-  "llm": {"model": "<HARNESS_MODEL>", "max_tokens": 4096,
+  "llm": {"model": "<HARNESS_MODEL>", "max_tokens": "<HARNESS_MAX_TOKENS>",
           "deadline_in_ms": 120000, "max_rounds": 6}
 }
 ```
@@ -130,8 +130,9 @@ Response `200` body (the finish payload):
 characters; otherwise `null`. `arguments` are the model's **raw** argument
 strings (not re-serialised), byte for byte.
 
-Non-200: `401/404` token refused, `409` busy-state violation, `422` bad body,
-`5xx` harness failure. Any non-200, transport error, timeout or malformed body is
+Non-200 (as the gateway implements it): `404` token refused or unknown path
+(identical body), `405` wrong method, `413` body too large, `400` bad body, `429`
+busy or closing, `500` internal failure. Any non-200, transport error, timeout or malformed body is
 "harness unavailable" to the bridge.
 
 ## 6. [contract] Harness to backend: `POST /internal/v1/turns/{turn_id}/tool_calls`
@@ -244,3 +245,139 @@ See `docs/PROGRESS.md` ("Harness runtime") for the timeline. Decisions made here
 rather than silently: token fail-fast instead of the reference's degrade (our
 config module already fails fast); no throttle; no hello route; no streaming in
 v1; per-round LLM timeout not enforced by the harness (whole-turn deadline only).
+
+## 11. Part 2: the gateway (`hospital-gateway/` in the fork)
+
+Fork: `https://github.com/Ameyk244/harness-smart-agent` (public fork; MIT),
+cloned at `C:\dev\harness-smart-agent`, branch `hospital-gateway` on top of the
+upstream tag `dsh-v0.2.1-alpha.2` (`d743267`), with only upstream's workflows and
+Dependabot config removed. **dsh's own source is never edited**; everything we add
+lives in `hospital-gateway/`. The folder is its own pnpm workspace root with its
+own lockfile (as in the reference), so pnpm never adopts dsh's workspace above it.
+
+### 11.1 What it is
+
+A dsh plugin ("bundle") that exposes `POST /v1/turns` and `GET /healthz` on
+loopback. For each turn it creates a fresh in-memory dsh agent, seeds it with the
+backend's `system`/`history`, registers one **proxy tool** per backend tool, and
+runs the model loop. Every tool call is forwarded to the backend's
+`/internal/v1/turns/{turn_id}/tool_calls` (section 6); the harness executes
+nothing itself. The response is the finish payload (section 5).
+
+Smaller than the reference's gateway on purpose: no browser sockets, so no relay,
+upstream sockets, step fence, hello poller or pre-attach buffer; no streaming
+(`agent_text`) so no stream mapper, only a **raw-argument collector**.
+
+### 11.2 Modules (`hospital-gateway/src/`)
+
+| File | Role |
+|---|---|
+| `config.ts` | Settings read from the launcher-provided environment; all required |
+| `protocol.ts` | Types and boolean guards for the section 5 and 6 bodies. Inbound tolerates extra keys, fails on missing keys/wrong types/unknown enums; outbound is checked strictly. Guards never throw and never echo values |
+| `backend.ts` | Typed client: `toolCall(turnId, body) -> {content, end_turn}`. `x-harness-token`, `redirect:'error'`, 90 s timeout, errors carry status/kind only. A 404 means the backend closed the turn |
+| `seed.ts` | OpenAI-format `history` to dsh `SessionEvent[]` (reference 5.8): contiguous `seq` from 0, system node at seq 0 is mandatory, skip empty tool-call ids and their orphaned results, skip empty assistant messages |
+| `tool-proxy.ts` | One dsh tool per backend tool, in backend order, raw JSON-Schema parameters, no argument validation in the harness. `execute` forwards the model's **raw** argument string; a backend `end_turn` sets state and calls `concludeTurn()` |
+| `raw-args.ts` | Collects each tool call's provider argument string from `tool-call-delta.argumentsDelta` (dsh's `tool/call` carries pi-ai's repaired JSON) |
+| `agent-driver.ts` | `run(request) -> FinishPayload`; never rejects. Preflight, seed, create, drive, map |
+| `gateway.ts` | HTTP server: token check first, body cap, concurrency cap, `/healthz`, shutdown |
+| `log.ts`, `log-plugin.ts` | Whitelist logger and the only console exporter (reference 5.12) |
+| `plugin.ts` | dsh plugin entry: startup checks, fatal exit codes, orphan watchdog |
+| `bin/hospital-harness.mjs` | Launcher (reference 3.4) with a Windows **junction** instead of a directory symlink |
+| `cordis.patch.yml` | 12-row standalone composition: `hospital-log`, `timer`, `llm`, `llm-pi-ai`, `session`, `session-projection`, `system-prompt`, `tools`, `agent`, `llm-retry`, `agent-loop`, `hospital-gateway`; no persistence, telemetry, web or coding rows, checked at startup |
+| `scripts/check-contract-sync.mjs` | Compares `contract/fixtures/` with this repo's `backend/tests/fixtures/harness_contract/` (parsed equality, key order, file sets; prints paths, never values; exit 0/1/78) |
+
+### 11.3 Configuration (environment, set by the launcher)
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `HARNESS_TOKEN` | none, required, at least 32 chars | Same name and value as the backend's setting; read from the environment first, then from `<HOSPITAL_BACKEND_DIR>/backend/.env` (never printed). The backend `.env` has no `HARNESS_TOKEN` yet, so export it or add it |
+| `OPENROUTER_API_KEY` | none, required | Read the same way |
+| `HOSPITAL_BACKEND_DIR` | none | Root of the backend repo (the folder holding `backend/`); used for the `.env` lookup and by `contract:sync`. No default: the two repos live in different places on this machine |
+| `HOSPITAL_HARNESS_HOST` / `PORT` | `127.0.0.1` / `8891` | Listen address (loopback only) |
+| `HOSPITAL_BACKEND_URL` | `http://127.0.0.1:8000` | Backend base URL |
+| `HOSPITAL_LLM_MODEL` | `anthropic/claude-sonnet-5` | The one model served; must equal the backend's `HARNESS_MODEL` or every turn finishes with `error` and no model call |
+| `HOSPITAL_LLM_BASE_URL` | `https://openrouter.ai/api/v1` | Provider base URL |
+
+The backend sends sampling and limits per turn (`llm.max_tokens`,
+`deadline_in_ms`, `max_rounds`); the harness takes them from the request.
+
+Found while building against the real dsh source (it wins over the reference):
+`llm-pi-ai` takes `providers: {openrouter: {...}}` and a `models` list that
+replaces the catalog; dsh checks only `@deepseek-ai/dsh-*` peers against the
+runtime version (the `cordis`/`schemastery` pins are enforced by
+`manifest.test.ts`); `session-projection` lives at
+`packages/session/session-projection`; the gateway row also carries `provider`,
+because `agents.create` needs it; the launcher refuses any `.env` in the dsh root
+or `DSH_HOME`, has no `--patch`/overlay flags, and adds the Windows variables dsh
+needs to its child-environment whitelist; the log exporter has no `dshText`
+switch (dsh-internal text can contain prompts, so only a digest and length are
+printed).
+
+### 11.4 Decisions this design makes where the contract was silent
+
+1. **`stop_reason` mapping.** Clean completion or backend `end_turn` -> `null`;
+   round cap -> `round_limit`; deadline -> `time_limit`; everything else
+   (model mismatch, seed failure, create failure, tool transport failure,
+   watchdog, dsh error/aborted/blocked, a round cut off at `max_tokens` that had
+   tool calls) -> `error` with a short fixed-vocabulary text, at most 2000 chars,
+   never provider text. A backend `end_turn` always beats a harness reason.
+2. **Truncated tool calls are not forwarded.** dsh drops tool-call blocks of a
+   round cut off at `max_tokens`; unlike the reference we do not recover and run
+   them. The turn ends with `error`. (Fewer moving parts; the backend never
+   executes a half-written call.)
+3. **Unknown tool names** are forwarded to the backend, which rejects and counts
+   them, so the invalid-call cap behaves exactly as in-process.
+4. **One agent per turn, fresh, in memory.** Nothing is persisted; history comes
+   from the request every turn.
+5. **Caps.** dsh has no round or time cap: `agent/pre-step` rejects past
+   `max_rounds` or the deadline; a timer cancels the agent; a watchdog bounds a
+   stuck loop. `maxParallelToolCalls: 1`.
+6. **Prompt-cache stability.** Tool order is the request's order (dsh sorts by
+   name; restore it in `system-prompt/assemble`); temperature and max tokens are
+   set through `agent/request`.
+7. **PHI-safe logging.** Whitelisted ids and enums only; never message text, tool
+   arguments, prompts, history, tokens or error messages.
+8. **Fatal exit codes.** 78 for a configuration fault (missing/short token, no
+   key, forbidden service mounted, model unresolved); 1 for a listen failure.
+
+### 11.5 Verification (Part 2)
+
+1. Unit tests with fakes (fake backend implementing section 6 from the shared
+   fixtures; scripted mock LLM speaking the OpenAI streaming format).
+2. E2E through the real launcher and real dsh against the fake backend and mock
+   LLM, in a fresh temp `DSH_HOME`, asserting exit codes, the ready line and
+   that no log line contains PHI-like content.
+3. `contract:sync` against this repo's fixtures.
+4. Integration against the **real backend** (`AGENT_RUNTIME=harness`) with the
+   mock LLM: the full chain, no live model.
+5. One live smoke with the real model (the only paid call), then the app check
+   in all modes: parser, Jev, `in_process`, `harness`.
+
+### 11.6 Timing budget and known limits (Part 2)
+
+Budget for one turn with deadline `D` (the backend sends 120 s): the harness ends
+by `D - 2 s` (margin); a watchdog fires 20 s later, longer than one backend tool
+call may run (15 s), so it cannot abort a call that is still committing; bounded
+cleanups add at most 5 s + 5 s. The backend's HTTP timeout is `D + 40 s`
+(`HTTP_GRACE_SECONDS`), which holds that worst case with room to spare. If any of
+these constants change, change them together.
+
+Known limits, deliberately left as they are:
+- A final answer cut off at `max_tokens` (no tool calls) is returned as a normal
+  completion, the same as the in-process runtime; only a cut-off tool call is an
+  error (11.4 item 2).
+- `history` tool-call arguments reach the model re-serialised compactly (dsh and
+  pi-ai parse and stringify them). The current round's arguments are forwarded
+  raw and byte-exact, which is what the contract needs.
+- `deadline_in_ms` above one hour is refused (Node timers overflow at 2^31 ms).
+- The launcher's readiness check verifies the health body's model, so a different
+  harness on the port cannot pass; an earlier gateway with the *same* model still
+  on the port could briefly, and the launcher then exits 1 when its own child
+  fails to bind.
+- The gateway's orphan watchdog is not exercised on Windows, where killing the
+  launcher also kills dsh; it needs a POSIX run to verify.
+- The outbound tool-call guard (`isToolCallRequest`) is exercised by tests and the
+  fixtures, not called at runtime; an oversized argument string would be refused
+  by the backend (422) and end the turn.
+- Port 8890 is taken by an unrelated harness on the development machine, so this
+  project's default is 8891.
