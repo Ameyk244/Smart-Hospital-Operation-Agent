@@ -29,7 +29,6 @@ failures.
 """
 
 import asyncio
-import json
 import time
 from collections.abc import Callable
 from typing import Any
@@ -40,13 +39,11 @@ from langgraph.graph import END, StateGraph
 from opentelemetry import context as otel_context
 from opentelemetry import trace
 from opentelemetry.context import Context
-from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.agent.entity_codes import extract_entity_codes
-from app.agent.grounding import GroundingRejectedError
 from app.agent.state import AgentState
-from app.agent.tools import TOOL_REGISTRY, ToolExecutionError, all_tool_dicts
+from app.agent.tools import all_tool_dicts
+from app.agent.turn import ToolTurn
 from app.config import Settings
 from app.db.models.agent import EventStatus
 from app.db.repositories.preference_repository import PreferenceRepository
@@ -107,15 +104,11 @@ class _RoundSpans:
     tool_node. `run_agent`'s finally is only a safety net. Ending it there
     used to make the last round absorb the turn's final checkpoint writes.
     One instance per graph build, so
-    concurrent turns never share it. The `tool.execute` span currently open
-    is held here too, for the same reason: the tool loop has several exits
-    per call, and one place to end it is simpler than one per exit."""
+    concurrent turns never share it."""
 
     def __init__(self) -> None:
         self.round: trace.Span | None = None
-        self.tool: trace.Span | None = None
         self._round_token: object | None = None
-        self._tool_token: object | None = None
 
     def start_round(self, round_num: int) -> None:
         """Starts the round span and makes it *current* until
@@ -137,48 +130,10 @@ class _RoundSpans:
     def context(self) -> Context | None:
         return trace.set_span_in_context(self.round) if self.round is not None else None
 
-    def start_tool(self, tool_name: str) -> trace.Span:
-        self.end_tool()
-        self.tool = spans.get_tracer().start_span(
-            "tool.execute", context=self.context(), attributes={"tool.name": tool_name}
-        )
-        # Current until end_tool, so the tool's log lines carry its span_id.
-        self._tool_token = otel_context.attach(trace.set_span_in_context(self.tool))
-        return self.tool
-
-    def end_tool(self) -> None:
-        if self._tool_token is not None:
-            otel_context.detach(self._tool_token)
-            self._tool_token = None
-        if self.tool is not None:
-            self.tool.end()
-            self.tool = None
-
     def end(self) -> None:
-        self.end_tool()
         if self.round is not None:
             self.round.end()
             self.round = None
-
-
-def _tool_outcome(
-    tool_span: trace.Span,
-    tool_name: str,
-    status: str,
-    error_category: str | None = None,
-    seconds: float | None = None,
-) -> None:
-    """One tool call's outcome, to both the metric and its span. Failures
-    (timeouts, tool errors) mark the span ERROR; rejections (grounding,
-    invalid or unknown calls, exhausted budget) are the system working as
-    designed and stay unset, findable by `tool.error_category`."""
-    metrics.record_tool_call(tool_name, status, error_category, seconds)
-    spans.set_attributes(
-        tool_span,
-        **{"tool.status": status.lower(), "tool.error_category": error_category},
-    )
-    if status == EventStatus.FAILURE.value:
-        spans.mark_error(tool_span, error_category or "tool_error")
 
 
 def _make_agent_node(
@@ -317,216 +272,39 @@ def _make_tool_node(
         try:
             return await run_tools(state)
         finally:
-            # In this node's own context (where the tool span was attached);
-            # the round is complete once its tools have run.
-            round_spans.end_tool()
+            # The round is complete once its tools have run.
             round_spans.end()
 
     async def run_tools(state: AgentState) -> dict:
         last = state["messages"][-1]
         assert isinstance(last, AIMessage)
 
-        new_messages: list[ToolMessage] = []
-        tool_call_count = state["tool_call_count"]
-        invalid_call_count = state["invalid_call_count"]
-        terminated_reason: str | None = None
-        round_num = state["round_count"]
-        # Carried forward across rounds *within this turn* (tool_node can
-        # run several times before the loop ends) but reset to [] fresh at
-        # the start of every new run_agent() call — see state.py's comment
-        # on why this deliberately isn't a reducer-merged field.
-        touched_entity_codes = list(state.get("touched_entity_codes", []))
-        touched_seen = set(touched_entity_codes)
-
-        for call in last.tool_calls:
-            # Registered name or "unknown": a model-invented name is free
-            # text and never goes on a span or a metric.
-            tool_label = call["name"] if call["name"] in TOOL_REGISTRY else metrics.UNKNOWN_TOOL
-            tool_span = round_spans.start_tool(tool_label)
-            # Every branch below funnels through the bottom of this loop
-            # body rather than `continue`-ing early, specifically so the
-            # invalid-call-limit check at the end always runs exactly once
-            # per call regardless of which branch handled it — an earlier
-            # version used `continue` in the unknown-tool/invalid-argument
-            # branches and silently skipped that check for them, letting a
-            # model that only ever requested unknown tools loop all the way
-            # to max_agent_rounds instead of stopping at max_invalid_tool_calls.
-            if terminated_reason is not None or tool_call_count >= settings.max_tool_calls:
-                terminated_reason = terminated_reason or "max_tool_calls_exceeded"
-                _tool_outcome(tool_span, tool_label, EventStatus.REJECTED.value, "budget_exhausted")
-                new_messages.append(
-                    ToolMessage(
-                        content="Not executed: this session's tool-call budget is exhausted.",
-                        tool_call_id=call["id"],
-                    )
-                )
-                continue  # budget exhaustion isn't an invalid-call condition
-
-            spec = TOOL_REGISTRY.get(call["name"])
-            if spec is None:
-                invalid_call_count += 1
-                _tool_outcome(tool_span, tool_label, EventStatus.REJECTED.value, "unknown_tool")
-                async with session_factory() as session:
-                    await record_event(
-                        session,
-                        session_id=state["session_id"],
-                        round_num=round_num,
-                        event_type="tool_requested",
-                        status=EventStatus.REJECTED,
-                        tool_name=call["name"],
-                        error_category="unknown_tool",
-                    )
-                    await session.commit()
-                new_messages.append(
-                    ToolMessage(content=f"Unknown tool {call['name']!r}", tool_call_id=call["id"])
-                )
-                if invalid_call_count >= settings.max_invalid_tool_calls:
-                    terminated_reason = "too_many_invalid_calls"
-                continue
-
-            try:
-                validated_args = spec.args_schema.model_validate(call["args"])
-            except ValidationError as exc:
-                invalid_call_count += 1
-                _tool_outcome(tool_span, spec.name, EventStatus.REJECTED.value, "invalid_argument")
-                async with session_factory() as session:
-                    await record_event(
-                        session,
-                        session_id=state["session_id"],
-                        round_num=round_num,
-                        event_type="tool_requested",
-                        status=EventStatus.REJECTED,
-                        tool_name=spec.name,
-                        arguments=call["args"],
-                        error_category="invalid_argument",
-                    )
-                    await session.commit()
-                new_messages.append(
-                    ToolMessage(content=f"Invalid arguments: {exc}", tool_call_id=call["id"])
-                )
-                if invalid_call_count >= settings.max_invalid_tool_calls:
-                    terminated_reason = "too_many_invalid_calls"
-                continue
-
-            start = time.monotonic()
-            async with session_factory() as session:
-                try:
-                    # Current while the handler runs, so its SQL spans nest
-                    # under this tool call (wait_for's task copies context).
-                    # Outcome is recorded by _tool_outcome below, not here.
-                    with trace.use_span(
-                        tool_span,
-                        end_on_exit=False,
-                        record_exception=False,
-                        set_status_on_exception=False,
-                    ):
-                        result = await asyncio.wait_for(
-                            spec.handler(session, state["session_id"], validated_args),
-                            timeout=settings.tool_timeout_seconds,
-                        )
-                except TimeoutError:
-                    await session.rollback()
-                    tool_call_count += 1
-                    latency_ms = int((time.monotonic() - start) * 1000)
-                    _tool_outcome(
-                        tool_span, spec.name, EventStatus.FAILURE.value, "timeout", time.monotonic() - start
-                    )
-                    await record_event(
-                        session,
-                        session_id=state["session_id"],
-                        round_num=round_num,
-                        event_type="tool_executed",
-                        status=EventStatus.FAILURE,
-                        tool_name=spec.name,
-                        arguments=call["args"],
-                        latency_ms=latency_ms,
-                        error_category="timeout",
-                    )
-                    await session.commit()
-                    new_messages.append(
-                        ToolMessage(content="Tool call timed out", tool_call_id=call["id"])
-                    )
-                except GroundingRejectedError as exc:
-                    await session.rollback()
-                    tool_call_count += 1
-                    invalid_call_count += 1
-                    latency_ms = int((time.monotonic() - start) * 1000)
-                    _tool_outcome(
-                        tool_span,
-                        spec.name,
-                        EventStatus.REJECTED.value,
-                        "grounding_rejected",
-                        time.monotonic() - start,
-                    )
-                    await record_event(
-                        session,
-                        session_id=state["session_id"],
-                        round_num=round_num,
-                        event_type="tool_executed",
-                        status=EventStatus.REJECTED,
-                        tool_name=spec.name,
-                        arguments=call["args"],
-                        latency_ms=latency_ms,
-                        error_category="grounding_rejected",
-                    )
-                    await session.commit()
-                    new_messages.append(ToolMessage(content=str(exc), tool_call_id=call["id"]))
-                except ToolExecutionError as exc:
-                    await session.rollback()
-                    tool_call_count += 1
-                    latency_ms = int((time.monotonic() - start) * 1000)
-                    _tool_outcome(
-                        tool_span, spec.name, EventStatus.FAILURE.value, exc.category, time.monotonic() - start
-                    )
-                    await record_event(
-                        session,
-                        session_id=state["session_id"],
-                        round_num=round_num,
-                        event_type="tool_executed",
-                        status=EventStatus.FAILURE,
-                        tool_name=spec.name,
-                        arguments=call["args"],
-                        latency_ms=latency_ms,
-                        error_category=exc.category,
-                    )
-                    await session.commit()
-                    new_messages.append(ToolMessage(content=f"Error: {exc}", tool_call_id=call["id"]))
-                else:
-                    await session.commit()
-                    tool_call_count += 1
-                    latency_ms = int((time.monotonic() - start) * 1000)
-                    _tool_outcome(
-                        tool_span, spec.name, EventStatus.SUCCESS.value, None, time.monotonic() - start
-                    )
-                    await record_event(
-                        session,
-                        session_id=state["session_id"],
-                        round_num=round_num,
-                        event_type="tool_executed",
-                        status=EventStatus.SUCCESS,
-                        tool_name=spec.name,
-                        arguments=call["args"],
-                        latency_ms=latency_ms,
-                    )
-                    await session.commit()
-                    for code in extract_entity_codes(result):
-                        if code not in touched_seen:
-                            touched_seen.add(code)
-                            touched_entity_codes.append(code)
-                    new_messages.append(
-                        ToolMessage(content=json.dumps(result, default=str), tool_call_id=call["id"])
-                    )
-
-            if invalid_call_count >= settings.max_invalid_tool_calls:
-                terminated_reason = "too_many_invalid_calls"
-
-        # The last tool span is ended (and detached) by tool_node's finally.
+        turn = ToolTurn(
+            session_id=state["session_id"],
+            session_factory=session_factory,
+            settings=settings,
+            tool_call_count=state["tool_call_count"],
+            invalid_call_count=state["invalid_call_count"],
+            touched_entity_codes=state.get("touched_entity_codes", []),
+        )
+        new_messages = [
+            ToolMessage(
+                content=await turn.call(
+                    name=call["name"],
+                    args=call["args"],
+                    round_num=state["round_count"],
+                    parent_context=round_spans.context(),
+                ),
+                tool_call_id=call["id"],
+            )
+            for call in last.tool_calls
+        ]
         return {
             "messages": new_messages,
-            "tool_call_count": tool_call_count,
-            "invalid_call_count": invalid_call_count,
-            "terminated_reason": terminated_reason,
-            "touched_entity_codes": touched_entity_codes,
+            "tool_call_count": turn.tool_call_count,
+            "invalid_call_count": turn.invalid_call_count,
+            "terminated_reason": turn.terminated_reason,
+            "touched_entity_codes": turn.touched_entity_codes,
         }
 
     return tool_node
