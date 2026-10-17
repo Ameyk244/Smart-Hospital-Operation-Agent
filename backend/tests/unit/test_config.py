@@ -50,3 +50,19 @@ def test_harness_token_error_never_contains_the_token() -> None:
         Settings(agent_runtime="harness", harness_token=token)
 
     assert token not in str(excinfo.value)
+
+
+@pytest.mark.parametrize("url", ["localhost:8891", "http://", "ftp://host", "http://host/path", "http://ho st"])
+def test_harness_url_must_be_an_http_origin(url: str) -> None:
+    with pytest.raises(ValidationError):
+        Settings(harness_url=url)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{"harness_max_tokens": 0}, {"harness_max_tokens": -1}, {"harness_turn_timeout_seconds": 0}, {"harness_turn_timeout_seconds": 3601}],
+)
+def test_harness_limits_must_be_positive_and_the_deadline_at_most_an_hour(overrides: dict) -> None:
+    with pytest.raises(ValidationError):
+        Settings(**overrides)
+

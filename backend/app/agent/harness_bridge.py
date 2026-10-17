@@ -54,9 +54,10 @@ from app.observability.tracing import record_event
 
 logger = get_logger("agent.harness_bridge")
 
-# Added to the turn deadline so the harness reports its own time_limit
-# before the HTTP client gives up.
-HTTP_GRACE_SECONDS = 15
+# Added to the turn deadline so the harness reports its own time_limit before
+# the HTTP client gives up: its margin, a 20 s watchdog (longer than one tool
+# call may run) and two 5 s bounded cleanups all fit inside it.
+HTTP_GRACE_SECONDS = 40
 
 NOT_EXECUTED = "Not executed: the turn ended before this call ran."
 
@@ -262,7 +263,7 @@ async def run_agent_via_harness(
         "tools": all_tool_dicts(),
         "llm": {
             "model": settings.harness_model,
-            "max_tokens": 4096,
+            "max_tokens": settings.harness_max_tokens,
             "deadline_in_ms": settings.harness_turn_timeout_seconds * 1000,
             "max_rounds": settings.max_agent_rounds,
         },

@@ -17,7 +17,7 @@ three requests later.
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -126,11 +126,15 @@ class Settings(BaseSettings):
 
     # --- Harness runtime (see docs/harness-smart-hospital-operations.md) ---
     agent_runtime: Literal["in_process", "harness"] = "in_process"
-    harness_url: str = "http://127.0.0.1:8890"
+    harness_url: str = Field("http://127.0.0.1:8891", pattern=r"^https?://[^/\s]+$")
     harness_token: str | None = None
     harness_model: str = "anthropic/claude-sonnet-5"
+    # Per model round. A provider that checks the balance up front (OpenRouter
+    # does) refuses a request whose cap the account cannot cover.
+    harness_max_tokens: int = Field(4096, gt=0)
     # Whole-turn budget; replaces llm_timeout_seconds in harness mode.
-    harness_turn_timeout_seconds: int = 120
+    # At most an hour: the gateway refuses a longer deadline (Node timer limit).
+    harness_turn_timeout_seconds: int = Field(120, gt=0, le=3600)
 
     @model_validator(mode="after")
     def require_harness_token(self) -> "Settings":

@@ -209,6 +209,19 @@ async def test_happy_path_serves_tool_calls_and_writes_the_thread(world):
     assert harness_registry.get(world.harness.turn_id) is None
 
 
+async def test_payload_limits_follow_the_settings(world):
+    settings = world.configure(harness_max_tokens=1234, harness_turn_timeout_seconds=30)
+
+    await world.chat(ASK)
+
+    assert world.harness.payloads[0]["llm"] == {
+        "model": settings.harness_model,
+        "max_tokens": 1234,
+        "deadline_in_ms": 30_000,
+        "max_rounds": settings.max_agent_rounds,
+    }
+
+
 async def test_second_turn_history_carries_the_first_turns_tool_exchange(world):
     world.harness.script = [SEARCH]
     first = await world.chat(ASK)
