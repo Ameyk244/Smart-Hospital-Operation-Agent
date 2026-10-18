@@ -412,6 +412,54 @@
   color: var(--error);
 }
 
+.reschedule-confirmation {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.reschedule-card {
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  background: var(--accent-bg);
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.reschedule-card-text {
+  margin: 0 0 6px;
+  color: var(--text-h);
+}
+
+.reschedule-card-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.reschedule-card-actions button {
+  padding: 4px 12px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--code-bg);
+  color: var(--text-h);
+  cursor: pointer;
+}
+
+.reschedule-card-actions button.reschedule-confirm {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
+.reschedule-card-actions button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.reschedule-card .error {
+  margin: 6px 0 0;
+}
+
 .handled-by-badge {
   display: inline-block;
   padding: 1px 6px;

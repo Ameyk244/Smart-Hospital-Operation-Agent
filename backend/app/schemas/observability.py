@@ -11,7 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
-from app.db.models.agent import EventStatus, MessageRole
+from app.db.models.agent import AgentEvent, EventStatus, MessageRole
 
 
 class AgentEventOut(BaseModel):
@@ -31,3 +31,23 @@ class ConversationMessageOut(BaseModel):
     role: MessageRole
     content: str
     created_at: datetime
+
+
+class PendingConfirmation(BaseModel):
+    """A reschedule the agent proposed and the user has not yet confirmed or
+    cancelled (`reschedule_proposed` event, see event_repository)."""
+
+    proposal_id: int
+    appointment_code: str
+    scanner_code: str
+    new_start: str | None
+
+    @classmethod
+    def from_event(cls, event: AgentEvent) -> "PendingConfirmation":
+        arguments = event.arguments_json
+        return cls(
+            proposal_id=event.id,
+            appointment_code=arguments["appointment_code"],
+            scanner_code=arguments["scanner_code"],
+            new_start=arguments.get("new_start"),
+        )

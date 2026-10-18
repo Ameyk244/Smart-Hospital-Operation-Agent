@@ -119,6 +119,16 @@ transaction. The row records:
 - **before/after:** scanner code, start and end times, and status;
 - **correlation:** `request_id` and `trace_id`.
 
+With `REQUIRE_RESCHEDULE_CONFIRMATION=true` (default off) the agent can only
+**propose** a move: `reschedule_appointment` records a `reschedule_proposed`
+trace row and tells the model the appointment has not been changed, and the chat
+shows a Confirm / Cancel card. Confirm runs the same `reassign_scanner` command
+through `CommandRunner`, audited as `user_confirmed:<id>`; Cancel changes nothing.
+Either choice is added to the conversation and the agent's checkpoint. A proposal
+is pending until a `reschedule_confirmed` or `reschedule_cancelled` row names it.
+No new table: proposals live in `agent_events`. The confirm and cancel routes, like
+the rest of this API, have no sign-in.
+
 It never records patient data. A rejected reschedule changes nothing and
 writes no audit row; the attempt is in the agent trace. The audit write
 happens in the `reassign_scanner` command, not the tool, so any future

@@ -148,6 +148,11 @@ class Settings(BaseSettings):
 
     # --- Observability (see observability/README.md) ---
     # Off by default so a fresh clone and the test suite never try to export.
+    # When on, the agent's reschedule_appointment only records a proposal; the
+    # appointment moves when the user confirms it in the app. Off: the tool
+    # moves it immediately, as before.
+    require_reschedule_confirmation: bool = False
+
     # Turn on in .env when the local grafana/otel-lgtm stack is running.
     # With it off the OTel API is a no-op; see app/observability/telemetry.py.
     otel_enabled: bool = False

@@ -42,6 +42,7 @@ from app.agent.message_text import extract_text_content
 from app.agent.providers.factory import get_default_chat_model
 from app.config import get_settings
 from app.db.models.agent import EventStatus, MessageRole
+from app.db.repositories.event_repository import EventRepository
 from app.db.repositories.session_repository import SessionRepository
 from app.db.session import get_db, get_session_factory
 from app.execution.commands import Command, CommandRunner
@@ -49,6 +50,7 @@ from app.observability import metrics, spans
 from app.observability.logging_config import get_logger
 from app.observability.tracing import record_event
 from app.parser.parser import parse
+from app.schemas.observability import PendingConfirmation
 
 logger = get_logger("api.chat")
 
@@ -87,6 +89,9 @@ class ChatResponse(BaseModel):
     # Deliberately just codes, not full entities: the panel already has its
     # own data for each row, this only says *which* rows to flash.
     touched_entity_codes: list[str] = []
+    # Reschedules the agent proposed that still await the user's Confirm or
+    # Cancel; only populated when REQUIRE_RESCHEDULE_CONFIRMATION is on.
+    pending_confirmations: list[PendingConfirmation] = []
 
 
 def _plural(n: int, noun: str) -> str:
@@ -172,7 +177,7 @@ def get_checkpointer(request: HTTPConnection):
     return request.app.state.checkpointer
 
 
-async def _remember_for_agent(
+async def remember_for_agent(
     *,
     session_id: str,
     user_text: str,
@@ -312,7 +317,7 @@ async def _route_chat_message(
         message = _format_deterministic_message(command, result.success, result.error, result.data)
         await session_repo.append_message(session_id, MessageRole.ASSISTANT, message)
         await db.commit()
-        await _remember_for_agent(
+        await remember_for_agent(
             session_id=session_id,
             user_text=text,
             assistant_text=message,
@@ -421,7 +426,7 @@ async def _route_chat_message(
             )
             await session_repo.append_message(session_id, MessageRole.ASSISTANT, message)
             await db.commit()
-            await _remember_for_agent(
+            await remember_for_agent(
                 session_id=session_id,
                 user_text=text,
                 assistant_text=message,
@@ -486,12 +491,18 @@ async def _route_chat_message(
     reply_text = extract_text_content(last_message.content)
     await session_repo.append_message(session_id, MessageRole.ASSISTANT, reply_text)
     await db.commit()
+    pending = (
+        await EventRepository(db).pending_reschedule_proposals(session_id)
+        if settings.require_reschedule_confirmation
+        else []
+    )
     return "agent", ChatResponse(
         session_id=session_id,
         handled_by="agent",
         message=reply_text,
         terminated_reason=final_state["terminated_reason"],
         touched_entity_codes=final_state.get("touched_entity_codes", []),
+        pending_confirmations=[PendingConfirmation.from_event(p) for p in pending],
     )
 
 

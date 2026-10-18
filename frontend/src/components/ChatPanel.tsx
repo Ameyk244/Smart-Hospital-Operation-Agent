@@ -3,9 +3,17 @@ import type { FormEvent } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "../api/client";
-import type { AgentEvent, ChatResponse, HandledBy } from "../api/types";
+import type {
+  AgentEvent,
+  CancelRescheduleResponse,
+  ChatResponse,
+  ConfirmRescheduleResponse,
+  HandledBy,
+  PendingReschedule,
+} from "../api/types";
 import type { TraceState } from "../hooks/useTrace";
 import { useVoiceInput } from "../hooks/useVoiceInput";
+import { RescheduleConfirmation } from "./RescheduleConfirmation";
 
 // Active-session pointer: sessionStorage (not localStorage) on purpose —
 // this is what makes "reload keeps the chat, restart starts fresh" work
@@ -47,6 +55,9 @@ interface PreviousSessionEntry {
 interface CachedMessages {
   sessionId: string;
   messages: DisplayMessage[];
+  // Lets a reload know a confirmation was waiting without a request on every
+  // reload; absent in caches written before confirmations existed.
+  pending?: PendingReschedule[];
 }
 
 const HANDLED_BY_LABEL: Record<HandledBy, string> = {
@@ -92,21 +103,25 @@ function appendPreviousSession(sessionId: string, firstMessage: string): Previou
   return list;
 }
 
-function readCachedMessages(sessionId: string): DisplayMessage[] | null {
+function readCachedMessages(sessionId: string): CachedMessages | null {
   try {
     const raw = sessionStorage.getItem(CACHED_MESSAGES_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as CachedMessages;
     if (parsed.sessionId !== sessionId || !Array.isArray(parsed.messages)) return null;
-    return parsed.messages;
+    return parsed;
   } catch {
     return null;
   }
 }
 
-function writeCachedMessages(sessionId: string, messages: DisplayMessage[]): void {
+function writeCachedMessages(
+  sessionId: string,
+  messages: DisplayMessage[],
+  pending: PendingReschedule[],
+): void {
   try {
-    sessionStorage.setItem(CACHED_MESSAGES_KEY, JSON.stringify({ sessionId, messages }));
+    sessionStorage.setItem(CACHED_MESSAGES_KEY, JSON.stringify({ sessionId, messages, pending }));
   } catch {
     // sessionStorage full/unavailable — worst case a reload falls back to
     // fetching /messages (without badges) instead of hard-failing here.
@@ -169,6 +184,7 @@ export function ChatPanel({ sessionId, onSessionId, onTurnComplete, trace }: Cha
     readPreviousSessions(),
   );
   const [liveStatus, setLiveStatus] = useState<string | null>(null);
+  const [pending, setPending] = useState<PendingReschedule[]>([]);
   const restoredRef = useRef(false);
   const listEndRef = useRef<HTMLDivElement | null>(null);
   // How many trace events already existed for this session before the
@@ -207,6 +223,7 @@ export function ChatPanel({ sessionId, onSessionId, onTurnComplete, trace }: Cha
           terminatedReason: response.terminated_reason,
         },
       ]);
+      setPending(response.pending_confirmations ?? []);
       onTurnComplete(response.touched_entity_codes);
     },
     onError: (message) => {
@@ -226,6 +243,15 @@ export function ChatPanel({ sessionId, onSessionId, onTurnComplete, trace }: Cha
     voice.start(sessionId ?? crypto.randomUUID());
   }
 
+  function loadPending(id: string) {
+    api
+      .getPendingReschedules(id)
+      .then(setPending)
+      .catch((err) => {
+        console.warn("Could not load pending reschedules:", err);
+      });
+  }
+
   // On mount: sessionStorage only holds a session_id if this is the same
   // tab reloading (see ACTIVE_SESSION_KEY's docs above) — a genuinely new
   // tab/app-restart finds nothing here and starts empty, which is exactly
@@ -241,11 +267,18 @@ export function ChatPanel({ sessionId, onSessionId, onTurnComplete, trace }: Cha
 
     const cached = readCachedMessages(stored);
     if (cached) {
-      setMessages(cached);
+      setMessages(cached.messages);
       onTurnComplete([]); // restoring history touches nothing new
+      // The server is the source of truth for what is still pending, so the
+      // cached list is only refreshed when it says something was waiting.
+      if (cached.pending?.length) {
+        setPending(cached.pending);
+        loadPending(stored);
+      }
       return;
     }
 
+    loadPending(stored);
     api
       .getMessages(stored)
       .then((history) => {
@@ -274,8 +307,8 @@ export function ChatPanel({ sessionId, onSessionId, onTurnComplete, trace }: Cha
   // snapshot to hydrate from.
   useEffect(() => {
     if (!sessionId) return;
-    writeCachedMessages(sessionId, messages);
-  }, [sessionId, messages]);
+    writeCachedMessages(sessionId, messages, pending);
+  }, [sessionId, messages, pending]);
 
   useEffect(() => {
     listEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -347,6 +380,7 @@ export function ChatPanel({ sessionId, onSessionId, onTurnComplete, trace }: Cha
           progressSummary,
         },
       ]);
+      setPending(res.pending_confirmations ?? []);
       onTurnComplete(res.touched_entity_codes);
     } catch (err) {
       setError(String(err));
@@ -361,9 +395,27 @@ export function ChatPanel({ sessionId, onSessionId, onTurnComplete, trace }: Cha
     sessionStorage.removeItem(ACTIVE_SESSION_KEY);
     sessionStorage.removeItem(CACHED_MESSAGES_KEY);
     setMessages([]);
+    setPending([]);
     setError(null);
     onSessionId(null);
     onTurnComplete([]);
+  }
+
+  function handleReschedule(
+    proposalId: number,
+    result: ConfirmRescheduleResponse | CancelRescheduleResponse,
+  ) {
+    setPending((prev) => prev.filter((p) => p.proposal_id !== proposalId));
+    setMessages((prev) => [
+      ...prev,
+      {
+        key: `assistant-reschedule-${proposalId}-${Date.now()}`,
+        role: "assistant",
+        content: result.message,
+        handledBy: "agent",
+      },
+    ]);
+    if (result.status === "confirmed") onTurnComplete(result.touched_entity_codes);
   }
 
   async function handleLoadPreviousSession(id: string) {
@@ -382,6 +434,8 @@ export function ChatPanel({ sessionId, onSessionId, onTurnComplete, trace }: Cha
       );
       sessionStorage.setItem(ACTIVE_SESSION_KEY, id);
       onSessionId(id);
+      setPending([]);
+      loadPending(id);
       onTurnComplete([]);
     } catch (err) {
       setError(String(err));
@@ -437,6 +491,9 @@ export function ChatPanel({ sessionId, onSessionId, onTurnComplete, trace }: Cha
             )}
           </div>
         ))}
+        {sessionId && (
+          <RescheduleConfirmation sessionId={sessionId} proposals={pending} onResolved={handleReschedule} />
+        )}
         {(sending || voice.active) && (
           <div className="chat-message chat-message-assistant chat-message-pending">
             <div className="chat-message-meta">

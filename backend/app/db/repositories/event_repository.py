@@ -13,6 +13,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models.agent import AgentEvent, EventStatus
 
 
+RESCHEDULE_PROPOSED = "reschedule_proposed"
+RESCHEDULE_CONFIRMED = "reschedule_confirmed"
+RESCHEDULE_CANCELLED = "reschedule_cancelled"
+
+
 class EventRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -71,3 +76,28 @@ class EventRepository:
         stmt = stmt.order_by(AgentEvent.created_at, AgentEvent.id)
         result = await self._session.execute(stmt)
         return list(result.scalars().all())
+
+    async def get_reschedule_proposal(self, session_id: str, proposal_id: int) -> AgentEvent | None:
+        proposal = await self._session.get(AgentEvent, proposal_id)
+        if proposal is None or proposal.session_id != session_id:
+            return None
+        return proposal if proposal.event_type == RESCHEDULE_PROPOSED else None
+
+    async def pending_reschedule_proposals(self, session_id: str) -> list[AgentEvent]:
+        """Proposals in this session not yet confirmed or cancelled, oldest
+        first. Resolution rows point back at their proposal by `proposal_id`."""
+        stmt = (
+            select(AgentEvent)
+            .where(
+                AgentEvent.session_id == session_id,
+                AgentEvent.event_type.in_(
+                    [RESCHEDULE_PROPOSED, RESCHEDULE_CONFIRMED, RESCHEDULE_CANCELLED]
+                ),
+            )
+            .order_by(AgentEvent.created_at, AgentEvent.id)
+        )
+        events = (await self._session.execute(stmt)).scalars().all()
+        resolved = {
+            e.arguments_json["proposal_id"] for e in events if e.event_type != RESCHEDULE_PROPOSED
+        }
+        return [e for e in events if e.event_type == RESCHEDULE_PROPOSED and e.id not in resolved]

@@ -214,3 +214,8 @@ def test_configure_logging_installs_the_access_filter_once():
     logging_config.configure_logging()
     filters = logging.getLogger("uvicorn.access").filters
     assert sum(isinstance(f, AccessLogQueryStringFilter) for f in filters) == 1
+
+
+def test_proposal_id_is_kept_only_as_a_number():
+    assert redact_arguments({"proposal_id": 7}) == {"proposal_id": 7}
+    assert redact_arguments({"proposal_id": "7"}) == {"proposal_id": REDACTED}

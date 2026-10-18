@@ -347,6 +347,9 @@ persist conversation messages but do not create LangGraph tool traces.
 | `GET /api/operations/patients` | Search patients through `CommandRunner` |
 | `GET /api/sessions/{id}/messages` | Restore persisted conversation messages |
 | `GET /api/sessions/{id}/trace` | Read agent action events |
+| `GET /api/sessions/{id}/pending-reschedules` | Reschedules the agent proposed that await confirmation (`REQUIRE_RESCHEDULE_CONFIRMATION`) |
+| `POST /api/sessions/{id}/reschedule/{proposal_id}/confirm` | Apply a proposed reschedule through `CommandRunner`, attributed to the user |
+| `POST /api/sessions/{id}/reschedule/{proposal_id}/cancel` | Discard a proposed reschedule |
 | `GET /api/health` | Health check |
 | `GET /api/status` | Which of the agent runtime, harness and Jev are `on`, `off` or `down`, for the header lights; no URLs, models or keys |
 | `POST /internal/v1/turns/{turn_id}/tool_calls` | Harness runtime only: token-guarded tool-call callback; never published by a proxy |

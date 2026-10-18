@@ -23,7 +23,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models.agent import EventStatus
+from app.db.models.agent import AgentEvent, EventStatus
 from app.db.repositories.event_repository import EventRepository
 from app.observability.logging_config import get_logger
 from app.observability.redaction import redact_arguments, redact_tool_name
@@ -42,10 +42,10 @@ async def record_event(
     arguments: dict[str, Any] | None = None,
     latency_ms: int | None = None,
     error_category: str | None = None,
-) -> None:
+) -> AgentEvent:
     tool_name = redact_tool_name(tool_name)
     arguments = redact_arguments(arguments)
-    await EventRepository(session).record(
+    event = await EventRepository(session).record(
         session_id=session_id,
         round_num=round_num,
         event_type=event_type,
@@ -64,3 +64,4 @@ async def record_event(
         latency_ms=latency_ms,
         error_category=error_category,
     )
+    return event

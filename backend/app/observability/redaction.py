@@ -84,6 +84,8 @@ _ALLOWED_ARGUMENTS: dict[str, Callable[[Any], bool]] = {
     "limit": _is_number,
     "tool_call_count": _is_number,
     "buffered_ms": _is_number,
+    # reschedule proposal resolution: the id of the proposal's `agent_events` row
+    "proposal_id": _is_number,
     # Jev consultation (`jev_invoked`): all seven keys the trace panel reads
     "choice": _matches(_IDENTIFIER),
     "confidence": _is_number,

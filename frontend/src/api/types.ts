@@ -68,6 +68,29 @@ export interface ChatResponse {
   // command or tool results touched — used to briefly highlight the
   // corresponding rows in the Operations panel.
   touched_entity_codes: string[];
+  // Appointment moves the agent proposed that wait for a human Confirm or
+  // Cancel. Absent or empty when nothing is pending.
+  pending_confirmations?: PendingReschedule[];
+}
+
+// --- reschedule confirmation ---
+
+export interface PendingReschedule {
+  proposal_id: number;
+  appointment_code: string;
+  scanner_code: string;
+  new_start: string | null;
+}
+
+export interface ConfirmRescheduleResponse {
+  status: "confirmed";
+  message: string;
+  touched_entity_codes: string[];
+}
+
+export interface CancelRescheduleResponse {
+  status: "cancelled";
+  message: string;
 }
 
 // --- /api/sessions/{id}/messages ---

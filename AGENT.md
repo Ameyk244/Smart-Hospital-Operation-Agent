@@ -183,6 +183,11 @@ The command layer enforces:
 The operation can change scanner and optionally start/end time. A successful
 reassignment sets the appointment status to `SCHEDULED`.
 
+With `REQUIRE_RESCHEDULE_CONFIRMATION=true` the tool does not execute the move: it
+runs the same grounding checks, records a `reschedule_proposed` event and returns
+`pending_confirmation`; the user confirms or cancels in the chat UI, and confirming
+runs this same command. The default is off, which keeps the behaviour above.
+
 ### Session-memory tools
 
 #### `remember_preference`

@@ -3,9 +3,12 @@ import type {
   Appointment,
   ChatResponse,
   ConversationMessage,
+  CancelRescheduleResponse,
+  ConfirmRescheduleResponse,
   CostComparison,
   Department,
   Patient,
+  PendingReschedule,
   Scanner,
   StatusResponse,
 } from "./types";
@@ -39,7 +42,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     let detail = res.statusText;
     try {
       const body = await res.json();
-      detail = body?.detail ? JSON.stringify(body.detail) : detail;
+      if (typeof body?.detail === "string") detail = body.detail;
+      else if (body?.detail) detail = JSON.stringify(body.detail);
     } catch {
       // response wasn't JSON; fall back to statusText
     }
@@ -102,6 +106,22 @@ export const api = {
 
   getMessages(sessionId: string): Promise<ConversationMessage[]> {
     return request(`/api/sessions/${encodeURIComponent(sessionId)}/messages`);
+  },
+
+  getPendingReschedules(sessionId: string): Promise<PendingReschedule[]> {
+    return request(`/api/sessions/${encodeURIComponent(sessionId)}/pending-reschedules`);
+  },
+
+  confirmReschedule(sessionId: string, proposalId: number): Promise<ConfirmRescheduleResponse> {
+    return request(`/api/sessions/${encodeURIComponent(sessionId)}/reschedule/${proposalId}/confirm`, {
+      method: "POST",
+    });
+  },
+
+  cancelReschedule(sessionId: string, proposalId: number): Promise<CancelRescheduleResponse> {
+    return request(`/api/sessions/${encodeURIComponent(sessionId)}/reschedule/${proposalId}/cancel`, {
+      method: "POST",
+    });
   },
 
   // With-Jev vs. without-Jev cost tally. Omitting sessionId asks for the

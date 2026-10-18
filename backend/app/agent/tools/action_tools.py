@@ -16,7 +16,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.grounding import GroundingRegistry
 from app.agent.tools.base import ToolExecutionError, ToolSpec, register_tool
+from app.config import get_settings
+from app.db.models.agent import EventStatus
+from app.db.repositories.event_repository import RESCHEDULE_PROPOSED
 from app.execution.commands import Command, CommandRunner
+from app.observability.tracing import record_event
 
 
 class RescheduleAppointmentArgs(BaseModel):
@@ -48,6 +52,25 @@ async def handle_reschedule_appointment(
     }
     if args.new_start:
         command_args["new_start"] = args.new_start
+
+    if get_settings().require_reschedule_confirmation:
+        proposal = await record_event(
+            session,
+            session_id=session_id,
+            round_num=0,
+            event_type=RESCHEDULE_PROPOSED,
+            status=EventStatus.SUCCESS,
+            tool_name="reschedule_appointment",
+            arguments=command_args,
+        )
+        return {
+            "status": "pending_confirmation",
+            "proposal_id": proposal.id,
+            "message": (
+                "The appointment has NOT been changed. The user must press Confirm "
+                "in the app to apply this move; do not tell them it was moved."
+            ),
+        }
 
     # The actor is recorded on the mutation's audit record (Phase 6).
     result = await CommandRunner(session, actor=f"agent_session:{session_id}").execute(

@@ -29,6 +29,7 @@ from app.api.routes import (  # noqa: E402
     cost,
     internal_harness,
     operations,
+    reschedules,
     sessions,
     status,
     voice,
@@ -71,6 +72,7 @@ app.include_router(commands.router)
 app.include_router(chat.router)
 app.include_router(operations.router)
 app.include_router(sessions.router)
+app.include_router(reschedules.router)
 app.include_router(cost.router)
 app.include_router(status.router)
 app.include_router(voice.router)
