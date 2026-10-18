@@ -165,3 +165,40 @@ async def test_a_checkpoint_write_failure_does_not_fail_the_answered_request(
     assert response.status_code == 200
     assert response.json()["handled_by"] == "deterministic"
     assert len(response.json()["data"]) == 4
+
+
+async def test_a_reply_to_the_agents_question_reaches_the_agent_without_a_jev_call(
+    http, jev_settings, fake_typesafe, jev_response
+):
+    """"brown" after "Which Wei are you asking about?" has no hospital noun, so
+    the domain gate used to reject it. It now passes because it only uses words
+    the question offered, and it goes straight to the agent (Jev maps
+    self-contained commands, not answers)."""
+    fake_typesafe.behavior = jev_response("none", confidence=1.0)
+    RecordingModel.seen = []
+    model = RecordingModel(
+        responses=[
+            AIMessage(content="Which Wei are you asking about? Wei Brown or Wei Gonzalez?"),
+            AIMessage(content="Looking up Wei Brown."),
+        ]
+    )
+    with (
+        patch("app.api.routes.chat.get_settings", return_value=jev_settings()),
+        patch("app.api.routes.chat.get_default_chat_model", return_value=model),
+    ):
+        first = await http.post("/api/chat", json={"text": "find the patient named Wei"})
+        sid = first.json()["session_id"]
+        jev_calls_before = len(fake_typesafe.calls)
+        second = await http.post("/api/chat", json={"text": "brown", "session_id": sid})
+
+    assert (first.json()["handled_by"], second.json()["handled_by"]) == ("agent", "agent")
+    assert len(fake_typesafe.calls) == jev_calls_before
+    assert "brown" in [content for _kind, content in RecordingModel.seen]
+
+
+async def test_the_same_reply_is_rejected_when_the_agent_asked_nothing(http, jev_settings, fake_typesafe):
+    first = await http.post("/api/chat", json={"text": "list departments"})
+
+    second = await http.post("/api/chat", json={"text": "brown", "session_id": first.json()["session_id"]})
+
+    assert second.json()["handled_by"] == "rejected"

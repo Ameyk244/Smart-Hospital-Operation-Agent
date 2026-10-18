@@ -327,6 +327,22 @@ _NOUN_PHRASE_FILLER: frozenset[str] = frozenset(
 )
 _MAX_BARE_NOUN_PHRASE_WORDS = 4
 
+# A short reply that answers a question the agent just asked ("brown" after
+# "Which Wei are you asking about?", "scn5" after "SCN-5 or SCN-6?"). It has
+# no domain noun of its own, so the screen above would reject it. It is let
+# through only when EVERY word of it is one the question offered, a selector
+# ("first", "same"), a digit or a filler word, so a reply cannot bring new
+# subject matter: "tell me a joke" or "what is 47 times 12" still fail.
+_REPLY_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_MAX_REPLY_WORDS = 6
+_REPLY_SELECTORS: frozenset[str] = frozenset(
+    {"first", "second", "third", "last", "both", "none", "neither", "same"}
+)
+_REPLY_FILLER: frozenset[str] = frozenset(
+    {"a", "an", "the", "it", "that", "this", "one", "please", "pls", "can", "could",
+     "you", "me", "i", "to", "with", "for", "of", "and", "or", "go", "ahead", "ok", "okay"}
+)
+
 
 @dataclass(frozen=True)
 class DomainGateResult:
@@ -365,7 +381,39 @@ def _is_bare_domain_noun_phrase(normalized: str) -> bool:
     )
 
 
+def _answers_question(text: str, assistant_message: str | None) -> bool:
+    """True for a short reply made only of words the agent's last message
+    (which must have asked a question) offered. The canned rejection text has
+    no question mark, so it can never open this door."""
+    if not assistant_message or "?" not in assistant_message:
+        return False
+    words = _REPLY_TOKEN_RE.findall(text.lower())
+    if not words or len(words) > _MAX_REPLY_WORDS or set(words) & _OFF_TOPIC_WORDS:
+        return False
+    # Entity codes are also offered in compact form: "SCN-5" -> "scn5".
+    offered = set(_REPLY_TOKEN_RE.findall(assistant_message.lower()))
+    offered |= {re.sub(r"\W", "", code).lower() for code in _ENTITY_CODE_RE.findall(assistant_message)}
+    return all(
+        w in offered or w in _REPLY_FILLER or w in _REPLY_SELECTORS or (w.isdigit() and len(w) <= 2)
+        for w in words
+    )
+
+
 def check_domain_gate(
+    text: str,
+    *,
+    prior_user_messages: list[str] | None = None,
+    prior_assistant_message: str | None = None,
+) -> DomainGateResult:
+    """The screen below, plus one fallback: a reply that answers the agent's
+    last question passes with `reason="answers_question"` (`_answers_question`)."""
+    result = _screen(text, prior_user_messages=prior_user_messages)
+    if not result.in_domain and _answers_question(text, prior_assistant_message):
+        return DomainGateResult(in_domain=True, reason="answers_question")
+    return result
+
+
+def _screen(
     text: str, *, prior_user_messages: list[str] | None = None
 ) -> DomainGateResult:
     """Cheap, synchronous relevance screen — no LLM call. Blank/whitespace

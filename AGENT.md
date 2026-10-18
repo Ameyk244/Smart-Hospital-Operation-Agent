@@ -83,6 +83,19 @@ recent prior user messages for explicit hospital intent. It does not use
 assistant rejection text as context, and it does not reopen disconnected
 keyword bypasses such as `What is 47 times 12? MRI`.
 
+One more case uses the assistant's last message. When the agent's immediately
+preceding reply **asked a question** (it contains a `?`), a short reply of at most
+six words passes if **every word** of it is a word that reply offered, a selector
+(`first`, `second`, `last`, `both`, `none`, `same`), a one- or two-digit number, or
+a filler word (`the`, `please`, `can you`). So `brown` after "Which Wei are you
+asking about?", `scn5` after "SCN-5 or SCN-6?" and `can you keep same` after "keep
+the same time?" reach the agent. A reply cannot bring new subject matter, so
+`tell me a joke` or `what is 47 times 12` after the same question are still
+rejected, and the canned rejection has no question mark, so it never opens this
+door. Such a reply skips Jev (Jev maps self-contained commands; the agent has the
+context). The check is still plain regex and set membership, and it only changes
+what reaches the agent: grounding, validation and every tool limit are unchanged.
+
 ## 4. Eligibility Gate
 
 After domain relevance passes, `check_eligibility()` applies generic request

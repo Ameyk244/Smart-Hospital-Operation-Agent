@@ -338,9 +338,18 @@ async def _route_chat_message(
     prior_user_messages = [
         row.content for row in prior_rows if row.role == MessageRole.USER
     ]
+    # A reply to the agent's own question ("brown" after "Which Wei?") has no
+    # hospital noun either; the gate lets it through if it only uses words
+    # that question offered.
+    last_message = prior_rows[-1] if prior_rows else None
+    prior_assistant_message = (
+        last_message.content if last_message and last_message.role == MessageRole.ASSISTANT else None
+    )
     with spans.span("domain_gate.check") as gate_span:
         domain_gate = check_domain_gate(
-            text, prior_user_messages=prior_user_messages
+            text,
+            prior_user_messages=prior_user_messages,
+            prior_assistant_message=prior_assistant_message,
         )
         gate_span.set_attribute("domain_gate.in_domain", domain_gate.in_domain)
     if not domain_gate.in_domain:
@@ -373,7 +382,9 @@ async def _route_chat_message(
     # displace is a full Sonnet turn). It widens the deterministic entrance;
     # it never weakens a gate. When the flag is off nothing below runs and no
     # client is constructed — behavior is identical to `master`.
-    if settings.enable_jev_fast_path:
+    # Not for a reply to the agent's question: Jev maps self-contained commands,
+    # and a bare "mri" or "brown" only makes sense to the agent, which has the context.
+    if settings.enable_jev_fast_path and domain_gate.reason != "answers_question":
         from app.agent.jev_fast_path import try_jev_fast_path
 
         with spans.span("jev.consult") as jev_span:

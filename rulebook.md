@@ -168,6 +168,20 @@ The same phrases without hospital context are rejected. Reaching the agent does
 not authorize a write: the agent must still select an allowed tool, and every
 tool must pass grounding and domain validation.
 
+**Answering the agent's question.** If the agent's last reply asked a question,
+a short answer made only of words that reply offered also reaches the agent:
+
+```text
+agent: Which Wei are you asking about? Wei Brown, Wei Gonzalez ...?   ->  brown | wei brown | first
+agent: Which scanner? SCN-5 or SCN-6? Keep the same time?             ->  scn5 | SCN-6 | 1 | can you keep same
+```
+
+Up to six words; each must come from the question, or be `first`/`second`/`last`/
+`both`/`none`/`same`, a one- or two-digit number, or a filler (`the`, `please`).
+`tell me a joke` or `what is 47 times 12` after the same question are still
+rejected, and so is any reply when the last assistant message was not a question
+(including the canned rejection). Such replies skip Jev.
+
 ## 5. Grounding Rules
 
 Grounding prevents the agent from writing with invented or unseen entity codes.
