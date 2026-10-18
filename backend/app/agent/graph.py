@@ -236,6 +236,14 @@ def _make_agent_node(
                 "terminated_reason": "llm_timeout",
             }
 
+        arguments = {"tool_call_count": len(response.tool_calls)} if response.tool_calls else None
+        usage = response.usage_metadata
+        if usage and isinstance(usage.get("input_tokens"), int) and isinstance(usage.get("output_tokens"), int):
+            arguments = {
+                **(arguments or {}),
+                "input_tokens": usage["input_tokens"],
+                "output_tokens": usage["output_tokens"],
+            }
         async with session_factory() as session:
             await record_event(
                 session,
@@ -243,9 +251,7 @@ def _make_agent_node(
                 round_num=round_num,
                 event_type="llm_response",
                 status=EventStatus.SUCCESS,
-                arguments={"tool_call_count": len(response.tool_calls)}
-                if response.tool_calls
-                else None,
+                arguments=arguments,
             )
             await session.commit()
 

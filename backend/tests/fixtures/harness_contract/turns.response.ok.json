@@ -19,12 +19,22 @@
           "name": "reschedule_appointment",
           "arguments": "{\"appointment_code\":\"APT-2001\",\"new_start\":\"2026-10-18T09:00:00\"}"
         }
-      ]
+      ],
+      "usage": {
+        "prompt_tokens": 500,
+        "completion_tokens": 40,
+        "cached_tokens": 400
+      }
     },
     {
       "round": 2,
       "text": "APT-2001 is now rescheduled to tomorrow at 09:00.",
-      "tool_calls": []
+      "tool_calls": [],
+      "usage": {
+        "prompt_tokens": 312,
+        "completion_tokens": 24,
+        "cached_tokens": 240
+      }
     }
   ]
 }

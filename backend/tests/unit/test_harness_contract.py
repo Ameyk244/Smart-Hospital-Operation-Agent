@@ -79,6 +79,7 @@ class AssistantRound(Strict):
     round: int
     text: str
     tool_calls: list[RoundToolCall]
+    usage: Usage
 
 
 class TurnResponse(Strict):
@@ -134,6 +135,13 @@ def test_error_response_carries_a_non_empty_error() -> None:
 
     assert data.stop_reason == "error"
     assert data.error
+
+
+def test_ok_response_round_usage_is_reported_per_round() -> None:
+    data = TurnResponse.model_validate(_load("turns.response.ok.json"))
+
+    assert [r.usage.prompt_tokens for r in data.assistant_rounds] == [500, 312]
+    assert sum(r.usage.completion_tokens for r in data.assistant_rounds) == data.usage.completion_tokens
 
 
 def test_end_turn_response_names_an_end_turn_reason() -> None:

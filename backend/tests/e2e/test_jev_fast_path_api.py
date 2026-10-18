@@ -16,6 +16,7 @@ would not notice.
 
 from unittest.mock import AsyncMock, patch
 
+import uuid
 import pytest
 from langchain_core.messages import AIMessage
 
@@ -436,6 +437,38 @@ async def test_cost_comparison_can_be_scoped_to_one_session(client, seeded_sessi
     everything = (await client.get("/api/cost-comparison")).json()
     assert everything["session_id"] is None
     assert everything["jev_calls_total"] == 3
+
+
+async def test_cost_comparison_sums_measured_agent_tokens_per_session(client, seeded_session):
+    before = (await client.get("/api/cost-comparison")).json()
+    session_a, session_b, session_none = (str(uuid.uuid4()) for _ in range(3))
+    for session_id, rows in {
+        session_a: [{"input_tokens": 1000, "output_tokens": 100}, {"tool_call_count": 1}],
+        session_b: [{"input_tokens": 500, "output_tokens": 50}],
+    }.items():
+        await SessionRepository(seeded_session).get_or_create(session_id)
+        for arguments in rows:
+            await EventRepository(seeded_session).record(
+                session_id=session_id,
+                round_num=1,
+                event_type="llm_response",
+                status=EventStatus.SUCCESS,
+                arguments=arguments,
+            )
+    await seeded_session.commit()
+
+    scoped = (await client.get(f"/api/cost-comparison?session_id={session_a}")).json()
+    everything = (await client.get("/api/cost-comparison")).json()
+    empty = (await client.get(f"/api/cost-comparison?session_id={session_none}")).json()
+
+    assert scoped["agent_rounds_measured"] == 1
+    assert (scoped["agent_input_tokens"], scoped["agent_output_tokens"]) == (1000, 100)
+    # 1000 in @ $2/M + 100 out @ $10/M
+    assert scoped["agent_cost_usd"] == pytest.approx(0.003)
+    # Other tests leave rows behind, so the unscoped totals are checked as a change.
+    assert everything["agent_rounds_measured"] - before["agent_rounds_measured"] == 2
+    assert everything["agent_input_tokens"] - before["agent_input_tokens"] == 1500
+    assert (empty["agent_rounds_measured"], empty["agent_input_tokens"], empty["agent_cost_usd"]) == (0, 0, 0.0)
 
 
 async def test_cost_comparison_ignores_non_jev_events(client, seeded_session):

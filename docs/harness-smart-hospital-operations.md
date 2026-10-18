@@ -119,11 +119,19 @@ Response `200` body (the finish payload):
   "rounds": 2,
   "usage": {"prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0},
   "assistant_rounds": [
-    {"round": 1, "text": "", "tool_calls": [{"id": "...", "name": "...", "arguments": "<raw string>"}]},
-    {"round": 2, "text": "<final text>", "tool_calls": []}
+    {"round": 1, "text": "", "tool_calls": [{"id": "...", "name": "...", "arguments": "<raw string>"}],
+     "usage": {"prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0}},
+    {"round": 2, "text": "<final text>", "tool_calls": [],
+     "usage": {"prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0}}
   ]
 }
 ```
+
+Each round's `usage` is that model request's own token count, so the turn's
+`usage` is the sum of its rounds. The gateway always sends it; the backend treats
+a missing per-round `usage` as zeros, so an older gateway still works. The backend
+records it on one `llm_response` trace row per round (`input_tokens` =
+`prompt_tokens`, `output_tokens` = `completion_tokens`), in both runtimes.
 
 `stop_reason` is `null` (completed) or one of `"round_limit"`, `"time_limit"`,
 `"error"`. When `"error"`, `error` is a non-empty string of at most 2000
@@ -230,7 +238,10 @@ file sets, no values printed). Not started.
 
 ## 9. Known limits (Part 1)
 
-- Per-round `llm_response` rows are not written in harness mode.
+- In harness mode the per-round `llm_response` rows are written when the turn
+  finishes (that is when the token counts arrive), so in the trace panel they sort
+  after that turn's `tool_executed` rows instead of between them. The round numbers
+  on the rows are correct.
 - A harness-side failure after a write tool committed shows the user the fixed
   "unavailable" sentence even though the write happened; the stored history
   records the served call and its result, so the next turn knows.

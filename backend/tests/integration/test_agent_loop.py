@@ -5,12 +5,17 @@ invalid-argument handling, and bounded-execution termination, all
 deterministically.
 """
 
+import uuid
+
 import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 
+from sqlalchemy import select
+
 from app.agent.graph import SYSTEM_PROMPT, run_agent
 from app.config import Settings
+from app.db.models.agent import AgentEvent
 
 pytestmark = pytest.mark.integration
 
@@ -35,6 +40,37 @@ def _settings(**overrides) -> Settings:
     )
     defaults.update(overrides)
     return Settings(**defaults)
+
+
+@pytest.mark.parametrize(
+    ("usage", "expected"),
+    [
+        ({"input_tokens": 120, "output_tokens": 15, "total_tokens": 135}, {"input_tokens": 120, "output_tokens": 15}),
+        (None, None),
+    ],
+)
+async def test_llm_response_records_tokens_only_when_the_model_reports_usage(
+    agent_session_factory, usage, expected
+):
+    model = ScriptedChatModel(responses=[AIMessage(content="Hello.", usage_metadata=usage)])
+    session_id = str(uuid.uuid4())
+
+    await run_agent(
+        session_id=session_id,
+        user_text="Hello",
+        chat_model=model,
+        session_factory=agent_session_factory,
+        settings=_settings(),
+    )
+
+    async with agent_session_factory() as session:
+        recorded = await session.scalar(
+            select(AgentEvent.arguments_json).where(
+                AgentEvent.session_id == session_id,
+                AgentEvent.event_type == "llm_response",
+            )
+        )
+    assert recorded == expected
 
 
 async def test_multi_round_search_then_reschedule(agent_session_factory):

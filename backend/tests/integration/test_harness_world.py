@@ -48,6 +48,10 @@ UNAVAILABLE = "The assistant is temporarily unavailable. Please try again shortl
 GENERIC_ERROR = "Something went wrong while processing that request. Please try again."
 
 
+def round_usage(number: int) -> dict:
+    return {"prompt_tokens": 100 * number, "completion_tokens": 10 * number, "cached_tokens": 0}
+
+
 class FakeHarness:
     """Plays one scripted turn: `script` is a list of (tool name, arguments)."""
 
@@ -89,14 +93,19 @@ class FakeHarness:
             body = (await self.call_tool(self.turn_id, number, name, raw)).json()
             self.responses.append(body)
             call = {"id": f"call_{number}", "name": name, "arguments": raw}
-            rounds.append({"round": number, "text": "", "tool_calls": [call]})
+            rounds.append(
+                {"round": number, "text": "", "tool_calls": [call], "usage": round_usage(number)}
+            )
             if body["end_turn"]:
                 break
         if self.mid_turn:
             await self.mid_turn(self)
         if self.raw_finish is not None:
             return self.raw_finish
-        rounds.append({"round": len(rounds) + 1, "text": self.text, "tool_calls": []})
+        number = len(rounds) + 1
+        rounds.append(
+            {"round": number, "text": self.text, "tool_calls": [], "usage": round_usage(number)}
+        )
         finish = {
             "turn_id": self.turn_id,
             "stop_reason": self.stop_reason,
@@ -145,6 +154,15 @@ class World:
                 )
                 .where(AgentEvent.session_id == session_id)
                 .order_by(AgentEvent.id)
+            )
+            return [tuple(row) for row in rows]
+
+    async def llm_responses(self, session_id: str) -> list[tuple]:
+        async with self.factory() as session:
+            rows = await session.execute(
+                select(AgentEvent.round_num, AgentEvent.status, AgentEvent.arguments_json)
+                .where(AgentEvent.session_id == session_id, AgentEvent.event_type == "llm_response")
+                .order_by(AgentEvent.round_num)
             )
             return [tuple(row) for row in rows]
 
@@ -207,6 +225,17 @@ async def test_happy_path_serves_tool_calls_and_writes_the_thread(world):
     assert thread[3].content == world.harness.responses[0]["content"]
     assert thread[4].content == world.harness.text
     assert harness_registry.get(world.harness.turn_id) is None
+
+
+async def test_each_reported_round_is_traced_with_its_tokens(world):
+    world.harness.script = [SEARCH]
+
+    body = await world.chat(ASK)
+
+    assert await world.llm_responses(body["session_id"]) == [
+        (1, EventStatus.SUCCESS, {"tool_call_count": 1, "input_tokens": 100, "output_tokens": 10}),
+        (2, EventStatus.SUCCESS, {"input_tokens": 200, "output_tokens": 20}),
+    ]
 
 
 async def test_payload_limits_follow_the_settings(world):
@@ -305,6 +334,7 @@ async def test_unreachable_harness_gives_the_fixed_reply_and_a_failure_event(wor
     assert body["message"] == UNAVAILABLE
     events = await world.events(body["session_id"])
     assert ("harness_unavailable", None, EventStatus.FAILURE, "harness_unavailable") in events
+    assert await world.llm_responses(body["session_id"]) == []
     last = (await world.thread(body["session_id"]))[-1]
     assert isinstance(last, AIMessage) and last.content == UNAVAILABLE
 

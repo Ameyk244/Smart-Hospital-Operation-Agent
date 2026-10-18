@@ -95,7 +95,9 @@ class CostComparisonAssumptions(BaseModel):
         "Avoided Sonnet cost is an estimate: the displaced agent turns never "
         "ran, so their true token usage is unknowable. The fixed-overhead "
         "figures were measured from this codebase's system prompt and bound "
-        "tool schemas."
+        "tool schemas. The agent_* fields sum the tokens each model round "
+        "reported (llm_response events), so they are measured, unlike the "
+        "avoided-turn estimate."
     )
 
 
@@ -111,6 +113,10 @@ class CostComparison(BaseModel):
     avoided_agent_turns: int
     avoided_sonnet_cost_usd: float
     net_savings_usd: float
+    agent_rounds_measured: int = 0
+    agent_input_tokens: int = 0
+    agent_output_tokens: int = 0
+    agent_cost_usd: float = 0.0
     assumptions: CostComparisonAssumptions = CostComparisonAssumptions()
 
 
@@ -175,6 +181,20 @@ async def cost_comparison(
         + ASSUMED_AVOIDED_TURN_OUTPUT_TOKENS / 1_000_000 * SONNET_OUTPUT_USD_PER_MTOK
     )
 
+    agent_rounds = 0
+    agent_input_tokens = 0
+    agent_output_tokens = 0
+    for event in await EventRepository(db).list_by_event_type("llm_response", session_id=session_id):
+        recorded_in = _recorded_tokens(event, "input_tokens")
+        if recorded_in is not None:
+            agent_rounds += 1
+            agent_input_tokens += recorded_in
+            agent_output_tokens += _recorded_tokens(event, "output_tokens") or 0
+    agent_cost = (
+        agent_input_tokens / 1_000_000 * SONNET_INPUT_USD_PER_MTOK
+        + agent_output_tokens / 1_000_000 * SONNET_OUTPUT_USD_PER_MTOK
+    )
+
     return CostComparison(
         session_id=session_id,
         jev_calls_total=total,
@@ -193,4 +213,8 @@ async def cost_comparison(
         avoided_agent_turns=hits,
         avoided_sonnet_cost_usd=round(avoided_sonnet_cost, 9),
         net_savings_usd=round(avoided_sonnet_cost - jev_cost, 9),
+        agent_rounds_measured=agent_rounds,
+        agent_input_tokens=agent_input_tokens,
+        agent_output_tokens=agent_output_tokens,
+        agent_cost_usd=round(agent_cost, 9),
     )

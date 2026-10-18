@@ -32,7 +32,7 @@ from langchain_core.messages import (
 )
 from opentelemetry import trace
 from opentelemetry.context import Context
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent import harness_registry
@@ -91,10 +91,17 @@ class HarnessCall(BaseModel):
     arguments: str
 
 
+class HarnessUsage(BaseModel):
+    prompt_tokens: int = Field(0, ge=0)
+    completion_tokens: int = Field(0, ge=0)
+    cached_tokens: int = Field(0, ge=0)
+
+
 class HarnessRound(BaseModel):
     round: int
     text: str = ""
     tool_calls: list[HarnessCall] = []
+    usage: HarnessUsage = HarnessUsage()
 
 
 class HarnessFinish(BaseModel):
@@ -230,6 +237,28 @@ async def _record_terminal_event(
         await session.commit()
 
 
+async def _record_llm_responses(
+    session_factory: async_sessionmaker[AsyncSession], session_id: str, rounds: list[HarnessRound]
+) -> None:
+    """One `llm_response` row per reported round, shaped like the graph's."""
+    async with session_factory() as session:
+        for harness_round in rounds:
+            calls = len(harness_round.tool_calls)
+            await record_event(
+                session,
+                session_id=session_id,
+                round_num=harness_round.round,
+                event_type="llm_response",
+                status=EventStatus.SUCCESS,
+                arguments={
+                    **({"tool_call_count": calls} if calls else {}),
+                    "input_tokens": harness_round.usage.prompt_tokens,
+                    "output_tokens": harness_round.usage.completion_tokens,
+                },
+            )
+        await session.commit()
+
+
 async def run_agent_via_harness(
     *,
     session_id: str,
@@ -301,6 +330,8 @@ async def run_agent_via_harness(
             **{"harness.rounds": rounds, "harness.stop_reason": finish.stop_reason if finish else None},
         )
 
+    if finish is not None:
+        await _record_llm_responses(session_factory, session_id, finish.assistant_rounds)
     reason, reply = resolve_outcome(recorder.terminated_reason, finish)
     if reason in _TERMINAL_EVENTS:
         await _record_terminal_event(session_factory, session_id, rounds, reason)
