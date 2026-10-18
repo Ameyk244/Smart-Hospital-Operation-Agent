@@ -224,6 +224,25 @@ async def _post_turn(settings: Settings, payload: dict) -> dict:
     return response.json()
 
 
+async def _request_finish(settings: Settings, payload: dict) -> HarnessFinish:
+    return HarnessFinish.model_validate(await _post_turn(settings, payload))
+
+
+async def _record_model_fallback(
+    session_factory: async_sessionmaker[AsyncSession], session_id: str, model: str
+) -> None:
+    async with session_factory() as session:
+        await record_event(
+            session,
+            session_id=session_id,
+            round_num=1,
+            event_type="model_fallback",
+            status=EventStatus.SUCCESS,
+            arguments={"model": model},
+        )
+        await session.commit()
+
+
 async def _record_terminal_event(
     session_factory: async_sessionmaker[AsyncSession], session_id: str, rounds: int, reason: str
 ) -> None:
@@ -318,7 +337,13 @@ async def run_agent_via_harness(
         )
         harness_registry.register(turn_id, recorder)
         try:
-            finish = HarnessFinish.model_validate(await _post_turn(settings, payload))
+            finish = await _request_finish(settings, payload)
+            if settings.harness_fallback_model and finish.error == "model_error" and finish.stop_reason == "error":
+                await recorder.drain()
+                if not recorder.served:
+                    await _record_model_fallback(session_factory, session_id, settings.harness_fallback_model)
+                    llm = {**payload["llm"], "model": settings.harness_fallback_model}
+                    finish = await _request_finish(settings, {**payload, "llm": llm})
         except (httpx.HTTPError, ValueError) as exc:
             logger.warning("harness_unreachable", error_type=type(exc).__name__)
             spans.mark_error(turn_span, "harness_unavailable")

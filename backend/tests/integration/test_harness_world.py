@@ -66,6 +66,7 @@ class FakeHarness:
         self.raises: Exception | None = None
         self.raw_finish: dict | None = None
         self.mid_turn = None
+        self.attempts: list[dict] = []
         self.payloads: list[dict] = []
         self.responses: list[dict] = []
         self.turn_id: str | None = None
@@ -87,6 +88,10 @@ class FakeHarness:
         self.payloads.append(payload)
         self.turn_id = payload["turn_id"]
         self.turn = harness_registry.get(self.turn_id)
+        attempt = self.attempts.pop(0) if self.attempts else {}
+        stop_reason = attempt.get("stop_reason", self.stop_reason)
+        error = attempt.get("error", self.error)
+        reply = attempt.get("text", self.text)
         if self.raises:
             raise self.raises
         rounds = []
@@ -112,13 +117,13 @@ class FakeHarness:
             return self.raw_finish
         number = len(rounds) + 1
         rounds.append(
-            {"round": number, "text": self.text, "tool_calls": [], "usage": round_usage(number)}
+            {"round": number, "text": reply, "tool_calls": [], "usage": round_usage(number)}
         )
         finish = {
             "turn_id": self.turn_id,
-            "stop_reason": self.stop_reason,
-            "error": self.error,
-            "model_text": self.text,
+            "stop_reason": stop_reason,
+            "error": error,
+            "model_text": reply,
             "rounds": len(rounds),
             "usage": {"prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0},
             "assistant_rounds": rounds,
@@ -436,3 +441,54 @@ async def test_internal_route_refuses_strangers_in_flight_and_everyone_afterward
     assert in_flight == {"wrong_token": (404, {"detail": "Not Found"}), "right_token": 200}
     finished = await world.harness.call_tool(world.harness.turn_id, 1, SEARCH[0], "{}")
     assert (finished.status_code, finished.json()) == (404, {"detail": "Not Found"})
+
+
+MODEL_ERROR = {"stop_reason": "error", "error": "model_error"}
+FALLBACK = "openai/gpt-fallback"
+
+
+async def test_model_error_before_any_tool_call_is_retried_once_on_the_fallback(world):
+    world.configure(harness_fallback_model=FALLBACK)
+    world.harness.attempts = [MODEL_ERROR, {"text": "Answer from the fallback."}]
+
+    body = await world.chat(ASK)
+
+    first, second = world.harness.payloads
+    assert (body["handled_by"], body["message"]) == ("agent", "Answer from the fallback.")
+    assert body["terminated_reason"] is None
+    assert first["llm"]["model"] == world.settings.harness_model
+    assert second["llm"]["model"] == FALLBACK
+    assert second["turn_id"] == first["turn_id"]
+    events = await world.events(body["session_id"])
+    assert ("model_fallback", None, EventStatus.SUCCESS, None) in events
+
+
+async def test_model_error_after_a_served_tool_call_is_not_retried(world):
+    world.configure(harness_fallback_model=FALLBACK)
+    world.harness.script = [SEARCH]
+    world.harness.attempts = [MODEL_ERROR]
+
+    body = await world.chat(ASK)
+
+    assert len(world.harness.payloads) == 1
+    assert (body["terminated_reason"], body["message"]) == ("harness_error", GENERIC_ERROR)
+    assert "model_fallback" not in {e[0] for e in await world.events(body["session_id"])}
+
+
+async def test_model_error_without_a_fallback_model_is_not_retried(world):
+    world.harness.attempts = [MODEL_ERROR]
+
+    body = await world.chat(ASK)
+
+    assert len(world.harness.payloads) == 1
+    assert (body["terminated_reason"], body["message"]) == ("harness_error", GENERIC_ERROR)
+
+
+async def test_a_failing_retry_is_final(world):
+    world.configure(harness_fallback_model=FALLBACK)
+    world.harness.attempts = [MODEL_ERROR, MODEL_ERROR]
+
+    body = await world.chat(ASK)
+
+    assert len(world.harness.payloads) == 2
+    assert (body["terminated_reason"], body["message"]) == ("harness_error", GENERIC_ERROR)

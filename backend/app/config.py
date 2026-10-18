@@ -129,6 +129,8 @@ class Settings(BaseSettings):
     harness_url: str = Field("http://127.0.0.1:8891", pattern=r"^https?://[^/\s]+$")
     harness_token: str | None = None
     harness_model: str = "anthropic/claude-sonnet-5"
+    # A turn that fails with model_error before any tool call is retried once on this.
+    harness_fallback_model: str | None = Field(None, pattern=r"^\S+$")
     # Per model round. A provider that checks the balance up front (OpenRouter
     # does) refuses a request whose cap the account cannot cover.
     harness_max_tokens: int = Field(4096, gt=0)
@@ -146,13 +148,13 @@ class Settings(BaseSettings):
             )
         return self
 
-    # --- Observability (see observability/README.md) ---
-    # Off by default so a fresh clone and the test suite never try to export.
     # When on, the agent's reschedule_appointment only records a proposal; the
     # appointment moves when the user confirms it in the app. Off: the tool
     # moves it immediately, as before.
     require_reschedule_confirmation: bool = False
 
+    # --- Observability (see observability/README.md) ---
+    # Off by default so a fresh clone and the test suite never try to export.
     # Turn on in .env when the local grafana/otel-lgtm stack is running.
     # With it off the OTel API is a no-op; see app/observability/telemetry.py.
     otel_enabled: bool = False

@@ -66,3 +66,13 @@ def test_harness_limits_must_be_positive_and_the_deadline_at_most_an_hour(overri
     with pytest.raises(ValidationError):
         Settings(**overrides)
 
+
+
+def test_harness_fallback_model_is_off_by_default_and_takes_a_model_id() -> None:
+    assert Settings().harness_fallback_model is None
+    assert Settings(harness_fallback_model="a/b").harness_fallback_model == "a/b"
+
+
+def test_harness_fallback_model_rejects_whitespace() -> None:
+    with pytest.raises(ValueError):
+        Settings(harness_fallback_model="a b")

@@ -76,6 +76,7 @@ No schema change and no migration: the registry is in memory, and
 | `HARNESS_URL` | `http://127.0.0.1:8891` | Where the backend reaches the harness |
 | `HARNESS_TOKEN` | unset | Shared secret, at least 32 characters. Local only; **not** a paid API key. Required when `AGENT_RUNTIME=harness`; startup **fails fast** if it is missing or short (`Settings` validator) |
 | `HARNESS_MODEL` | `anthropic/claude-sonnet-5` | The model id the harness must serve. Sent per turn; the harness refuses a mismatch |
+| `HARNESS_FALLBACK_MODEL` | unset | A second model id the gateway also serves. If a turn ends with `model_error` before any tool call ran, the bridge retries it once with this model (section 7, rule 15) |
 | `HARNESS_MAX_TOKENS` | `4096` | `llm.max_tokens` sent per turn: the cap on one model round. OpenRouter refuses a request whose cap the account balance cannot cover (HTTP 402), so lower it for a small balance |
 | `HARNESS_TURN_TIMEOUT_SECONDS` | `120` | Whole-turn budget. Sent as `deadline_in_ms`; the backend's HTTP timeout is this plus a fixed grace |
 
@@ -223,6 +224,13 @@ throttle, cookie binding, hello route, socket door, step fence, channel thread.
     mapped to `harness_error` with the fixed sentence, never shown as an empty
     bubble.
 14. **Tool spans** (`tool.execute`) are parented on the `harness.turn` span.
+15. **Fallback model.** With `HARNESS_FALLBACK_MODEL` set, a turn whose finish is
+    `stop_reason: "error"` with `error: "model_error"` (the provider failed) **and**
+    for which the backend served no tool call (so nothing has run, and retrying cannot
+    repeat a write) is sent once more with `llm.model` set to the fallback. The retry
+    keeps the same `turn_id`, payload and limits. The result of the retry is final:
+    there is no second retry. A `model_fallback` trace row (`model` = the fallback id,
+    allowlisted) records that it happened. With the setting unset nothing changes.
 
 ## 8. Verification (Part 1)
 
@@ -313,6 +321,7 @@ upstream sockets, step fence, hello poller or pre-attach buffer; no streaming
 | `HOSPITAL_HARNESS_HOST` / `PORT` | `127.0.0.1` / `8891` | Listen address (loopback only) |
 | `HOSPITAL_BACKEND_URL` | `http://127.0.0.1:8000` | Backend base URL |
 | `HOSPITAL_LLM_MODEL` | `anthropic/claude-sonnet-5` | The one model served; must equal the backend's `HARNESS_MODEL` or every turn finishes with `error` and no model call |
+| `HOSPITAL_LLM_FALLBACK_MODELS` | empty | Comma-separated extra model ids the gateway also serves (the allowed list is `HOSPITAL_LLM_MODEL` plus these). A turn asking for a model outside the list is refused with `model_mismatch` and no model call |
 | `HOSPITAL_LLM_BASE_URL` | `https://openrouter.ai/api/v1` | Provider base URL |
 
 The backend sends sampling and limits per turn (`llm.max_tokens`,
