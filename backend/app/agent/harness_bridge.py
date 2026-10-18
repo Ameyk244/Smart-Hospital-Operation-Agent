@@ -89,6 +89,7 @@ class HarnessCall(BaseModel):
     id: str
     name: str
     arguments: str
+    result: str | None = None
 
 
 class HarnessUsage(BaseModel):
@@ -180,8 +181,9 @@ def rebuild_turn_messages(
     reply: str,
 ) -> list[BaseMessage]:
     """The turn as LangChain messages. Provider call ids repeat across
-    rounds, so served content is matched by (round, call_id). A reported call
-    that never ran gets a closer; a served call no round mentions ran, so it
+    rounds, so served content is matched by (round, call_id). A call the
+    gateway ran itself carries its own `result`, used when the backend did not
+    serve it. A reported call with neither gets a closer; a served call no round mentions ran, so it
     comes first, as a call of its own. The result always ends with an
     assistant message and never leaves a tool call without its tool message."""
     content_by_call = {(round_num, call_id): content for round_num, call_id, _, content in served}
@@ -199,9 +201,10 @@ def rebuild_turn_messages(
             for c in harness_round.tool_calls
         ]
         messages.append(AIMessage(content=harness_round.text, tool_calls=calls))
-        for call in calls:
-            content = content_by_call.get((harness_round.round, call["id"]), NOT_EXECUTED)
-            messages.append(ToolMessage(content=content, tool_call_id=call["id"]))
+        for call in harness_round.tool_calls:
+            fallback = NOT_EXECUTED if call.result is None else call.result
+            content = content_by_call.get((harness_round.round, call.id), fallback)
+            messages.append(ToolMessage(content=content, tool_call_id=call.id))
     last = messages[-1] if messages else None
     if not (isinstance(last, AIMessage) and not last.tool_calls and last.content == reply):
         messages.append(AIMessage(content=reply))

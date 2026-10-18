@@ -1,0 +1,41 @@
+{
+  "turn_id": "3f2b8c1e9a4d4e6f8b7a1c2d3e4f5a6b",
+  "stop_reason": null,
+  "error": null,
+  "model_text": "It is Sunday 18 October 2026, so tomorrow is Monday 19 October.",
+  "rounds": 2,
+  "usage": {
+    "prompt_tokens": 700,
+    "completion_tokens": 50,
+    "cached_tokens": 0
+  },
+  "assistant_rounds": [
+    {
+      "round": 1,
+      "text": "",
+      "tool_calls": [
+        {
+          "id": "call_01",
+          "name": "current_time",
+          "arguments": "{}",
+          "result": "{\"now\":\"2026-10-18T14:03:00+05:30\",\"weekday\":\"Sunday\"}"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 400,
+        "completion_tokens": 20,
+        "cached_tokens": 0
+      }
+    },
+    {
+      "round": 2,
+      "text": "It is Sunday 18 October 2026, so tomorrow is Monday 19 October.",
+      "tool_calls": [],
+      "usage": {
+        "prompt_tokens": 300,
+        "completion_tokens": 30,
+        "cached_tokens": 0
+      }
+    }
+  ]
+}

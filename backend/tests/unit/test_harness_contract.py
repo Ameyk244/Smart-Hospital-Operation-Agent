@@ -73,6 +73,7 @@ class RoundToolCall(Strict):
     id: str
     name: str
     arguments: str
+    result: str | None = None
 
 
 class AssistantRound(Strict):
@@ -105,6 +106,7 @@ VALIDATORS: dict[str, type[BaseModel]] = {
     "turns.request.json": TurnRequest,
     "turns.response.ok.json": TurnResponse,
     "turns.response.error.json": TurnResponse,
+    "turns.response.local_tool.json": TurnResponse,
     "tool_calls.request.json": StrictToolCallRequest,
     "tool_calls.request.malformed.json": StrictToolCallRequest,
     "tool_calls.response.ok.json": ToolCallResponse,

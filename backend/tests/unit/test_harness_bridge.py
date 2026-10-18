@@ -93,6 +93,23 @@ def test_rebuild_does_not_duplicate_a_clean_completion():
     assert messages == [AIMessage(content="all done")]
 
 
+def test_rebuild_uses_a_gateway_local_calls_result_instead_of_a_closer():
+    local = HarnessCall(id="c1", name="current_time", arguments="{}", result='{"now": "x"}')
+    rounds = [HarnessRound(round=1, tool_calls=[local]), _round(2, text="done")]
+    messages = rebuild_turn_messages(rounds, [], "done")
+    assert messages[1] == ToolMessage(content='{"now": "x"}', tool_call_id="c1")
+    assert messages[-1] == AIMessage(content="done")
+    assert NOT_EXECUTED not in [m.content for m in messages]
+
+
+def test_rebuild_prefers_served_content_over_a_reported_result():
+    call = HarnessCall(id="c1", name="search_scanners", arguments="{}", result="reported")
+    messages = rebuild_turn_messages(
+        [HarnessRound(round=1, tool_calls=[call])], [(1, "c1", "search_scanners", "served")], "reply"
+    )
+    assert messages[1] == ToolMessage(content="served", tool_call_id="c1")
+
+
 def test_rebuild_always_ends_with_an_assistant_message_without_tool_calls():
     rounds = [_round(1, calls=[("c1", "search_scanners", "{}")])]
     messages = rebuild_turn_messages(rounds, [(1, "c1", "search_scanners", "ok")], "limit reached")

@@ -127,6 +127,12 @@ Response `200` body (the finish payload):
 }
 ```
 
+A tool call may also carry an optional `result` (a string). It is present only for
+a **gateway-local tool** (section 11.7): one the gateway ran itself, so the backend
+never served it and could not otherwise know what the model saw. The backend uses
+it to rebuild history; a call with neither a served result nor a `result` is
+recorded as not executed, as before.
+
 Each round's `usage` is that model request's own token count, so the turn's
 `usage` is the sum of its rounds. The gateway always sends it; the backend treats
 a missing per-round `usage` as zeros, so an older gateway still works. The backend
@@ -392,3 +398,23 @@ Known limits, deliberately left as they are:
   by the backend (422) and end the turn.
 - Port 8890 is taken by an unrelated harness on the development machine, so this
   project's default is 8891.
+
+### 11.7 Gateway-local tools (opt-in)
+
+A tool that is **harmless by construction** may run inside the gateway instead of
+the backend: it takes no hospital data, changes nothing, and needs no grounding.
+It is the way to learn dsh's own tool authoring (`defineTool` from `dsh-tools`).
+The first one is `current_time`, which returns the current date, time and weekday
+so the model can resolve "tomorrow at 9" for `reschedule_appointment`.
+
+- **Off by default.** `HOSPITAL_LOCAL_TOOLS` (comma-separated names, default empty)
+  turns them on; with it unset the gateway behaves exactly as before.
+- **Where they sit.** After the backend's tools in the prompt. A local tool whose
+  name equals a tool in the request is skipped (the backend's wins).
+- **What the backend sees.** Nothing at call time: no `tool_executed` row, no count
+  against `MAX_TOOL_CALLS`. They count as rounds, which the round limit bounds. The
+  call appears in `assistant_rounds[].tool_calls[]` with its `result`, so the stored
+  history is complete (fixture `turns.response.local_tool.json`).
+- **Never** put anything here that reads or writes hospital data, runs a command or
+  reaches the network: that would bypass grounding, caps and audit.
+- It exists only in the harness runtime; the in-process agent does not have it.

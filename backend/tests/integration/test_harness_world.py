@@ -43,6 +43,8 @@ UNGROUNDED_RESCHEDULE = (
     {"appointment_code": "APT-2001", "scanner_code": "SCN-2"},
 )
 UNKNOWN = ("delete_everything", {})
+LOCAL = ("current_time", {})
+LOCAL_RESULTS = {"current_time": '{"now":"2026-10-18T14:03:00+05:30","weekday":"Sunday"}'}
 
 UNAVAILABLE = "The assistant is temporarily unavailable. Please try again shortly."
 GENERIC_ERROR = "Something went wrong while processing that request. Please try again."
@@ -90,9 +92,15 @@ class FakeHarness:
         rounds = []
         for number, (name, args) in enumerate(self.script, 1):
             raw = args if isinstance(args, str) else json.dumps(args)
+            call = {"id": f"call_{number}", "name": name, "arguments": raw}
+            if name in LOCAL_RESULTS:
+                call["result"] = LOCAL_RESULTS[name]
+                rounds.append(
+                    {"round": number, "text": "", "tool_calls": [call], "usage": round_usage(number)}
+                )
+                continue
             body = (await self.call_tool(self.turn_id, number, name, raw)).json()
             self.responses.append(body)
-            call = {"id": f"call_{number}", "name": name, "arguments": raw}
             rounds.append(
                 {"round": number, "text": "", "tool_calls": [call], "usage": round_usage(number)}
             )
@@ -225,6 +233,21 @@ async def test_happy_path_serves_tool_calls_and_writes_the_thread(world):
     assert thread[3].content == world.harness.responses[0]["content"]
     assert thread[4].content == world.harness.text
     assert harness_registry.get(world.harness.turn_id) is None
+
+
+async def test_gateway_local_call_is_stored_with_its_result_and_never_served(world):
+    world.harness.script = [LOCAL]
+
+    body = await world.chat(ASK)
+
+    assert world.harness.responses == []
+    thread = await world.thread(body["session_id"])
+    assert [m.type for m in thread] == ["system", "human", "ai", "tool", "ai"]
+    assert thread[2].tool_calls[0]["name"] == "current_time"
+    assert thread[3].content == LOCAL_RESULTS["current_time"]
+    assert thread[4].content == world.harness.text
+    events = await world.events(body["session_id"])
+    assert not [e for e in events if e[0] == "tool_executed"]
 
 
 async def test_each_reported_round_is_traced_with_its_tokens(world):
