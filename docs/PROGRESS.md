@@ -1504,3 +1504,38 @@ Same session: the live-model smoke of the harness path first failed with an
 OpenRouter 402 (balance cannot cover 4096 tokens per round); `max_tokens` was a
 hardcoded constant, so it became `HARNESS_MAX_TOKENS` (default unchanged), and the
 smoke then passed with 1000.
+
+Harness extensions (branch `harness-ext-test`, both repos). Five features chosen
+from what DeepSeek Harness offers, built one at a time (contract first, then a
+backend agent and a gateway agent in parallel on disjoint files, lead review, full
+checks, one commit per feature per repo). Everything new is additive or opt-in and
+off by default, so existing behaviour and tests are unchanged.
+1. Real token usage per model round: each round writes an `llm_response` trace row
+   with input and output tokens in both runtimes; `/api/cost-comparison` gains
+   measured agent fields beside the estimate. The finish payload carries per-round
+   usage (contract updated first). Harness rows are written when the turn ends, so
+   they sort after the tool rows in the trace panel (documented limit).
+2. Gateway-local tools (opt-in `HOSPITAL_LOCAL_TOOLS`, first `current_time`): a
+   harmless tool written with dsh's own `defineTool` and run inside the gateway. A
+   tool call may carry its `result` so the backend's stored history stays true.
+3. Confirm before rescheduling (opt-in `REQUIRE_RESCHEDULE_CONFIRMATION`): the agent
+   only proposes the move, the chat shows Confirm / Cancel, confirming runs the same
+   `reassign_scanner` command audited as `user_confirmed:<session>`. No schema
+   change: proposals are `agent_events` rows. dsh's own approval seam was not used:
+   it needs an answerer UI that the headless gateway lacks, so the rule lives in the
+   backend where the audit already is.
+4. Several models plus a fallback (opt-in `HARNESS_FALLBACK_MODEL` and
+   `HOSPITAL_LLM_FALLBACK_MODELS`): a turn that fails with `model_error` before any
+   tool ran is retried once on the fallback.
+5. Record and replay (tests only): a recorder captures a real model's streamed
+   answer into a cassette (response bodies only) that the mock replays. dsh's
+   `llm-replay` and `llm-mock-server` were not used: the first replays dsh session
+   logs and the second speaks the Anthropic wire format, not OpenAI chat-completions.
+   One real recording (`anthropic/claude-sonnet-5`, one tool, two rounds) is committed.
+Not built, on purpose: streaming replies (changes the contract, the backend and the
+UI; left for a decision), choosing a model by question complexity (needs a
+heuristic worth its own design), dsh compaction/persistence/MCP/shell tools.
+Lessons: concurrent pytest runs share one test database and truncate each other's
+rows (the full-suite run showed 5 spurious failures that all passed alone), so DB
+test runs are now strictly one at a time; the PC restart took Docker down, which the
+first backend agent reported honestly instead of guessing.

@@ -20,7 +20,8 @@ pattern it was modelled on is in [harness-refrence.md](harness-refrence.md).
 10. [What we use from DeepSeek Harness, and what we don't](#10-what-we-use-from-deepseek-harness)
 11. [Settings and how to run it](#11-settings-and-how-to-run-it)
 12. [What can go wrong, and what the user sees](#12-what-can-go-wrong)
-13. [Known limits](#13-known-limits)
+13. [Optional extensions](#13-optional-extensions-branch-harness-ext-test)
+14. [Known limits](#14-known-limits)
 
 ---
 
@@ -430,7 +431,20 @@ its watchdog fires 20 s later (longer than one 15 s tool call, so it cannot abor
 call still committing); cleanup adds at most 10 s; the backend waits up to `D + 40 s`.
 If you change any of these, change them together.
 
-## 13. Known limits
+## 13. Optional extensions (branch `harness-ext-test`)
+
+Five add-ons, all off by default. Details and the reasons are in
+`docs/PROGRESS.md`; the contract changes are in the design doc.
+
+| Add-on | Switch | What it does | Main files |
+|---|---|---|---|
+| Real token usage | always on | Each model round writes an `llm_response` trace row with tokens; `/api/cost-comparison` adds measured agent figures | `harness_bridge.py`, `graph.py`, `cost.py`, gateway `agent-driver.ts` |
+| Gateway-local tools | `HOSPITAL_LOCAL_TOOLS=current_time` (gateway) | A harmless tool run inside the gateway with dsh's `defineTool`; its result rides in the finish payload | gateway `local-tools.ts`, `agent-driver.ts`; backend `harness_bridge.py` |
+| Confirm before rescheduling | `REQUIRE_RESCHEDULE_CONFIRMATION=true` (backend) | The agent proposes the move; the chat shows Confirm / Cancel; confirming applies it, audited as the user | `action_tools.py`, `routes/reschedules.py`, `RescheduleConfirmation.tsx` |
+| Fallback model | `HARNESS_FALLBACK_MODEL` (backend) and `HOSPITAL_LLM_FALLBACK_MODELS` (gateway) | A turn that fails with `model_error` before any tool ran is retried once on the second model | `harness_bridge.py`; gateway `agent-driver.ts`, `cordis.patch.yml` |
+| Record and replay | tests only | A real model's streamed answer is recorded once into a cassette the mock replays | gateway `scripts/record-cassette.ts`, `tests/fakes/mock-llm.ts`, `tests/cassettes/` |
+
+## 14. Known limits
 
 - The Jev light shows configuration only; checking Jev live would cost a paid call on
   every refresh. The Agent light means a key is set, not that the key has credit.

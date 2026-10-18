@@ -150,6 +150,16 @@ verified. It needs **no new paid API or secret** (a local shared token only).
   (`git status`/diff in both repos) before it is committed. The gateway's
   tests use a mock LLM; the single live smoke is the only paid call.
 
+### Harness extensions (branch `harness-ext-test`)
+Five optional features sit on top of the harness (see `docs/PROGRESS.md`). The rule
+for all of them: **additive or opt-in, off by default**, so a fresh clone behaves
+exactly as before. The switches are `HOSPITAL_LOCAL_TOOLS` and
+`HOSPITAL_LLM_FALLBACK_MODELS` (gateway), `HARNESS_FALLBACK_MODEL` and
+`REQUIRE_RESCHEDULE_CONFIRMATION` (backend). Gateway-local tools must be harmless by
+construction (no hospital data, no I/O); anything touching hospital data goes through
+the backend. **Never run two database test runs at once**: they truncate each
+other's rows. Pushing and merging need an explicit instruction.
+
 ### How to finish a unit of harness work (standing instruction to myself)
 1. After Part 1's code is in, **start the app** (backend in `harness` mode
    against a stub harness, and in `in_process` mode) and confirm a real request
