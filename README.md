@@ -20,6 +20,10 @@ The project uses only synthetic patient and hospital data.
 - Synthetic, reproducible seed data
 - Offline tests that do not consume LLM API credits
 - Anthropic and OpenRouter provider support
+- Optional harness runtime: the agent's model loop can run in a separate process (`AGENT_RUNTIME=harness`) while every tool rule stays in this backend; see `docs/HARNESS_EXPLAINED.md`
+- Harness extensions (all opt-in): per-round token usage, a gateway-local `current_time` tool, confirm-before-reschedule (`REQUIRE_RESCHEDULE_CONFIRMATION`), a fallback model, and record/replay tests
+- Layered guardrails: any message about the app reaches the agent, while off-topic or unsafe requests are blocked (see `AGENT.md` section 3)
+- Status lights in the UI for the agent, harness and Jev
 
 ## Architecture
 
@@ -589,6 +593,8 @@ What is 47 times 12? MRI
 Write a poem about scanners
 Tell me the weather and mention a hospital
 ```
+
+Short or ambiguous messages that are about the app (a bare name or code such as `scn5`, a greeting, "how does the confirm button work?", a reply like `1` to the agent's question) are not rejected. The keyword gate cannot place them, so Jev gives a scope verdict and the agent answers within its guardrails. Creative writing, SQL, prompt injection and secret requests are denied before any model is called.
 
 ---
 

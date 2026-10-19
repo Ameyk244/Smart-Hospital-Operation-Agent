@@ -1560,3 +1560,10 @@ refactored into one shared helper without changing command routing (its 33 tests
 unchanged). Documented behaviour changes: unplaced messages now cost one Jev call;
 a long off-scope reply is still stored in the checkpoint even when the user sees the
 rejection; the scope calls are outside `/api/cost-comparison`.
+
+### Gateway retries a transient provider 5xx
+
+A free-tier provider's 5xx (`LlmError SERVER`) failed a whole turn on the first try. The
+gateway's `llm-retry` row now retries `TRANSPORT` and `SERVER` codes on the same model
+before the backend's one-time fallback model is considered. Two gateway e2e tests cover
+a single 5xx (recovers on the primary) and a double 5xx (falls back).
