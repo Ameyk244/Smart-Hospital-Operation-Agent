@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import HTTPConnection
 
-from app.agent.domain_gate import check_domain_gate
+from app.agent.domain_gate import check_domain_gate, is_denied
 from app.agent.eligibility import check_eligibility
 from app.agent.entity_codes import extract_entity_codes
 from app.agent.graph import record_non_agent_turn, run_agent
@@ -60,6 +60,19 @@ logger = get_logger("api.chat")
 # `app/api/routes/cost.py`. Defined here as a named constant so the contract
 # is greppable rather than a string literal repeated across modules.
 JEV_EVENT_TYPE = "jev_invoked"
+
+REJECTION_MESSAGE = (
+    "I only handle hospital scheduling and operations — try asking "
+    "about appointments, scanners, patients, or your preferences."
+)
+
+# A message the keyword gate could not place reaches the agent only after a scope
+# verdict. When Jev leaned in scope, the agent answers freely (an explanation of
+# how a feature works can be long). When Jev leaned *away* but was not confident
+# enough to block, the reply is held to this: with no tool used, anything longer
+# than a short answer is not an answer to an app or hospital question (a poem, an
+# essay) and is replaced by the rejection above.
+OFF_SCOPE_MAX_REPLY_CHARS = 500
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -257,6 +270,20 @@ async def handle_chat_message(
         metrics.record_chat_request(route, channel, time.perf_counter() - started)
 
 
+async def _reject(
+    db: AsyncSession,
+    session_repo: SessionRepository,
+    session_id: str,
+    route: str,
+    message: str = REJECTION_MESSAGE,
+) -> tuple[str, ChatResponse]:
+    """Store and return a rejection. `route` is the metric route name; the
+    response says `rejected` for all of them (the UI shows one badge)."""
+    await session_repo.append_message(session_id, MessageRole.ASSISTANT, message)
+    await db.commit()
+    return route, ChatResponse(session_id=session_id, handled_by="rejected", message=message)
+
+
 def _parse(text: str):
     with spans.span("parser.parse") as parse_span:
         outcome = parse(text)
@@ -345,6 +372,12 @@ async def _route_chat_message(
     prior_assistant_message = (
         last_message.content if last_message and last_message.role == MessageRole.ASSISTANT else None
     )
+    # Never worth a model call, whatever else the message says (see
+    # `is_denied`); checked on every message so a bundled request cannot slip
+    # through behind an in-domain clause.
+    if is_denied(text):
+        return await _reject(db, session_repo, session_id, "domain_rejected")
+
     with spans.span("domain_gate.check") as gate_span:
         domain_gate = check_domain_gate(
             text,
@@ -352,14 +385,10 @@ async def _route_chat_message(
             prior_assistant_message=prior_assistant_message,
         )
         gate_span.set_attribute("domain_gate.in_domain", domain_gate.in_domain)
-    if not domain_gate.in_domain:
-        message = (
-            "I only handle hospital scheduling and operations — try asking "
-            "about appointments, scanners, patients, or your preferences."
-        )
-        await session_repo.append_message(session_id, MessageRole.ASSISTANT, message)
-        await db.commit()
-        return "domain_rejected", ChatResponse(session_id=session_id, handled_by="rejected", message=message)
+    # The keyword gate no longer rejects on its own: a message it cannot place
+    # ("hello", "who is wei brown") is sent through the scope check below, and
+    # the reply it earns is guarded. AGENT.md section 3 has the whole design.
+    out_of_screen = not domain_gate.in_domain
 
     with spans.span("eligibility.check") as eligibility_span:
         eligibility = check_eligibility(text)
@@ -368,12 +397,47 @@ async def _route_chat_message(
             **{"eligibility.eligible": eligibility.eligible, "eligibility.reason": eligibility.reason},
         )
     if not eligibility.eligible:
-        message = f"Sorry, I can't process that request ({eligibility.reason})."
-        await session_repo.append_message(session_id, MessageRole.ASSISTANT, message)
-        await db.commit()
-        return "ineligible", ChatResponse(session_id=session_id, handled_by="rejected", message=message)
+        return await _reject(
+            db, session_repo, session_id, "ineligible",
+            f"Sorry, I can't process that request ({eligibility.reason}).",
+        )
 
     settings = get_settings()
+
+    # Set only when Jev leaned away from scope without blocking: the one case in
+    # which the agent's reply is capped (see OFF_SCOPE_MAX_REPLY_CHARS).
+    reply_capped = False
+    if out_of_screen:
+        from app.agent.jev_fast_path import NOT_HOSPITAL, classify_scope
+
+        scope = await classify_scope(text, settings, prior_assistant_message)
+        # No verdict (Jev disabled, down, unconfident) keeps the old behaviour:
+        # an unplaceable message is rejected. Only a verdict can let it through.
+        verdict_in_scope = scope.label is not None and not scope.blocked
+        await record_event(
+            db,
+            session_id=session_id,
+            round_num=0,
+            event_type="scope_checked",
+            status=(
+                EventStatus.SUCCESS
+                if verdict_in_scope
+                else EventStatus.FAILURE if scope.label is None else EventStatus.REJECTED
+            ),
+            arguments={
+                "scope": scope.label,
+                "confidence": scope.confidence,
+                "threshold": settings.jev_confidence_threshold,
+                "input_tokens": scope.input_tokens,
+                "output_tokens": scope.output_tokens,
+                "model": scope.model,
+            },
+            latency_ms=scope.latency_ms,
+            error_category=scope.failure_reason,
+        )
+        if not verdict_in_scope:
+            return await _reject(db, session_repo, session_id, "scope_rejected")
+        reply_capped = scope.label == NOT_HOSPITAL
 
     # The Jev fast path sits here and nowhere else: *after* the domain gate
     # and the eligibility gate (so an off-topic or malformed message is still
@@ -384,7 +448,7 @@ async def _route_chat_message(
     # client is constructed — behavior is identical to `master`.
     # Not for a reply to the agent's question: Jev maps self-contained commands,
     # and a bare "mri" or "brown" only makes sense to the agent, which has the context.
-    if settings.enable_jev_fast_path and domain_gate.reason != "answers_question":
+    if settings.enable_jev_fast_path and not out_of_screen and domain_gate.reason != "answers_question":
         from app.agent.jev_fast_path import try_jev_fast_path
 
         with spans.span("jev.consult") as jev_span:
@@ -500,6 +564,15 @@ async def _route_chat_message(
     # only the text; see that module's docstring for why the fix belongs
     # here and not in the graph state itself.
     reply_text = extract_text_content(last_message.content)
+    if reply_capped and not final_state["tool_call_count"] and len(reply_text) > OFF_SCOPE_MAX_REPLY_CHARS:
+        await record_event(
+            db,
+            session_id=session_id,
+            round_num=final_state["round_count"],
+            event_type="scope_blocked",
+            status=EventStatus.REJECTED,
+        )
+        return await _reject(db, session_repo, session_id, "scope_blocked")
     await session_repo.append_message(session_id, MessageRole.ASSISTANT, reply_text)
     await db.commit()
     pending = (

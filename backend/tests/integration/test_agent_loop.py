@@ -344,6 +344,16 @@ def test_system_prompt_instructs_agent_to_decline_non_hospital_bundled_subtasks(
     assert "not maximum helpfulness" in lowered
 
 
+def test_system_prompt_tells_the_agent_what_to_do_with_a_bare_name_or_code():
+    """The agent is the catch-all for messages the parser and Jev miss, so a
+    message that is only "Wei Brown" or "scn5" must get a helpful reply (what
+    was found and what can be done next), not a guess at a task and not a write."""
+    lowered = SYSTEM_PROMPT.lower()
+    assert "only a name" in lowered
+    assert "offer two to four things" in lowered
+    assert "never change anything on a bare mention" in lowered
+
+
 async def test_bundled_off_topic_request_scripted_decline_survives_the_loop(agent_session_factory):
     """Plumbing sanity check for Layer 2: even when a bundled/ambiguous
     request reaches the agent (as if it had slipped past the domain gate), a

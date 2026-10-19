@@ -94,6 +94,8 @@ _ALLOWED_ARGUMENTS: dict[str, Callable[[Any], bool]] = {
     "input_tokens": _is_number,
     "output_tokens": _is_number,
     "model": _matches(_MODEL_ID),
+    # Jev's scope verdict (`scope_checked`): one of three fixed labels
+    "scope": _matches(_IDENTIFIER),
 }
 
 

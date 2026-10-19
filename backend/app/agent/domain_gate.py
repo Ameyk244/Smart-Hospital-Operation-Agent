@@ -344,6 +344,39 @@ _REPLY_FILLER: frozenset[str] = frozenset(
 )
 
 
+# Messages that are never worth a model call, whatever else they say, so this is
+# checked on EVERY message, not just ones the keyword screen fails: attempts to
+# change the agent's rules, requests for its prompt or for secrets, role-play,
+# and creative or code writing. Applying it everywhere closes the bundling gap
+# ("list scanners and write a poem" has one in-domain clause and used to pass).
+# Deliberately phrase-shaped, not bare words: "song", "token" or "script" alone
+# can be a patient's surname or an ordinary word, so only the unambiguous
+# creative words stand alone and the rest need a request verb beside them.
+_DENY_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        # change or bypass the rules
+        r"\b(?:ignore|disregard|forget|override|bypass)\b[^.?!]{0,40}\b(?:instructions?|rules?|prompt|guidelines?|restrictions?|safeguards?)\b",
+        r"\b(?:system|developer|hidden|initial)\s+(?:prompt|message|instructions?)\b",
+        r"\b(?:reveal|show|print|repeat|leak|tell)\b[^.?!]{0,30}\b(?:your|the)\s+(?:prompt|instructions?|rules|configuration)\b",
+        r"\byou\s+are\s+now\b|\bact\s+as\s+(?:a|an|if|though)\b|\bpretend\s+(?:to\s+be|you)\b|\brole-?play\b",
+        r"\bjailbreak\b|\bdeveloper\s+mode\b|\bdo\s+anything\s+now\b",
+        # creative writing and entertainment
+        r"\b(?:poem|poems|poetry|haiku|limerick|riddle|jokes?|lyrics|recipes?|weather)\b",
+        r"\b(?:write|compose|draft|generate|create)\b[^.?!]{0,30}\b(?:song|story|essay|code|script|program|function|email|letter)\b",
+        # secrets and raw database access
+        r"\b(?:passwords?|credentials?|api[ -]?keys?|secrets?)\b",
+        r"\b(?:sql|drop\s+table)\b|\bselect\s+\*",
+    )
+)
+
+
+def is_denied(text: str) -> bool:
+    """True when `text` matches a pattern above. A pure, synchronous check; a
+    denied message is rejected without any model call."""
+    return any(pattern.search(text) for pattern in _DENY_PATTERNS)
+
+
 @dataclass(frozen=True)
 class DomainGateResult:
     in_domain: bool

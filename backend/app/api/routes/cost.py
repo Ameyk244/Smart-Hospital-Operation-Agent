@@ -41,8 +41,8 @@ SONNET_OUTPUT_USD_PER_MTOK = 10.00
 # --- Measured fixed overhead of one agent turn ----------------------------
 # Measured against this codebase, not guessed: every agent turn pays these
 # input tokens before the user's message is counted at all.
-#   SYSTEM_PROMPT in app/agent/graph.py: 1,757 chars ~= 440 tokens
-SONNET_SYSTEM_PROMPT_TOKENS = 440
+#   SYSTEM_PROMPT in app/agent/graph.py: 3,598 chars ~= 900 tokens
+SONNET_SYSTEM_PROMPT_TOKENS = 900
 #   All 7 tool schemas bound to the model (app/agent/tools/*): 5,580 chars
 #   ~= 1,395 tokens
 SONNET_TOOL_SCHEMA_TOKENS = 1_395
