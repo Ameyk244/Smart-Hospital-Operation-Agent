@@ -1561,6 +1561,23 @@ unchanged). Documented behaviour changes: unplaced messages now cost one Jev cal
 a long off-scope reply is still stored in the checkpoint even when the user sees the
 rejection; the scope calls are outside `/api/cost-comparison`.
 
+### Front door (opt-in), branch `harness-front-door`
+
+For learning the reference project's shape, the gateway can now be the browser's only
+entry point: `HOSPITAL_FRONT_DOOR=true` relays `/api/*` and the `/api/voice/*` socket to
+the backend unchanged (`front-door.ts`; design doc section 11.8). It is a transparent
+relay: parser, gates, Jev, grounding and the output guard stay in the backend, and with
+the switch off the gateway behaves exactly as before. Only `/api/` paths are relayed
+(traversal and `/internal/` refused), the harness token is never forwarded, an oversized
+body gets 413, a dead backend gets a 502 with no error text. Reviewed by a scoped
+subagent, which found one real bug (a backend that died mid-answer left the browser
+hanging), now fixed and tested. Verified: gateway typecheck and 231 unit tests, the
+scripted agent chain 29/29 through the front door, and a live run of all three modes,
+including stopping the gateway in modes 2 and 3 (parser and Jev survive in mode 2; the
+whole app stops in mode 3). The three modes are documented in
+`docs/HARNESS_EXPLAINED.md`. Not built: the reference's begin-turn inversion (the
+gateway asking the backend whether the parser understood, then running the loop).
+
 ### Gateway retries a transient provider 5xx
 
 A free-tier provider's 5xx (`LlmError SERVER`) failed a whole turn on the first try. The

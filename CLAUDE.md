@@ -169,6 +169,15 @@ construction (no hospital data, no I/O); anything touching hospital data goes th
 the backend. **Never run two database test runs at once**: they truncate each
 other's rows. Pushing and merging need an explicit instruction.
 
+A sixth, opt-in add-on (branch `harness-front-door`): `HOSPITAL_FRONT_DOOR=true` makes
+the gateway the browser's entry point, relaying `/api/*` and the voice socket to the
+backend unchanged (design doc section 11.8). It is a transparent relay: the parser,
+Jev, gates, grounding and output guard all stay in the backend and nothing there may
+move into the gateway. Run modes: 1 = `in_process`, no gateway; 2 = `harness`, front door
+off (parser and Jev work with the gateway down); 3 = `harness` plus front door (the gateway
+is the browser's only entry and must stay up for everything). See
+`docs/HARNESS_EXPLAINED.md`, "The three run modes".
+
 ### How to finish a unit of harness work (standing instruction to myself)
 1. After Part 1's code is in, **start the app** (backend in `harness` mode
    against a stub harness, and in `in_process` mode) and confirm a real request

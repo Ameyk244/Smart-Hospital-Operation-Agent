@@ -11,6 +11,7 @@ pattern it was modelled on is in [harness-refrence.md](harness-refrence.md).
 1. [The idea in one minute](#1-the-idea-in-one-minute)
 2. [The four places involved](#2-the-four-places-involved)
 3. [Which messages use the harness](#3-which-messages-use-the-harness)
+   - [The three run modes (1, 2, 3)](#the-three-run-modes)
 4. [The diagram: one agent turn, step by step](#4-the-diagram-one-agent-turn-step-by-step)
 5. [The same journey for every kind of message](#5-the-same-journey-for-every-kind-of-message)
 6. [The two calls between backend and gateway](#6-the-two-calls-between-backend-and-gateway)
@@ -22,6 +23,7 @@ pattern it was modelled on is in [harness-refrence.md](harness-refrence.md).
 12. [What can go wrong, and what the user sees](#12-what-can-go-wrong)
 13. [Optional extensions](#13-optional-extensions-branch-harness-ext-test)
 14. [Known limits](#14-known-limits)
+15. [The whole journey in our two repos, file by file](#15-the-whole-journey-in-our-two-repos-file-by-file)
 
 ---
 
@@ -60,7 +62,9 @@ in the private GitHub repo `hospital-gateway-private`.
 ## 3. Which messages use the harness
 
 Only messages that **need the agent**. The parser and Jev answer inside the backend
-and never contact the gateway, even when `AGENT_RUNTIME=harness`.
+and never use the gateway's model loop, even when `AGENT_RUNTIME=harness`. (With the
+opt-in front door on, their traffic passes through the gateway as a plain relay; see
+the run modes below.)
 
 ```
  Browser (typed or voice) ──> POST /api/chat            BACKEND  chat.py
@@ -78,6 +82,122 @@ and never contact the gateway, even when `AGENT_RUNTIME=harness`.
 The check of `AGENT_RUNTIME` sits at the agent step only. That is why parser and Jev
 messages stay fast and free when the gateway is down: only agent questions show
 "temporarily unavailable".
+
+## The three run modes
+
+Inside the backend the order is always the same: **parser, then the gates, then Jev,
+then the agent**. The modes differ only in where the agent's model loop runs and what
+the browser talks to.
+
+| | Mode 1 | Mode 2 | Mode 3 |
+|---|---|---|---|
+| Name | no harness, no front door (default) | harness on, front door off | harness on, front door on |
+| Switches | `AGENT_RUNTIME=in_process` | `AGENT_RUNTIME=harness` | `AGENT_RUNTIME=harness`, gateway `HOSPITAL_FRONT_DOOR=true`, UI `VITE_API_BASE_URL=http://localhost:8891` |
+| Browser talks to | backend :8000 | backend :8000 | **gateway :8891** |
+| Parser, gates, Jev | backend | backend | backend |
+| Agent's model loop | backend (LangGraph) | gateway | gateway |
+| Gateway needed | no | agent messages only | **everything** |
+| Gateway stopped | no effect | parser and Jev still work; agent says "temporarily unavailable"; Agent and Harness lights red | the whole app stops, lights included |
+| Lights | Agent on, Harness off (grey), Jev on | all on | all on |
+
+All three were run on the live app, with the gateway stopped in modes 2 and 3 to see
+what breaks; the table is what they did.
+
+### Mode 1: no harness, no front door
+
+```
+Browser ──POST /api/chat──> BACKEND :8000   chat.py
+              │
+              ├─ parser matches ........ answered here
+              ├─ a gate says no ........ rejected here
+              ├─ Jev is confident ...... answered here
+              └─ none of those ......... agent, in-process (LangGraph calls the model
+                                         from the backend; tools run in the same process)
+No gateway involved at any point.
+```
+
+### Mode 2: harness on, front door off
+
+End to end, for the three kinds of message:
+
+```
+Browser ──POST /api/chat──> BACKEND :8000   chat.py
+              │
+              ├─ PARSER  "list scanners"
+              │     parser matches ──> CommandRunner ──> reply to the browser.
+              │     Gateway NOT involved.
+              │
+              ├─ JEV     "which MRI machines are free?"
+              │     gates ok, parser UNKNOWN ──> Jev confident ──> CommandRunner ──> reply.
+              │     Gateway NOT involved.
+              │
+              └─ AGENT   "scn5", "move APT-3004 to a free CT scanner"
+                    Jev declines or the message is unplaced ──> agent needed
+                    │  harness_bridge.py:  POST /v1/turns  (+ secret token)
+                    ▼
+                 GATEWAY :8891 (dsh): builds an agent for this turn
+                    agent-loop ─> llm ─> llm-pi-ai ─> MODEL ──asks for a tool──> tool-proxy.ts
+                    │  POST /internal/v1/turns/{id}/tool_calls
+                    ▼
+                 BACKEND ToolTurn: caps, validation, grounding, run on PostgreSQL, trace
+                    │  result goes back to the loop; repeats until the final answer
+                    ▼
+                 BACKEND: rebuild history, checkpoint, output guard ──> reply to the browser
+```
+
+The agent branch step by step is the diagram in section 4.
+
+### Mode 3: harness on, front door on
+
+The browser talks only to the gateway. The gateway's front door (`front-door.ts`)
+relays `/api/*` and the `/api/voice/*` WebSocket to the backend unchanged. It decides
+nothing: the parser, gates, Jev, grounding and the output guard all stay in the
+backend. Only paths under `/api/` are relayed; `/internal/` is never reachable this
+way, and the harness token is never forwarded.
+
+```
+Browser (typed, or the mic button's WebSocket)
+   │  POST /api/chat       (the UI's VITE_API_BASE_URL points at the gateway)
+   ▼
+GATEWAY :8891   front-door.ts   only /api/*; strips the token header; 413 over the body limit
+   │  relays the request unchanged
+   ▼
+BACKEND :8000   chat.py
+   │
+   ├─ PARSER  "list scanners"
+   │     parser matches ──> CommandRunner ──> reply, back through the gateway's relay
+   │     to the browser.  The gateway's MODEL LOOP is not used.
+   │
+   ├─ JEV     "which MRI machines are free?"
+   │     gates ok, parser UNKNOWN ──> Jev confident ──> CommandRunner ──> reply, back
+   │     through the relay.  The model loop is not used.
+   │
+   └─ AGENT   "scn5", "move APT-3004 to a free CT scanner"
+         Jev declines or the message is unplaced ──> agent needed
+         │  harness_bridge.py:  POST /v1/turns  (+ secret token)
+         ▼
+      GATEWAY :8891 (dsh): the model loop, exactly as in mode 2
+         agent-loop ─> llm ─> llm-pi-ai ─> MODEL ──asks for a tool──> tool-proxy.ts
+         │  POST /internal/v1/turns/{id}/tool_calls
+         ▼
+      BACKEND ToolTurn: caps, validation, grounding, run on PostgreSQL, trace
+         │  result goes back to the loop; repeats until the final answer
+         ▼
+      BACKEND: rebuild history, checkpoint, output guard ──> reply
+         │  back through the front door's relay
+         ▼
+      Browser
+```
+
+So an agent message crosses the gateway twice: once as the browser's request, and once
+as the backend's model-loop request. If the gateway is down, the browser cannot reach
+the backend at all. That is the cost of this mode, and why the front door is off by
+default. With the front door on but `AGENT_RUNTIME=in_process`, the gateway is a pure
+relay and starts no model turns (checked: zero turns).
+
+Not built: the reference project's begin-turn inversion, where the gateway asks the
+backend "did the parser understand it?" and runs the model loop itself on `agent`
+(design doc section 11.8).
 
 ## 4. The diagram: one agent turn, step by step
 
@@ -243,9 +363,9 @@ Repo: **Smart Hospital Operations Agent**. Harness work touches these files.
 
 | File | Role |
 |---|---|
-| `backend/app/api/routes/status.py` | `GET /api/status`: reports agent, harness and Jev as `on`, `off` or `down`. Probes the gateway's `/healthz`; Jev is configuration only |
+| `backend/app/api/routes/status.py` | `GET /api/status`: reports agent, harness and Jev as `on`, `off` or `down`, and the run `mode` (1 when in-process, 3 when the request carries the front door's `x-front-door: 1` mark, otherwise 2). Probes the gateway's `/healthz`; Jev is configuration only |
 | `frontend/src/hooks/useStatus.ts` | Polls `/api/status` every 15 s |
-| `frontend/src/components/StatusLights.tsx` | The three lights in the header |
+| `frontend/src/components/StatusLights.tsx` | The three lights in the header, plus a "Mode 1/2/3" badge (hover for what the mode means) |
 | `frontend/src/App.tsx`, `App.css` | Places the lights and styles them |
 | `frontend/src/api/client.ts`, `types.ts` | The API call and its types |
 
@@ -285,6 +405,7 @@ files are untouched, except that its GitHub workflows were removed.
 |---|---|---|
 | `plugin.ts` | The plugin dsh loads. After dsh says it is ready it checks the setup (token, forbidden services, model exists), then starts the gateway. Exit code 78 for a configuration fault, 1 if it cannot listen. Exits itself if its launcher disappears | The entry point |
 | `gateway.ts` | The HTTP server: `POST /v1/turns` and `GET /healthz`. Checks the token first, body size, and the number of turns at once | The door the backend calls |
+| `front-door.ts` | The opt-in front door (mode 3): relays the browser's `/api/*` and the `/api/voice/*` WebSocket to the backend unchanged. Only `/api/` paths, no path tricks, drops the harness token, marks what it relays with `x-front-door: 1`, 413 over the body limit, 502 if the backend is down | Lets the gateway be the browser's one entry point without moving any rule out of the backend |
 | `agent-driver.ts` | Runs one turn: checks the model matches, builds a fresh dsh agent, applies the round limit, deadline and watchdog, collects the rounds and usage, builds the finish payload. Never throws | The heart of the gateway |
 | `tool-proxy.ts` | Registers one stand-in tool per backend tool and forwards each call to the backend | Keeps all tool rules in the backend |
 | `raw-args.ts` | Collects the exact argument text the model streamed | dsh repairs broken JSON; we need the original so the backend can reject it |
@@ -312,7 +433,7 @@ files are untouched, except that its GitHub workflows were removed.
 
 | File | What it proves |
 |---|---|
-| `tests/unit/*.test.ts` (11 files) | Protocol checks, config, logging, seed, raw arguments, the backend client, the gateway server, the driver on real dsh with a scripted model, and the fakes themselves. 197 tests |
+| `tests/unit/*.test.ts` (11 files) | Protocol checks, config, logging, seed, raw arguments, the backend client, the gateway server, the driver on real dsh with a scripted model, and the fakes themselves, and the front door. 231 tests |
 | `tests/fakes/fake-backend.ts` | A stand-in for the backend's tool-call route that behaves like the real one |
 | `tests/fakes/mock-llm.ts` | A scripted model speaking the OpenAI streaming format |
 | `tests/e2e/*.test.ts` (4 files) | The real launcher and real dsh against the fakes: startup, every stop reason, byte-exact arguments, no leaked text in logs, signals. 27 tests |
@@ -374,6 +495,7 @@ conversation text can be stored or exported by accident. DeepSeek's own safety n
 | `HOSPITAL_BACKEND_URL` | `http://127.0.0.1:8000` | The backend |
 | `HOSPITAL_LLM_MODEL` | `anthropic/claude-sonnet-5` | The one model served |
 | `HOSPITAL_LLM_BASE_URL` | `https://openrouter.ai/api/v1` | Provider endpoint |
+| `HOSPITAL_FRONT_DOOR` | unset (off) | `true` turns on the front door (run mode 3). The UI must then be started with `VITE_API_BASE_URL=http://localhost:8891` |
 
 **Run it** (PowerShell; use a long random token, for example from
 `python -c "import secrets; print(secrets.token_urlsafe(48))"`):
@@ -397,6 +519,15 @@ cd "C:\Users\Amey\OneDrive\Desktop\Smart Hospital Operations Agent\frontend"
 npm run dev                          # then open http://localhost:5173
 ```
 
+**Mode 3 (front door on)** changes two things; everything else above is the same:
+
+```powershell
+$env:HOSPITAL_FRONT_DOOR = "true"                 # before starting the gateway (step 1)
+$env:VITE_API_BASE_URL = "http://localhost:8891"  # before starting the UI (step 3)
+```
+
+The UI then talks to the gateway, so the gateway must stay up; see the run modes.
+
 **Check it** (use `curl.exe`, not the PowerShell `curl` alias):
 
 ```powershell
@@ -405,7 +536,7 @@ curl.exe http://127.0.0.1:8000/api/status   # the three lights
 ```
 
 **Tests:** backend `cd backend; .venv\Scripts\python.exe -m pytest -m "not live_llm" -q`
-(621 tests; on this machine set `PGHOSTADDR=127.0.0.1` or each database test waits
+(about 725 tests; on this machine set `PGHOSTADDR=127.0.0.1` or each database test waits
 10 s). Gateway: `pnpm typecheck`, `pnpm test`, `pnpm test:e2e`, and
 `pnpm contract:sync` (with `HOSPITAL_BACKEND_DIR` set). Frontend: `npm test`.
 
@@ -420,6 +551,9 @@ curl.exe http://127.0.0.1:8000/api/status   # the three lights
 | The provider fails (for example OpenRouter 402 or 500) | the gateway | A fixed "something went wrong" (`harness_error`). The provider's text is never shown or logged |
 | The model replies with blank text | the backend | Treated as `harness_error` |
 | A wrong token on either door | the receiving side | An ordinary 404 |
+| Mode 3 only: the gateway is down | the browser | Nothing loads, lights included: the whole app is unreachable |
+| Mode 3 only: the backend is down or dies mid-answer | `front-door.ts` | A 502 `Bad Gateway` with no error text (a dropped connection if the answer had started) |
+| Mode 3 only: a request body over the limit | `front-door.ts` | A 413 `Payload Too Large` |
 
 The gateway's own reasons for an `error` finish are a fixed list: `model_mismatch`,
 `seed_failed`, `create_failed`, `tool_call_failed`, `backend_closed`,
@@ -443,6 +577,7 @@ Five add-ons, all off by default. Details and the reasons are in
 | Confirm before rescheduling | `REQUIRE_RESCHEDULE_CONFIRMATION=true` (backend) | The agent proposes the move; the chat shows Confirm / Cancel; confirming applies it, audited as the user | `action_tools.py`, `routes/reschedules.py`, `RescheduleConfirmation.tsx` |
 | Fallback model | `HARNESS_FALLBACK_MODEL` (backend) and `HOSPITAL_LLM_FALLBACK_MODELS` (gateway) | A turn that fails with `model_error` before any tool ran is retried once on the second model | `harness_bridge.py`; gateway `agent-driver.ts`, `cordis.patch.yml` |
 | Record and replay | tests only | A real model's streamed answer is recorded once into a cassette the mock replays | gateway `scripts/record-cassette.ts`, `tests/fakes/mock-llm.ts`, `tests/cassettes/` |
+| Front door | `HOSPITAL_FRONT_DOOR=true` (gateway) and `VITE_API_BASE_URL=http://localhost:8891` (frontend) | The browser talks to the gateway, which relays `/api/*` and the voice socket to the backend unchanged; parser, Jev, gates and agent behave exactly as before | gateway `front-door.ts`, `gateway.ts` |
 
 ## 14. Known limits
 
@@ -452,10 +587,174 @@ Five add-ons, all off by default. Details and the reasons are in
   agent behaves the same). Only a cut-off *tool call* is an error.
 - If the gateway fails after a write already committed, the user sees "unavailable"
   even though the write happened; the stored history does record it.
-- In harness mode the per-round `llm_response` rows are not written to the trace.
 - The gateway's self-exit when its launcher dies is not exercised on Windows.
 - The backend still listens on all network interfaces and has no sign-in on its API.
   This was true before the harness. Keep it on a trusted network or bind it to
   localhost, and never expose `/internal/` through a proxy.
+- Mode 3 puts the gateway in front of everything: if it is down the whole app is down, and every voice audio frame takes one more hop. The gateway only relays; the backend still decides everything. It is off by default for this reason.
+- The mode badge is informational. A client that calls the backend directly with `x-front-door: 1` makes the badge read "Mode 3"; nothing depends on it.
+- Not built: the reference project's begin-turn inversion (the gateway asking the backend whether the parser understood the message, then running the model loop itself).
 - DeepSeek Harness is a pre-stable, unaudited preview. The gateway pins exact
   version `0.2.1-alpha.2`; upgrading means re-running the test suites.
+
+---
+
+## 15. The whole journey in our two repos, file by file
+
+The same style as the reference project's diagram, drawn for this project in mode 3
+(front door on, harness on). Every file and function named here was checked against
+the code in both repos: this repo's `backend/` and `frontend/`, and the gateway's
+`hospital-gateway/src/`.
+
+```
+ MODE 3: front door on, harness on.  Every message starts the same way
+
+╔═ BROWSER ══════════════════════════════════════════════════════════════════╗
+║ 1. You type, or speak with the mic.                                        ║
+║    frontend/src/components/ChatPanel.tsx -> api.sendChat()                 ║
+║    (api/client.ts, base URL = VITE_API_BASE_URL = the gateway :8891)       ║
+║    voice: hooks/useVoiceInput.ts opens ws://gateway/api/voice/{session}    ║
+╚══════════════════════════════════╤═════════════════════════════════════════╝
+                                   │ 2. POST /api/chat   (no token, no cookie: there is no login)
+                                   ▼
+╔═ GATEWAY :8891  (front door, a plain relay) ═══════════════════════════════╗
+║ 3. gateway.ts       sees an /api/ path, hands it to the front door         ║
+║    front-door.ts    only /api/*, no .. or %2e, x-harness-token dropped,    ║
+║                     body over maxBodyBytes -> 413, backend down -> 502     ║
+║                     relays the request UNCHANGED to HOSPITAL_BACKEND_URL   ║
+╚══════════════════════════════════╤═════════════════════════════════════════╝
+                                   │ 4. same request, host set to the backend
+                                   ▼
+╔═ BACKEND :8000 ════════════════════════════════════════════════════════════╗
+║ 5. api/routes/chat.py   chat() -> handle_chat_message()                    ║
+║      (voice calls the same function: api/routes/voice.py)                  ║
+║ 6. _route_chat_message():  loads history, then tries in this order         ║
+║      parser -> deny layer -> keyword gate -> eligibility -> Jev -> agent   ║
+╚══════════════════════════════════╤═════════════════════════════════════════╝
+                                   │ 7. the first step that can place the message decides
+                                   ▼
+            ┌──────────────────────┬──────────────────────┐
+            ▼                      ▼                      ▼
+   PATH A: PARSER         PATH B: JEV            PATH C: AGENT
+   (no model, no tools)   (one Jev call, no       (the harness runs
+                           model)                  the model loop)
+
+ PATH A: PARSER UNDERSTOOD   e.g. "list scanners"
+╔═ BACKEND ══════════════════════════════════════════════════════════════════╗
+║ A1. chat.py _parse() -> parser/parser.py parse()   (regex grammar)         ║
+║ A2. chat.py _execute_command() -> execution/commands/base.py               ║
+║       CommandRunner  (the one trusted execution point)                     ║
+║ A3. remember_for_agent() -> agent/graph.py record_non_agent_turn()         ║
+║       so a follow-up like "what did you just find?" works                  ║
+║ A4. returns ChatResponse, handled_by = "deterministic"                     ║
+╚══════════════════════════════════╤═════════════════════════════════════════╝
+                                   │ response travels back through front-door.ts, unchanged
+                                   ▼
+╔═ GATEWAY + BROWSER ════════════════════════════════════════════════════════╗
+║ A5. The gateway's model loop is NOT used.  Nothing reaches the model.      ║
+║     ChatPanel.tsx shows the reply.   Done.                                 ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+ PATH B: JEV UNDERSTOOD   e.g. "which MRI machines are free?"
+ (parser said UNKNOWN; the gates and the scope check let it through)
+╔═ BACKEND ══════════════════════════════════════════════════════════════════╗
+║ B1. api/routes/chat.py runs, in order:                                     ║
+║       agent/domain_gate.py   is_denied() then check_domain_gate()          ║
+║       agent/eligibility.py   check_eligibility()                           ║
+║       (a message the keyword gate cannot place also gets                   ║
+║        agent/jev_fast_path.py classify_scope(): a scope verdict)           ║
+║ B2. agent/jev_fast_path.py try_jev_fast_path()                             ║
+║       asks TypeSafe's Jev which known command this is; confidence          ║
+║       >= 0.9 -> a Command, otherwise it falls through to the agent         ║
+║ B3. _execute_command() -> CommandRunner   (the same as path A)             ║
+║ B4. remember_for_agent(); trace row jev_invoked;                           ║
+║       returns ChatResponse, handled_by = "jev"                             ║
+╚══════════════════════════════════╤═════════════════════════════════════════╝
+                                   │ response travels back through front-door.ts, unchanged
+                                   ▼
+╔═ GATEWAY + BROWSER ════════════════════════════════════════════════════════╗
+║ B5. The model loop is NOT used (Jev is a label classifier, not an agent).  ║
+║     ChatPanel.tsx shows the reply.   Done.                                 ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+ PATH C: AGENT NEEDED   e.g. "scn5", "move APT-3004 to a free CT scanner"
+ (the parser and Jev could not place it, and it passed the guardrails)
+╔═ BACKEND ══════════════════════════════════════════════════════════════════╗
+║ C1. chat.py  settings.agent_runtime == "harness" ->                        ║
+║     agent/harness_bridge.py  run_agent_via_harness()                       ║
+║       packs: system prompt (graph.py build_system_message) + chat history  ║
+║       + your message + the 8 tool schemas + limits (rounds, deadline)      ║
+║       ToolTurn(...) is created and put in agent/harness_registry.py        ║
+╚══════════════════════════════════╤═════════════════════════════════════════╝
+                                   │ C2. POST {HARNESS_URL}/v1/turns   (+ x-harness-token)
+                                   ▼
+╔═ GATEWAY (inside dsh) ═════════════════════════════════════════════════════╗
+║ C3. gateway.ts       token ok? body size ok? fewer than 4 turns running?   ║
+║ C4. agent-driver.ts  builds a fresh dsh agent for this one turn            ║
+║                        plugins: agent, session, system-prompt, tools       ║
+║     seed.ts          buildSeed(): loads the history into the session       ║
+║     tool-proxy.ts    registerToolProxy(): a stand-in for each tool         ║
+║     local-tools.ts   current_time (only if HOSPITAL_LOCAL_TOOLS says so)   ║
+╚══════════════════════════════════╤═════════════════════════════════════════╝
+                                   │ C5. agent-loop -> llm -> llm-pi-ai -> OpenRouter   (one retry on a 5xx)
+                                   ▼
+╔═ MODEL ════════════════════════════════════════════════════════════════════╗
+║ C6. reads the conversation, then either:                                   ║
+║       (a) writes the final answer, or                                      ║
+║       (b) asks for a tool, e.g. search_scanners                            ║
+╚══════════════════════════════════╤═════════════════════════════════════════╝
+                                   │ (b) a tool is requested
+                                   ▼
+╔═ GATEWAY ══════════════════════════════════════════════════════════════════╗
+║ C7. tool-proxy.ts does NOT run the tool.  It forwards it back:             ║
+║     raw-args.ts keeps the model's exact argument text                      ║
+║     backend.ts   toolCall()                                                ║
+╚══════════════════════════════════╤═════════════════════════════════════════╝
+                                   │ C8. POST /internal/v1/turns/{id}/tool_calls   (+ token)
+                                   ▼
+╔═ BACKEND ══════════════════════════════════════════════════════════════════╗
+║ C9.  api/routes/internal_harness.py tool_call():                           ║
+║        token checked FIRST (wrong token = plain 404),                      ║
+║        then harness_registry.get(turn_id)                                  ║
+║ C10. agent/turn.py  ToolTurn.call():                                       ║
+║        count limit -> known tool? -> valid arguments? -> grounding         ║
+║        -> run it through CommandRunner on PostgreSQL -> trace row          ║
+║      reschedule_appointment with REQUIRE_RESCHEDULE_CONFIRMATION=true      ║
+║        only records a proposal (agent_events); nothing moves yet           ║
+╚══════════════════════════════════╤═════════════════════════════════════════╝
+                                   │ C11. result text goes back
+                                   ▼
+            gateway hands it to the model --> back to step C6
+            (repeats until the model gives a final answer or a limit
+             stops it: max rounds, time, tool cap)
+
+ When the model gives the final answer (C6a):
+╔═ GATEWAY ══════════════════════════════════════════════════════════════════╗
+║ C12. agent-driver.ts  packs the reply, per-round token usage and every     ║
+║                       round into the finish payload  (stop_reason too)     ║
+╚══════════════════════════════════╤═════════════════════════════════════════╝
+                                   │ C13. the response to the C2 request
+                                   ▼
+╔═ BACKEND ══════════════════════════════════════════════════════════════════╗
+║ C14. harness_bridge.py  resolve_outcome(): if the backend stopped the      ║
+║        turn, that wins;  rebuild_turn_messages();                          ║
+║        _record_llm_responses() -> one llm_response row per round with      ║
+║        tokens;  graph.py record_turn_messages() -> the checkpoint          ║
+║        (a model_error with no tool served is retried once on               ║
+║         HARNESS_FALLBACK_MODEL: _request_finish)                           ║
+║ C15. chat.py  output guard (reply_capped / scope_blocked), then            ║
+║        ChatResponse(handled_by="agent", pending_confirmations=[...])       ║
+╚══════════════════════════════════╤═════════════════════════════════════════╝
+                                   │ C16. response travels back through front-door.ts, unchanged
+                                   ▼
+╔═ BROWSER ══════════════════════════════════════════════════════════════════╗
+║ C17. ChatPanel.tsx shows the reply; if there is a pending proposal,        ║
+║      RescheduleConfirmation.tsx shows Confirm / Cancel                     ║
+║      (components/StatusLights.tsx polls GET /api/status for the lights)    ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+ An agent message crosses the gateway twice: once as the browser's request
+ (steps 2-4, the relay) and once as the backend's model-loop request (C2).
+ In mode 2 steps 2-4 do not exist: the browser talks to the backend directly.
+ In mode 1 there is no gateway at all and C1 runs the model in the backend.
+```

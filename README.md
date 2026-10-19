@@ -73,6 +73,18 @@ The agent is activated only when:
 3. The request passes eligibility checks.
 4. Jev declines, is not confident, is disabled, or cannot handle the request.
 
+## Run Modes
+
+The parser, the gates and Jev always run in the backend, in that order, before the
+agent. The modes differ only in where the agent's model loop runs and what the browser
+talks to (flows: `docs/HARNESS_EXPLAINED.md`, "The three run modes").
+
+| Mode | Switches | Browser talks to | Agent's model loop | If the gateway stops |
+|---|---|---|---|---|
+| 1. Default | `AGENT_RUNTIME=in_process` | backend :8000 | backend (LangGraph) | no gateway needed |
+| 2. Harness | `AGENT_RUNTIME=harness` | backend :8000 | gateway :8891 | parser and Jev keep working; agent messages say "temporarily unavailable" |
+| 3. Harness + front door | `AGENT_RUNTIME=harness`, gateway `HOSPITAL_FRONT_DOOR=true`, UI `VITE_API_BASE_URL=http://localhost:8891` | gateway :8891 | gateway :8891 | the whole app stops |
+
 ## Voice Input
 
 The chat panel has a mic button. Speech is streamed to `WS /api/voice/{session_id}`

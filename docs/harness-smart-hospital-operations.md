@@ -427,3 +427,47 @@ so the model can resolve "tomorrow at 9" for `reschedule_appointment`.
 - **Never** put anything here that reads or writes hospital data, runs a command or
   reaches the network: that would bypass grounding, caps and audit.
 - It exists only in the harness runtime; the in-process agent does not have it.
+
+### 11.8 Front door (opt-in, branch `harness-front-door`)
+
+The reference project puts the harness between the browser and the backend, so every
+message passes through it. Here it is opt-in and off by default, mainly as a way to
+learn that shape. Stage 1 is a transparent relay; the backend still decides
+everything.
+
+```
+browser -> gateway :8891 (/api/*, /api/voice/*) -> backend :8000
+                                                      parser -> Jev -> gates -> agent?
+                                                      agent: backend -> gateway /v1/turns (as before)
+```
+
+- **Run modes.** Mode 1: `in_process`, no gateway. Mode 2: `harness`, front door off (the
+  gateway serves only agent turns; parser and Jev work with it down). Mode 3: `harness`
+  plus this front door (the gateway is the browser's only entry and must stay up for
+  everything). The flows are in `docs/HARNESS_EXPLAINED.md`, "The three run modes".
+- **Mode badge.** `GET /api/status` returns `mode` (1, 2 or 3) and the header shows it. The
+  front door adds `x-front-door: 1` to what it relays and drops any such header a client
+  sends, so a browser cannot claim mode 3; the backend reads the mark (the field is
+  informational and gates nothing).
+- **Switch.** `HOSPITAL_FRONT_DOOR=true` (gateway; default off). Off, the gateway
+  serves only `/v1/turns` and `/healthz` and any other path is the same 404 as before.
+  The frontend points at it with `VITE_API_BASE_URL=http://localhost:8891`.
+- **What is relayed.** Only paths under `/api/`: every method for HTTP, and the
+  `/api/voice/{session_id}` WebSocket upgrade. Never `/internal/`, never `/v1/`
+  through this route, and no path containing `..`, a backslash or an encoded
+  slash/dot. The target is always `HOSPITAL_BACKEND_URL`; the request cannot choose it.
+- **What is not forwarded.** `x-harness-token` (a browser must never carry it) and
+  hop-by-hop headers. The backend's response, CORS headers included, comes back
+  unchanged; the gateway adds none.
+- **Limits.** A request body over `maxBodyBytes` is refused with 413. No other limit:
+  a chat turn can legitimately run for the full turn budget, and the backend bounds it.
+- **Failure.** Backend unreachable: 502 `{"detail":"Bad Gateway"}`, no error text. With
+  the gateway down, nothing reaches the backend: this is the cost of the design, and
+  why it is off by default.
+- **Logs.** `front_door_error` rows with an enum category only; never a URL, body or
+  header.
+- **Not built (stage 2).** The reference's begin-turn inversion, where the gateway asks
+  the backend whether the parser understood the message (`kind = command | agent`) and
+  runs the model loop itself on `agent`. Today the backend still calls the gateway for
+  agent turns, so an agent message goes browser -> gateway -> backend -> gateway ->
+  backend. Contract changes for that go in this section first.
