@@ -160,4 +160,5 @@ export interface StatusResponse {
   agent: { runtime: "in_process" | "harness"; status: Light };
   harness: { status: Light };
   jev: { status: Exclude<Light, "down"> };
+  mode: 1 | 2 | 3;
 }

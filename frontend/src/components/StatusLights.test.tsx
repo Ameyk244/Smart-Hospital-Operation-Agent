@@ -13,6 +13,7 @@ const STATUS: StatusResponse = {
   agent: { runtime: "in_process", status: "on" },
   harness: { status: "off" },
   jev: { status: "on" },
+  mode: 1,
 };
 
 function stateWith(status: StatusResponse, unreachable = false): StatusState {
@@ -36,6 +37,7 @@ describe("StatusLights", () => {
           agent: { runtime: "in_process", status: "down" },
           harness: { status: "off" },
           jev: { status: "on" },
+          mode: 1,
         })}
       />,
     );
@@ -57,6 +59,26 @@ describe("StatusLights", () => {
       <StatusLights state={stateWith({ ...STATUS, agent: { runtime: "harness", status: "on" } })} />,
     );
     expect(screen.getByTitle(/Agent: on/)).toHaveAttribute("title", expect.stringContaining("harness"));
+  });
+
+  it.each([
+    [1, "In-process agent", "no harness"],
+    [2, "Harness", "model loop runs in the harness gateway"],
+    [3, "Harness + front door", "the gateway must stay up for everything"],
+  ] as const)("shows the run mode badge for mode %i", (mode, label, meaning) => {
+    render(<StatusLights state={stateWith({ ...STATUS, mode })} />);
+
+    const badge = screen.getByText(`Mode ${mode}`);
+    expect(badge).toHaveAttribute("title", expect.stringContaining(label));
+    expect(badge).toHaveAttribute("title", expect.stringContaining(meaning));
+    expect(badge).toHaveTextContent(`Mode ${mode}: ${label}`);
+  });
+
+  it("shows Mode ? when the backend is unreachable", () => {
+    render(<StatusLights state={stateWith(STATUS, true)} />);
+
+    const badge = screen.getByText("Mode ?");
+    expect(badge).toHaveAttribute("title", "Run mode: unknown");
   });
 
   it("shows every light as unknown when the backend is unreachable", () => {

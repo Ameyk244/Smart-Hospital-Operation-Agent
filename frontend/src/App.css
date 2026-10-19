@@ -685,6 +685,12 @@
   gap: 4px;
 }
 
+.status-mode {
+  padding: 0 6px;
+  border: 1px solid var(--muted);
+  border-radius: 4px;
+}
+
 .status-light-dot {
   width: 8px;
   height: 8px;

@@ -6,7 +6,8 @@ Jev fast path -- and from the chat alone there is no way to tell whether one
 is down. This reports each as `on`, `off` (not configured) or `down`
 (configured but not answering).
 
-Cheap by design: Jev is reported from configuration only, because a live
+The run mode (1, 2 or 3; docs/HARNESS_EXPLAINED.md) says how this browser reaches
+the agent. Cheap by design: Jev is reported from configuration only, because a live
 probe would be a paid call. The harness is probed with its own unauthenticated
 `/healthz`, only when the harness runtime is selected. Nothing here exposes a
 URL, model name or key.
@@ -17,7 +18,7 @@ What calls it: the frontend's status lights, on a timer.
 from typing import Literal
 
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from app.config import Settings, get_settings
@@ -45,6 +46,7 @@ class JevStatus(BaseModel):
 
 
 class StatusResponse(BaseModel):
+    mode: Literal[1, 2, 3]
     agent: AgentStatus
     harness: HarnessStatus
     jev: JevStatus
@@ -71,8 +73,17 @@ def _in_process_agent_has_key(settings: Settings) -> bool:
     return bool(key)
 
 
+def _run_mode(settings: Settings, request: Request) -> Literal[1, 2, 3]:
+    """1: agent in-process. 2: harness, browser talks to the backend. 3: harness,
+    and this request came through the gateway's front door (which marks what it
+    relays and drops any mark a client sent)."""
+    if settings.agent_runtime != "harness":
+        return 1
+    return 3 if request.headers.get("x-front-door") == "1" else 2
+
+
 @router.get("", response_model=StatusResponse)
-async def status() -> StatusResponse:
+async def status(request: Request) -> StatusResponse:
     settings = get_settings()
     harness: Light = "off"
     if settings.agent_runtime == "harness":
@@ -82,6 +93,7 @@ async def status() -> StatusResponse:
     )
     jev_on = settings.enable_jev_fast_path and bool(settings.typesafe_api_key)
     return StatusResponse(
+        mode=_run_mode(settings, request),
         agent=AgentStatus(runtime=settings.agent_runtime, status=agent),
         harness=HarnessStatus(status=harness),
         jev=JevStatus(status="on" if jev_on else "off"),

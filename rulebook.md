@@ -348,6 +348,18 @@ Jev is reported from configuration only: probing it would be a paid call on
 every refresh, so a configured Jev whose service is down still shows green. A
 dashed hollow dot means the status request itself failed.
 
+Next to the lights a **Mode** badge shows the run mode (`mode` in the same response;
+hover for the meaning). The backend decides it from `AGENT_RUNTIME` and a mark the
+gateway's front door puts on what it relays (`x-front-door: 1`, which it overwrites if a
+client sends one):
+
+| Badge | Meaning | How it is decided |
+|---|---|---|
+| Mode 1 | Agent runs inside the backend; no harness | `AGENT_RUNTIME=in_process` |
+| Mode 2 | Harness: browser talks to the backend, the gateway runs the model loop | `harness`, request has no front-door mark |
+| Mode 3 | Harness + front door: browser talks to the gateway, which relays to the backend | `harness`, request carries the mark |
+| Mode ? | The status request failed | |
+
 ## 7. Minimal Manual Check
 
 Use this small set to avoid unnecessary API usage:

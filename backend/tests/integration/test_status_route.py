@@ -73,6 +73,7 @@ async def test_in_process_with_keys_has_the_agent_and_jev_on_and_no_harness(clie
     configure()
 
     assert await lights(client) == {
+        "mode": 1,
         "agent": {"runtime": "in_process", "status": "on"},
         "harness": {"status": "off"},
         "jev": {"status": "on"},
@@ -148,3 +149,21 @@ async def test_the_response_exposes_no_url_model_or_key(client, configure, gatew
 
     for secret in (url, MODEL, TOKEN, ANTHROPIC_SECRET, TYPESAFE_SECRET):
         assert secret not in text
+
+
+@pytest.mark.parametrize(
+    ("runtime", "headers", "mode"),
+    [
+        ("in_process", {}, 1),
+        ("in_process", {"x-front-door": "1"}, 1),
+        ("harness", {}, 2),
+        ("harness", {"x-front-door": "1"}, 3),
+    ],
+    ids=["mode-1", "relay-only-stays-1", "mode-2", "mode-3"],
+)
+async def test_the_run_mode_follows_the_runtime_and_the_front_door_mark(client, configure, runtime, headers, mode):
+    configure(agent_runtime=runtime, harness_token=TOKEN, harness_url="http://127.0.0.1:9", harness_model=MODEL)
+
+    response = await client.get("/api/status", headers=headers)
+
+    assert response.json()["mode"] == mode

@@ -16,6 +16,22 @@ function StatusLight({ label, state, detail }: { label: string; state: Display; 
   );
 }
 
+const MODES: Record<1 | 2 | 3, string> = {
+  1: "In-process agent: the agent runs inside the backend; no harness.",
+  2: "Harness: the browser talks to the backend; the agent's model loop runs in the harness gateway.",
+  3: "Harness + front door: the browser talks to the harness gateway, which relays to the backend; the gateway must stay up for everything.",
+};
+
+function ModeBadge({ mode }: { mode: 1 | 2 | 3 | null }) {
+  const text = mode ? MODES[mode] : "unknown";
+  return (
+    <li className="status-mode" title={`Run mode: ${mode ? text : "unknown"}`}>
+      Mode {mode ?? "?"}
+      <span className="sr-only">: {text}</span>
+    </li>
+  );
+}
+
 // Three lights for the parts of the backend that can be on, off or down.
 // When the status fetch itself fails (or hasn't landed yet) every light is
 // "unknown": the last known values can't be trusted, and a stale green
@@ -31,6 +47,7 @@ export function StatusLights({ state }: { state: StatusState }) {
       />
       <StatusLight label="Harness" state={status?.harness.status ?? "unknown"} />
       <StatusLight label="Jev" state={status?.jev.status ?? "unknown"} />
+      <ModeBadge mode={status?.mode ?? null} />
     </ul>
   );
 }
