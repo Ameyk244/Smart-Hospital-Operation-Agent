@@ -252,3 +252,23 @@ integration check is intended.
 | Response schema | `backend/app/api/routes/chat.py` (`ChatResponse`) |
 | UI badge and trace | `frontend/src/components/ChatPanel.tsx`, `TracePanel.tsx` |
 | Cost page | `frontend/src/components/CostComparisonPage.tsx` |
+
+## Scope verdict (a second use of the same API)
+
+Besides routing a message to a read command, Jev answers one more question for a
+message the keyword gate cannot place: *is this about the application at all?*
+(`classify_scope` in `app/agent/jev_fast_path.py`; the design is in AGENT.md
+section 3.) It is one `system_one` call with a single `Choice` question whose labels
+are `hospital_operations`, `assistant_conversation` and `not_hospital`. The
+assistant's previous reply (at most 600 characters) is included so a follow-up such
+as "show me more" is judged in context; without it about half the legitimate
+follow-ups were wrongly judged off-topic.
+
+Only a `not_hospital` answer at or above `JEV_CONFIDENCE_THRESHOLD` blocks the
+message; a lower-confidence `not_hospital` lets it through to the agent with its
+reply capped. No answer (Jev off, no key, an error, a malformed or unknown label)
+is "no verdict" and keeps the keyword gate's rejection. The call shares the Jev
+client code with command routing (`_ask_jev`) and is recorded as a
+`scope_checked` trace row, not a `jev_invoked` one, so the cost comparison does not
+include it. Measured on a labelled set (the wording was tuned until both numbers
+were zero): 0 of 18 legitimate messages blocked, 0 of 16 off-topic ones let through.

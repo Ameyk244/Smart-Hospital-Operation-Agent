@@ -73,10 +73,19 @@ routed through the existing `CommandRunner` instead of a full Sonnet agent
 turn. It is enabled by default (`ENABLE_JEV_FAST_PATH=true`) but remains
 operator-configurable and must fail through to the agent when unavailable.
 
-The Jev path must remain after the domain and eligibility gates, stay
+The Jev command path must remain after the domain and eligibility gates, stay
 read-only, and never bypass or weaken grounding or another safety mechanism.
 It only hands off to the same trusted `CommandRunner` an exact regex match
 would have used.
+
+Jev has a second, separate use: a **scope verdict** for a message the keyword
+gate cannot place (`classify_scope`, AGENT.md section 3). It runs after the deny
+layer and the eligibility gate, can only ever *reject* (a confident
+"not_hospital"; no verdict also rejects, i.e. fail closed) or let the message on to
+the agent, and never executes anything. This deliberately replaces "the keyword
+gate rejects what it cannot place", which blocked legitimate follow-ups; the deny
+layer and the agent's prompt, tools and output guard stay in force. Any change
+here needs a measurement against a labelled message set, not intuition.
 
 ## Destructive/DB actions require explicit approval, every time
 No subagent or session may run Alembic migrations, `DROP`/`ALTER`

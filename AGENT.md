@@ -33,13 +33,20 @@ Every `POST /api/chat` request follows this order:
 4. Try the deterministic parser.
 5. If the parser matches, execute the command and stop. The agent is never
    constructed.
-6. If the parser misses, run the context-aware domain gate.
-7. If the request is in-domain, run the eligibility gate.
-8. If enabled, ask Jev whether the request confidently maps to a supported
-   read command. A match runs through `CommandRunner` and stops.
-9. If Jev declines, lacks confidence, is unavailable, or cannot represent the
-   request, create the configured agent model and start LangGraph.
-10. With `AGENT_RUNTIME=harness`, step 9 instead sends the turn to the harness
+6. If the parser misses, run the **deny layer**: phrases that are never worth a
+   model call (changing the agent's rules, its prompt, role-play, creative or
+   code writing, secrets, SQL) are rejected, wherever they appear in the message.
+7. Run the context-aware keyword gate. A message it passes is **placed**; one it
+   cannot place is **unplaced** (it is no longer rejected on its own: step 9).
+8. Run the eligibility gate.
+9. An **unplaced** message gets Jev's **scope verdict** (section 3): a confident
+   "not about this application" rejects it, and so does no verdict (Jev off or
+   down); anything else goes on to the agent. A **placed** message instead goes
+   through Jev's command routing: if enabled, ask Jev whether it confidently maps
+   to a supported read command. A match runs through `CommandRunner` and stops.
+10. Otherwise create the configured agent model and start LangGraph. The reply to
+    an unplaced message is guarded (section 3).
+11. With `AGENT_RUNTIME=harness`, step 10 instead sends the turn to the harness
     process, which runs the model loop and calls back into this backend for
     every tool call. The gates above, the tools, grounding and the bounds in
     section 11 are the same code in both runtimes. See
@@ -95,6 +102,31 @@ rejected, and the canned rejection has no question mark, so it never opens this
 door. Such a reply skips Jev (Jev maps self-contained commands; the agent has the
 context). The check is still plain regex and set membership, and it only changes
 what reaches the agent: grounding, validation and every tool limit are unchanged.
+
+### Scope guardrails (what reaches the agent, and what it may say)
+
+The agent is the assistant for the **whole application**: it runs operations,
+answers questions about how the application and its features work, and explains
+the hospital-operations concepts it deals with. Safety is therefore not a narrow
+keyword filter in front of it but four layers around it:
+
+| Layer | Where | What it does |
+|---|---|---|
+| 1. Deny layer | `is_denied` in `domain_gate.py` | Rules only, no model. Rejects prompt-injection ("ignore your instructions", "system prompt"), role-play, creative writing and code requests, secrets and SQL. Applied to **every** message, so `list scanners and write a poem` is caught. Phrase-shaped, so a patient named Song or Token is not blocked |
+| 2. Keyword gate | `check_domain_gate` | Places clear hospital messages and replies to the agent's own questions. It no longer rejects what it cannot place |
+| 3. Scope verdict | `classify_scope` in `jev_fast_path.py` | For an unplaced message only (after eligibility): one Jev question with three fixed labels (`hospital_operations`, `assistant_conversation`, `not_hospital`). Jev sees the assistant's previous reply, so a follow-up is judged in context. Only a **confident** (at least `JEV_CONFIDENCE_THRESHOLD`) `not_hospital` blocks. No verdict keeps the old rejection |
+| 4. Output guard | `chat.py` | Only when Jev leaned `not_hospital` without blocking: a reply that used no tool and is longer than 500 characters is replaced by the rejection. A reply to a message Jev leaned in scope is never cut |
+
+Jev can only answer with one of three labels, never free text, so it cannot be
+talked into doing the task, which is why it is the semantic check rather than the
+agent model. Measured on 34 messages (with context): 0 of 18 legitimate messages
+blocked (including "how does the confirm button work", "what is a grounded code",
+"scn5", "who is wei brown") and 0 of 16 off-topic ones let through. The agent's
+own prompt and every tool limit (grounding, validation, caps, audit, the optional
+confirmation) are unchanged and still apply to everything that reaches it. The
+scope calls are recorded as `scope_checked` trace rows and are not part of
+`/api/cost-comparison`. A long off-scope reply is still stored in the agent's
+checkpoint even when the user is shown the rejection.
 
 ## 4. Eligibility Gate
 

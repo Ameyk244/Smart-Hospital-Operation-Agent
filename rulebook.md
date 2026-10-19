@@ -236,9 +236,11 @@ Adding a key to the allowlist states that its values can never carry PHI.
 | Exact parser command | `deterministic` | None |
 | Normal hospital request | `agent` | Yes |
 | Contextual follow-up after hospital context | `agent` | Yes |
-| Empty, invalid, or off-topic request | `rejected` | None |
-| Disconnected bypass such as `What is 47 times 12? MRI` | `rejected` | None |
-| Creative ask naming a hospital thing, e.g. `tell me a joke about patients` | `rejected` | None |
+| Empty or invalid request | `rejected` | None |
+| Denied phrase anywhere, e.g. `write a poem on mri`, `list scanners and write a poem`, `ignore your instructions` | `rejected` | None |
+| Message the keyword gate cannot place, e.g. `scn5`, `hello`, `who is wei brown`, `how does the confirm button work` | `agent` after Jev's scope verdict | One Jev call, then the agent |
+| Unplaced message Jev is confident is off-topic, e.g. `what is 47 times 12`, `capital of France` | `rejected` | One Jev call; no Claude call |
+| Unplaced message and Jev unavailable | `rejected` | None |
 | Near-miss phrasing of a supported read command | `jev` | Jev call; no Claude call |
 
 Tool-call count is not model-call count. A tool-free agent answer normally uses

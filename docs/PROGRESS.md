@@ -1539,3 +1539,24 @@ Lessons: concurrent pytest runs share one test database and truncate each other'
 rows (the full-suite run showed 5 spurious failures that all passed alone), so DB
 test runs are now strictly one at a time; the PC restart took Docker down, which the
 first backend agent reported honestly instead of guessing.
+
+Guardrail redesign (branch `harness-ext-test`). The keyword gate rejected anything
+it could not place, so "hello", "scn5", "who is wei brown" and follow-ups such as
+"show me more" never reached the agent. Replaced by layers around the agent (AGENT.md
+section 3): a deny layer applied to every message (phrase-shaped, so surnames are
+safe), the keyword gate (no longer rejecting on its own), a Jev scope verdict for
+unplaced messages, and an output guard for the borderline case. The design was
+measured, not guessed: a first labelled run showed Jev alone wrongly blocked 8 of 18
+legitimate messages (it saw one message with no conversation), so the assistant's
+previous reply is now part of the question; the wording was then widened from
+"operations" to the whole application (its features, vocabulary and domain
+concepts) after the same run showed it blocking "what is a grounded code". Final:
+0 of 18 legitimate messages blocked, 0 of 16 off-topic ones let through. Also: the
+agent's prompt now covers the whole application, tells it what to do with a bare name
+or code (look it up, say what was found, offer next steps, never change anything),
+and carries accurate notes on the application's features; the cost endpoint's
+measured prompt size was refreshed (440 to 900 tokens). The Jev call code was
+refactored into one shared helper without changing command routing (its 33 tests
+unchanged). Documented behaviour changes: unplaced messages now cost one Jev call;
+a long off-scope reply is still stored in the checkpoint even when the user sees the
+rejection; the scope calls are outside `/api/cost-comparison`.
