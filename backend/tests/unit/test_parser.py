@@ -256,7 +256,7 @@ def test_patient_journey_is_matched_before_show_patient(text):
 
 @pytest.mark.parametrize(
     "text",
-    ["list wards now", "list beds banana", "list beds free", "show emergency queue please", "show journey"],
+    ["list wards now", "list beds banana", "list beds free", "list beds occupied available", "list beds cleaning cleaning", "show emergency queue please", "show journey"],
 )
 def test_new_commands_are_exact_or_they_miss(text):
     assert parse(text).matched is False

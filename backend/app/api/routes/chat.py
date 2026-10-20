@@ -190,6 +190,8 @@ def _format_deterministic_message(command: Command, success: bool, error: str | 
         return f"Found {_plural(len(entries), 'patient')} in the emergency queue: {parts}."
 
     if command.name == "patient_journey":
+        if not data["stages"]:
+            return f"{data['patient']['name']} has no emergency visit."
         return f"{data['patient']['name']}: current stage {data['current_stage']}."
 
     return f"OK — ran {command.name}."  # safety net; see docstring

@@ -128,7 +128,7 @@ SEARCH_BEDS_TOOL = register_tool(
         description=(
             "List hospital beds, optionally narrowed by status or ward. Returns each "
             "bed's code, ward, status and occupant. Only a bed code returned by this "
-            "tool may later be passed to assign_bed or release_bed."
+            "tool may later be passed to assign_bed, release_bed or mark_bed_clean."
         ),
         args_schema=SearchBedsArgs,
         handler=handle_search_beds,
@@ -152,9 +152,9 @@ async def handle_search_queue(
         raise ToolExecutionError(result.error or "search_queue failed", result.error_category or "tool_error")
 
     entries: list[dict] = result.data
-    grounding = GroundingRegistry(session)
-    await grounding.expose(session_id, "queue_entry", [e["code"] for e in entries])
-    await grounding.expose(session_id, "patient", [e["patient"]["code"] for e in entries])
+    await GroundingRegistry(session).expose(
+        session_id, "patient", [e["patient"]["code"] for e in entries]
+    )
     return entries
 
 

@@ -243,6 +243,7 @@ _ACTION_WORDS: frozenset[str] = frozenset(
         "release",
         "admit",
         "discharge",
+        "clean",
         "remember",
         "forget",
         "check",

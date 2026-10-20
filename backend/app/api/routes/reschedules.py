@@ -13,17 +13,16 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.routes.chat import get_checkpointer, remember_for_agent
-from app.db.models.agent import AgentEvent, EventStatus, MessageRole
+from app.api.routes.chat import get_checkpointer
+from app.api.routes.proposals import pending_proposal, resolve
+from app.db.models.agent import AgentEvent
 from app.db.repositories.event_repository import (
     RESCHEDULE_CANCELLED,
     RESCHEDULE_CONFIRMED,
     EventRepository,
 )
-from app.db.repositories.session_repository import SessionRepository
 from app.db.session import get_db, get_session_factory
 from app.execution.commands import Command, CommandRunner
-from app.observability.tracing import record_event
 from app.schemas.observability import PendingConfirmation
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
@@ -49,46 +48,13 @@ async def get_pending_reschedules(
 
 
 async def _pending_proposal(db: AsyncSession, session_id: str, proposal_id: int) -> AgentEvent:
-    repo = EventRepository(db)
-    proposal = await repo.get_reschedule_proposal(session_id, proposal_id)
-    if proposal is None:
-        raise HTTPException(404, "Unknown reschedule proposal")
-    if proposal_id not in {p.id for p in await repo.pending_reschedule_proposals(session_id)}:
-        raise HTTPException(409, "This reschedule proposal was already resolved")
-    return proposal
-
-
-async def _resolve(
-    db: AsyncSession,
-    session_id: str,
-    proposal_id: int,
-    *,
-    event_type: str,
-    tool_name: str,
-    user_text: str,
-    reply: str,
-    session_factory,
-    checkpointer,
-) -> None:
-    await record_event(
+    return await pending_proposal(
         db,
-        session_id=session_id,
-        round_num=0,
-        event_type=event_type,
-        status=EventStatus.SUCCESS,
-        tool_name=tool_name,
-        arguments={"proposal_id": proposal_id},
-    )
-    messages = SessionRepository(db)
-    await messages.append_message(session_id, MessageRole.USER, user_text)
-    await messages.append_message(session_id, MessageRole.ASSISTANT, reply)
-    await db.commit()
-    await remember_for_agent(
-        session_id=session_id,
-        user_text=user_text,
-        assistant_text=reply,
-        session_factory=session_factory,
-        checkpointer=checkpointer,
+        session_id,
+        proposal_id,
+        label="reschedule",
+        get=EventRepository.get_reschedule_proposal,
+        pending=EventRepository.pending_reschedule_proposals,
     )
 
 
@@ -110,7 +76,7 @@ async def confirm_reschedule(
     appointment_code = result.data["code"]
     scanner_code = result.data["scanner"]["code"]
     reply = f"Moved appointment {appointment_code} to scanner {scanner_code}."
-    await _resolve(
+    await resolve(
         db,
         session_id,
         proposal_id,
@@ -138,7 +104,7 @@ async def cancel_reschedule(
         f"Cancelled; appointment {arguments['appointment_code']} was not moved "
         f"to scanner {arguments['scanner_code']}."
     )
-    await _resolve(
+    await resolve(
         db,
         session_id,
         proposal_id,

@@ -47,6 +47,7 @@ latest queue entry, its bed and the patient's appointments.
 | `patient_journey` | read | `query` (name) |
 | `assign_bed` | write, audited | `patient_code`, `bed_code` |
 | `release_bed` | write, audited | `bed_code` |
+| `mark_bed_clean` | write, audited | `bed_code` |
 
 Business rules (enforced in the handler, not by callers):
 
@@ -55,6 +56,9 @@ Business rules (enforced in the handler, not by callers):
   entry `ADMITTED` with `bed_id`.
 - `release_bed`: bed must be `OCCUPIED`. Effect: bed `CLEANING` (patient cleared),
   the patient's `ADMITTED` entry becomes `DISCHARGED` with `discharged_at`.
+- `mark_bed_clean`: bed must be `CLEANING`; it becomes `AVAILABLE`. Without it a
+  released bed never returns to the pool. Agent-only like the other bed writes, grounded
+  (`bed`), audited, and not confirmation-gated (it only changes a status label).
 - A rule violation raises `CommandError` (categories `bed_unavailable`,
   `no_waiting_entry`, `already_bedded`, `bed_not_occupied`); unknown codes raise
   `ValueError`, exactly as `reassign_scanner` does.
@@ -78,6 +82,7 @@ show (patient )?journey <name>      # placed before "show patient <name>"
 | `get_patient_journey` | read | exposes `patient` code |
 | `assign_bed` | write | requires grounded `patient` and `bed` |
 | `release_bed` | write | requires grounded `bed` |
+| `mark_bed_clean` | write | requires grounded `bed` |
 
 `execute_command` keeps working for the new read commands automatically because
 it dispatches by command name.

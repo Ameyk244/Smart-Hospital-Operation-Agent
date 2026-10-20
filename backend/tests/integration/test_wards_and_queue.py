@@ -1,5 +1,5 @@
 """Wards, beds, the emergency queue and the patient journey: the read commands,
-the two audited bed writes (rules, grounding, audit), and the agent tools.
+the three audited bed writes (rules, grounding, audit), and the agent tools.
 
 Seed reference (QUEUE_PLAN in app/seed/seed_data.py): PT-1027 holds BED-1
 (ER-1) and PT-1028 holds BED-5 (ER-2). BED-2 and BED-4 are AVAILABLE, BED-3 is
@@ -7,6 +7,7 @@ CLEANING. PT-1029 (ER-3, CRITICAL, not yet triaged), PT-1030 (ER-4) and
 PT-1008 (ER-5) are WAITING."""
 
 import uuid
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import func, select
@@ -15,10 +16,13 @@ from app.agent.grounding import GroundingRegistry, GroundingRejectedError
 from app.agent.tools import TOOL_REGISTRY
 from app.agent.tools.action_tools import (
     AssignBedArgs,
+    MarkBedCleanArgs,
     ReleaseBedArgs,
     handle_assign_bed,
+    handle_mark_bed_clean,
     handle_release_bed,
 )
+from app.agent.tools.command_tools import ExecuteCommandArgs, handle_execute_command
 from app.agent.tools.base import ToolExecutionError
 from app.agent.tools.search_tools import (
     GetPatientJourneyArgs,
@@ -36,6 +40,7 @@ from app.db.repositories.grounding_repository import GroundingRepository
 from app.db.repositories.session_repository import SessionRepository
 from app.execution.commands import Command, CommandRunner
 from app.execution.commands.base import is_audited
+from tests.integration.test_agent_loop import _settings
 
 pytestmark = pytest.mark.integration
 
@@ -59,10 +64,11 @@ async def _bed_records(session, bed_code: str, since_id: int) -> list[AuditRecor
     return [r for r in records if r.id > since_id]
 
 
-def test_only_the_two_bed_writes_are_audited_and_flagged_as_writes():
-    assert is_audited("assign_bed") and is_audited("release_bed")
+def test_only_the_bed_writes_are_audited_and_flagged_as_writes():
+    for name in ("assign_bed", "release_bed", "mark_bed_clean"):
+        assert is_audited(name)
     assert not is_audited("list_beds") and not is_audited("patient_journey")
-    for name in ("assign_bed", "release_bed"):
+    for name in ("assign_bed", "release_bed", "mark_bed_clean"):
         assert TOOL_REGISTRY[name].is_write is True
     for name in ("search_beds", "search_queue", "get_patient_journey"):
         assert TOOL_REGISTRY[name].is_write is False
@@ -281,7 +287,6 @@ async def test_search_tools_ground_what_they_return(seeded_session):
 
     assert len(beds) == 6 and len(queue) == 3
     assert set(await repo.list_grounded(session_id, "bed")) == {b["code"] for b in beds}
-    assert set(await repo.list_grounded(session_id, "queue_entry")) == {"ER-3", "ER-4", "ER-5"}
     assert {"PT-1027", "PT-1029"} <= set(await repo.list_grounded(session_id, "patient"))
     assert journey["patient"]["code"] == "PT-1027"
 
@@ -331,3 +336,92 @@ async def test_tools_surface_command_errors(seeded_session):
     with pytest.raises(ToolExecutionError) as caught:
         await handle_release_bed(seeded_session, session_id, ReleaseBedArgs(bed_code="BED-2"))
     assert caught.value.category == "bed_not_occupied"
+
+
+# ---- mark_bed_clean ------------------------------------------------------------
+
+
+async def test_mark_bed_clean_makes_a_cleaning_bed_available_and_audits_it(seeded_session):
+    since = await _max_audit_id(seeded_session)
+    result = await _run(seeded_session, "mark_bed_clean", {"bed_code": "BED-3"})
+    assert result.success and result.data["status"] == "AVAILABLE"
+
+    (record,) = await _bed_records(seeded_session, "BED-3", since)
+    assert record.action == "mark_bed_clean" and record.actor == "agent_session:test"
+    assert record.before_json == {
+        "ward_code": "WRD-1",
+        "bed_status": "CLEANING",
+        "patient_code": None,
+        "occupied_since": None,
+    }
+    assert record.after_json == {**record.before_json, "bed_status": "AVAILABLE"}
+
+
+async def test_mark_bed_clean_rule_violations_write_no_audit_record(seeded_session):
+    since = await _max_audit_id(seeded_session)
+    for bed in ("BED-1", "BED-2"):
+        result = await _run(seeded_session, "mark_bed_clean", {"bed_code": bed})
+        assert not result.success and result.error_category == "bed_not_cleaning"
+    assert (await _run(seeded_session, "mark_bed_clean", {})).error_category == "invalid_argument"
+    assert (await _run(seeded_session, "mark_bed_clean", {"bed_code": "BED-99"})).error_category == "not_found"
+    assert await _max_audit_id(seeded_session) == since
+
+
+async def test_release_then_clean_returns_the_bed_to_the_pool(seeded_session):
+    await _run(seeded_session, "release_bed", {"bed_code": "BED-1"})
+    await _run(seeded_session, "mark_bed_clean", {"bed_code": "BED-1"})
+    available = (await _run(seeded_session, "list_beds", {"status": "AVAILABLE"})).data
+    assert "BED-1" in [b["code"] for b in available]
+
+
+async def test_mark_bed_clean_tool_requires_a_grounded_bed(seeded_session):
+    session_id = await _session_id(seeded_session)
+    with pytest.raises(GroundingRejectedError):
+        await handle_mark_bed_clean(seeded_session, session_id, MarkBedCleanArgs(bed_code="BED-3"))
+
+    await handle_search_beds(seeded_session, session_id, SearchBedsArgs(status="CLEANING"))
+    bed = await handle_mark_bed_clean(seeded_session, session_id, MarkBedCleanArgs(bed_code="BED-3"))
+    assert bed["status"] == "AVAILABLE"
+
+    with pytest.raises(ToolExecutionError) as caught:
+        await handle_mark_bed_clean(seeded_session, session_id, MarkBedCleanArgs(bed_code="BED-3"))
+    assert caught.value.category == "bed_not_cleaning"
+
+
+async def test_mark_bed_clean_is_not_confirmation_gated(seeded_session):
+    session_id = await _session_id(seeded_session)
+    await GroundingRegistry(seeded_session).expose(session_id, "bed", ["BED-3"])
+    with patch(
+        "app.agent.tools.action_tools.get_settings",
+        return_value=_settings(require_bed_confirmation=True),
+    ):
+        bed = await handle_mark_bed_clean(seeded_session, session_id, MarkBedCleanArgs(bed_code="BED-3"))
+    assert bed["status"] == "AVAILABLE"
+
+
+# ---- ordering --------------------------------------------------------------------
+
+
+async def test_beds_and_wards_order_numerically(seeded_session):
+    codes = [b["code"] for b in (await _run(seeded_session, "list_beds")).data]
+    assert codes.index("BED-2") < codes.index("BED-9") < codes.index("BED-10")
+
+
+# ---- execute_command grounding -----------------------------------------------------
+
+
+async def test_execute_command_grounds_beds_and_queue_patients_for_assign_bed(seeded_session):
+    session_id = await _session_id(seeded_session)
+    await handle_execute_command(seeded_session, session_id, ExecuteCommandArgs(command_text="list beds"))
+    await handle_execute_command(
+        seeded_session, session_id, ExecuteCommandArgs(command_text="show emergency queue")
+    )
+    repo = GroundingRepository(seeded_session)
+    assert {"BED-1", "BED-2"} <= set(await repo.list_grounded(session_id, "bed"))
+    assert {"PT-1027", "PT-1029"} <= set(await repo.list_grounded(session_id, "patient"))
+    assert await repo.list_grounded(session_id, "queue_entry") == []
+
+    bed = await handle_assign_bed(
+        seeded_session, session_id, AssignBedArgs(patient_code="PT-1029", bed_code="BED-2")
+    )
+    assert bed["status"] == "OCCUPIED"

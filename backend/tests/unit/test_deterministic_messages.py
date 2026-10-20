@@ -24,8 +24,17 @@ def test_queue_lists_patient_urgency_and_status():
 
 
 def test_journey_names_the_current_stage():
-    data = {"patient": {"name": "John Anderson"}, "current_stage": "BED_ASSIGNED"}
+    data = {
+        "patient": {"name": "John Anderson"},
+        "stages": [{"stage": "ARRIVED"}],
+        "current_stage": "BED_ASSIGNED",
+    }
     assert _msg("patient_journey", data) == "John Anderson: current stage BED_ASSIGNED."
+
+
+def test_journey_without_an_emergency_visit_says_so():
+    data = {"patient": {"name": "John Anderson"}, "stages": [], "current_stage": "NONE"}
+    assert _msg("patient_journey", data) == "John Anderson has no emergency visit."
 
 
 def test_empty_results_say_so():

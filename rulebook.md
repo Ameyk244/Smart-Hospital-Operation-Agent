@@ -80,6 +80,7 @@ agent tools. Business rules belong here, not in the LLM.
 | `patient_journey` | READ | Patients | Derive a patient's emergency journey from `patient_code` or `query` |
 | `assign_bed` | WRITE | Beds | Admit a waiting patient to an available bed |
 | `release_bed` | WRITE | Beds | Discharge an occupied bed's patient and mark it for cleaning |
+| `mark_bed_clean` | WRITE | Beds | Return a CLEANING bed to AVAILABLE |
 
 `reassign_scanner` validates the appointment, scanner, modality, and scanner
 availability before committing. The agent-facing name for this operation is
@@ -120,19 +121,21 @@ harness_unavailable`; there is no fallback to the in-process runtime. Contract:
 | `reschedule_appointment` | Hospital data | Reassign a grounded appointment to a grounded scanner and optionally change its time |
 | `assign_bed` | Hospital data | Admit a grounded waiting patient to a grounded AVAILABLE bed |
 | `release_bed` | Hospital data | Discharge the patient in a grounded OCCUPIED bed; the bed becomes CLEANING |
+| `mark_bed_clean` | Hospital data | Return a grounded CLEANING bed to AVAILABLE |
 | `remember_preference` | Session memory only | Store a preference |
 | `forget_preference` | Session memory only | Delete a preference |
 
-`reschedule_appointment`, `assign_bed` and `release_bed` are the agent's only
-hospital-data writes. `assign_bed` and `release_bed` are audited like a reschedule
+`reschedule_appointment`, `assign_bed`, `release_bed` and `mark_bed_clean` are the
+agent's only hospital-data writes. All three bed writes are audited like a reschedule
 (entity type `bed`; before/after hold only bed status, patient code, queue-entry
-code and queue status). With `REQUIRE_BED_CONFIRMATION=true` (default off) they
-only **propose**: a `bed_action_proposed` trace row, a tool result saying the bed
+code and queue status). With `REQUIRE_BED_CONFIRMATION=true` (default off)
+`assign_bed` and `release_bed` only **propose** (`mark_bed_clean` is never gated): a `bed_action_proposed` trace row, a tool result saying the bed
 has not been changed, and a Confirm / Cancel card; Confirm runs the same command
 as `user_confirmed:<id>` (`/api/sessions/{id}/bed-actions/{pid}/confirm|cancel`,
 pending list at `/pending-bed-actions`, also in `ChatResponse.pending_bed_actions`).
 Off, they act immediately. Rule violations come back
-as `bed_unavailable`, `already_bedded`, `no_waiting_entry` or `bed_not_occupied`.
+as `bed_unavailable`, `already_bedded`, `no_waiting_entry`, `bed_not_occupied` or
+`bed_not_cleaning`.
 Jev may execute only `list_wards` (it has no filter questions for beds or the
 queue, so those go to the parser or the agent); the parser grammar has no bed write. The agent
 cannot create or delete appointments, edit patients, change scanner status,

@@ -1,7 +1,7 @@
 """Ward and bed data access.
 
 Why it exists: one query surface for the ward/bed reads (`list wards`,
-`list beds`, the agent's `search_beds`) and for the two bed writes. Like the
+`list beds`, the agent's `search_beds`) and for the bed writes. Like the
 appointment repository, the mutation methods here do not enforce business
 rules; `app/execution/commands/ward_commands.py` validates first.
 
@@ -10,7 +10,7 @@ What calls it: `app/execution/commands/ward_commands.py`.
 
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -25,7 +25,7 @@ class WardRepository:
         result = await self._session.execute(
             select(Ward)
             .options(selectinload(Ward.department), selectinload(Ward.beds))
-            .order_by(Ward.code)
+            .order_by(func.length(Ward.code), Ward.code)
             .execution_options(populate_existing=True)
         )
         return list(result.scalars().all())
@@ -57,7 +57,7 @@ class BedRepository:
             stmt = stmt.where(Bed.status == status)
         if ward_code is not None:
             stmt = stmt.where(Bed.ward.has(code=ward_code))
-        result = await self._session.execute(stmt.order_by(Bed.code))
+        result = await self._session.execute(stmt.order_by(func.length(Bed.code), Bed.code))
         return list(result.scalars().all())
 
     async def occupied_by(self, patient: Patient) -> Bed | None:
@@ -82,4 +82,8 @@ class BedRepository:
         bed.occupied_since = None
         entry.status = QueueStatus.DISCHARGED
         entry.discharged_at = discharged_at
+        await self._session.flush()
+
+    async def mark_clean(self, bed: Bed) -> None:
+        bed.status = BedStatus.AVAILABLE
         await self._session.flush()

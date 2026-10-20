@@ -3,8 +3,9 @@
 Why it exists: with confirmation required, `assign_bed` / `release_bed` only
 record a `bed_action_proposed` event. These routes let the user confirm (run the
 same command through `CommandRunner`, attributed to the user) or cancel it.
-Same shape as `reschedules.py`, whose `_resolve` records the exchange in the
-chat history and the agent's checkpoint.
+Same shape as `reschedules.py`; `proposals.py` holds the shared lookup and the
+resolution step that records the exchange in the chat history and the agent's
+checkpoint.
 
 What calls it: the frontend's confirmation card.
 """
@@ -14,7 +15,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.routes.chat import get_checkpointer
-from app.api.routes.reschedules import _resolve
+from app.api.routes.proposals import pending_proposal, resolve
 from app.db.models.agent import AgentEvent
 from app.db.repositories.event_repository import (
     BED_ACTION_CANCELLED,
@@ -60,13 +61,14 @@ async def get_pending_bed_actions(
 
 
 async def _pending_proposal(db: AsyncSession, session_id: str, proposal_id: int) -> AgentEvent:
-    repo = EventRepository(db)
-    proposal = await repo.get_bed_proposal(session_id, proposal_id)
-    if proposal is None:
-        raise HTTPException(404, "Unknown bed action proposal")
-    if proposal_id not in {p.id for p in await repo.pending_bed_proposals(session_id)}:
-        raise HTTPException(409, "This bed action proposal was already resolved")
-    return proposal
+    return await pending_proposal(
+        db,
+        session_id,
+        proposal_id,
+        label="bed action",
+        get=EventRepository.get_bed_proposal,
+        pending=EventRepository.pending_bed_proposals,
+    )
 
 
 @router.post("/{session_id}/bed-actions/{proposal_id}/confirm", response_model=ConfirmedBedAction)
@@ -86,7 +88,7 @@ async def confirm_bed_action(
         raise HTTPException(409, result.error)
 
     reply = _describe(arguments, proposal.tool_name, done=True)
-    await _resolve(
+    await resolve(
         db,
         session_id,
         proposal_id,
@@ -113,7 +115,7 @@ async def cancel_bed_action(
 ) -> CancelledBedAction:
     proposal = await _pending_proposal(db, session_id, proposal_id)
     reply = _describe(proposal.arguments_json, proposal.tool_name, done=False)
-    await _resolve(
+    await resolve(
         db,
         session_id,
         proposal_id,

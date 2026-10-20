@@ -1,7 +1,7 @@
 """Ward and bed commands: two reads and the bed writes.
 
 Why it exists: backs "list wards" / "list beds" in the deterministic grammar,
-the agent's `search_beds`, and its `assign_bed` / `release_bed` tools, which
+the agent's `search_beds`, and its `assign_bed` / `release_bed` / `mark_bed_clean` tools, which
 build the same `Command` from grounded arguments (see
 `app/agent/tools/action_tools.py`).
 
@@ -11,9 +11,10 @@ Business rules enforced here, not by any caller:
   entry ADMITTED.
 - `release_bed`: the bed must be OCCUPIED. It becomes CLEANING and the
   patient's ADMITTED entry becomes DISCHARGED.
+- `mark_bed_clean`: the bed must be CLEANING. It becomes AVAILABLE.
 A violation raises `CommandError`; unknown codes raise `ValueError`.
 
-Both writes are audited in the same transaction. Before/after carry only
+All three writes are audited in the same transaction. Before/after carry only
 codes, statuses and timestamps, never names.
 """
 
@@ -46,15 +47,17 @@ async def list_beds(session: AsyncSession, args: dict[str, Any]) -> list[dict]:
     return [BedOut.model_validate(b).model_dump(mode="json") for b in beds]
 
 
-def _audit_state(bed: Bed, entry: QueueEntry) -> dict[str, Any]:
+def _bed_state(bed: Bed) -> dict[str, Any]:
     return {
         "ward_code": bed.ward.code,
         "bed_status": bed.status.value,
         "patient_code": bed.patient.code if bed.patient else None,
         "occupied_since": bed.occupied_since.isoformat() if bed.occupied_since else None,
-        "queue_entry_code": entry.code,
-        "queue_status": entry.status.value,
     }
+
+
+def _audit_state(bed: Bed, entry: QueueEntry) -> dict[str, Any]:
+    return {**_bed_state(bed), "queue_entry_code": entry.code, "queue_status": entry.status.value}
 
 
 @register("assign_bed", audited=True)
@@ -128,5 +131,34 @@ async def release_bed(session: AsyncSession, args: dict[str, Any], *, actor: str
         entity_code=bed_code,
         before=before,
         after=_audit_state(bed, entry),
+    )
+    return BedOut.model_validate(bed).model_dump(mode="json")
+
+
+@register("mark_bed_clean", audited=True)
+async def mark_bed_clean(session: AsyncSession, args: dict[str, Any], *, actor: str) -> dict:
+    bed_code = args.get("bed_code")
+    if not bed_code:
+        raise CommandError("bed_code is required", category="invalid_argument")
+
+    bed_repo = BedRepository(session)
+    bed = await bed_repo.get_by_code(bed_code, for_update=True)
+    if bed is None:
+        raise ValueError(f"No bed with code {bed_code!r}")
+    if bed.status != BedStatus.CLEANING:
+        raise CommandError(
+            f"Bed {bed_code} is not being cleaned (status: {bed.status.value})",
+            category="bed_not_cleaning",
+        )
+
+    before = _bed_state(bed)
+    await bed_repo.mark_clean(bed)
+    await AuditRepository(session).record(
+        actor=actor,
+        action="mark_bed_clean",
+        entity_type="bed",
+        entity_code=bed_code,
+        before=before,
+        after=_bed_state(bed),
     )
     return BedOut.model_validate(bed).model_dump(mode="json")

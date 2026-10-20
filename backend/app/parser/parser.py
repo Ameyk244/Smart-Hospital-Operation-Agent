@@ -112,7 +112,7 @@ _STATUS_TAIL = r"(?:available|in[\s-]use|maintenance)"
 # no filter, so allowing it cannot change what is returned.
 _SCANNER_TAIL = rf"(?:\s+(?:{_MODALITY_TAIL}|{_STATUS_TAIL}|that|are))*"
 _APPOINTMENT_TAIL = rf"(?:\s+{_MODALITY_TAIL})*"
-_BED_TAIL = r"(?:\s+(?:available|occupied|cleaning))*"
+_BED_TAIL = r"(?:\s+(?:available|occupied|cleaning))?"
 
 # Order matters: first match wins, so more specific patterns come first.
 _GRAMMAR: list[tuple[re.Pattern, Callable[[re.Match], Command]]] = [

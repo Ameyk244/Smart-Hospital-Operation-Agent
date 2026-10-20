@@ -202,3 +202,37 @@ RELEASE_BED_TOOL = register_tool(
         is_write=True,
     )
 )
+
+
+class MarkBedCleanArgs(BaseModel):
+    bed_code: str = Field(..., description="A bed code previously returned by search_beds")
+
+
+async def handle_mark_bed_clean(
+    session: AsyncSession, session_id: str, args: MarkBedCleanArgs
+) -> dict:
+    await GroundingRegistry(session).require_grounded(session_id, "bed", args.bed_code)
+
+    result = await CommandRunner(session, actor=f"agent_session:{session_id}").execute(
+        Command("mark_bed_clean", {"bed_code": args.bed_code})
+    )
+    if not result.success:
+        raise ToolExecutionError(
+            result.error or "mark_bed_clean failed", result.error_category or "tool_error"
+        )
+    return result.data
+
+
+MARK_BED_CLEAN_TOOL = register_tool(
+    ToolSpec(
+        name="mark_bed_clean",
+        description=(
+            "Mark a bed whose cleaning is finished as available again. bed_code MUST "
+            "come from a prior search_beds result in this conversation — inventing a "
+            "code will be rejected. The bed must be in CLEANING status."
+        ),
+        args_schema=MarkBedCleanArgs,
+        handler=handle_mark_bed_clean,
+        is_write=True,
+    )
+)
