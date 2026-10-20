@@ -2,6 +2,9 @@ import type {
   AgentEvent,
   Appointment,
   Bed,
+  CancelBedActionResponse,
+  ConfirmBedActionResponse,
+  PendingBedAction,
   ChatResponse,
   ConversationMessage,
   CancelRescheduleResponse,
@@ -140,6 +143,22 @@ export const api = {
 
   cancelReschedule(sessionId: string, proposalId: number): Promise<CancelRescheduleResponse> {
     return request(`/api/sessions/${encodeURIComponent(sessionId)}/reschedule/${proposalId}/cancel`, {
+      method: "POST",
+    });
+  },
+
+  getPendingBedActions(sessionId: string): Promise<PendingBedAction[]> {
+    return request(`/api/sessions/${encodeURIComponent(sessionId)}/pending-bed-actions`);
+  },
+
+  confirmBedAction(sessionId: string, proposalId: number): Promise<ConfirmBedActionResponse> {
+    return request(`/api/sessions/${encodeURIComponent(sessionId)}/bed-actions/${proposalId}/confirm`, {
+      method: "POST",
+    });
+  },
+
+  cancelBedAction(sessionId: string, proposalId: number): Promise<CancelBedActionResponse> {
+    return request(`/api/sessions/${encodeURIComponent(sessionId)}/bed-actions/${proposalId}/cancel`, {
       method: "POST",
     });
   },

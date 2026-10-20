@@ -122,6 +122,7 @@ export interface ChatResponse {
   // Appointment moves the agent proposed that wait for a human Confirm or
   // Cancel. Absent or empty when nothing is pending.
   pending_confirmations?: PendingReschedule[];
+  pending_bed_actions?: PendingBedAction[];
 }
 
 // --- reschedule confirmation ---
@@ -140,6 +141,26 @@ export interface ConfirmRescheduleResponse {
 }
 
 export interface CancelRescheduleResponse {
+  status: "cancelled";
+  message: string;
+}
+
+// --- bed action confirmation ---
+
+export interface PendingBedAction {
+  proposal_id: number;
+  action: "assign_bed" | "release_bed";
+  bed_code: string;
+  patient_code: string | null;
+}
+
+export interface ConfirmBedActionResponse {
+  status: "confirmed";
+  message: string;
+  touched_entity_codes: string[];
+}
+
+export interface CancelBedActionResponse {
   status: "cancelled";
   message: string;
 }

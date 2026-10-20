@@ -8,11 +8,15 @@ import type {
   CancelRescheduleResponse,
   ChatResponse,
   ConfirmRescheduleResponse,
+  CancelBedActionResponse,
+  ConfirmBedActionResponse,
   HandledBy,
+  PendingBedAction,
   PendingReschedule,
 } from "../api/types";
 import type { TraceState } from "../hooks/useTrace";
 import { useVoiceInput } from "../hooks/useVoiceInput";
+import { BedActionConfirmation } from "./BedActionConfirmation";
 import { RescheduleConfirmation } from "./RescheduleConfirmation";
 
 // Active-session pointer: sessionStorage (not localStorage) on purpose —
@@ -58,6 +62,7 @@ interface CachedMessages {
   // Lets a reload know a confirmation was waiting without a request on every
   // reload; absent in caches written before confirmations existed.
   pending?: PendingReschedule[];
+  pendingBed?: PendingBedAction[];
 }
 
 const HANDLED_BY_LABEL: Record<HandledBy, string> = {
@@ -119,9 +124,10 @@ function writeCachedMessages(
   sessionId: string,
   messages: DisplayMessage[],
   pending: PendingReschedule[],
+  pendingBed: PendingBedAction[],
 ): void {
   try {
-    sessionStorage.setItem(CACHED_MESSAGES_KEY, JSON.stringify({ sessionId, messages, pending }));
+    sessionStorage.setItem(CACHED_MESSAGES_KEY, JSON.stringify({ sessionId, messages, pending, pendingBed }));
   } catch {
     // sessionStorage full/unavailable — worst case a reload falls back to
     // fetching /messages (without badges) instead of hard-failing here.
@@ -185,6 +191,7 @@ export function ChatPanel({ sessionId, onSessionId, onTurnComplete, trace }: Cha
   );
   const [liveStatus, setLiveStatus] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingReschedule[]>([]);
+  const [pendingBed, setPendingBed] = useState<PendingBedAction[]>([]);
   const restoredRef = useRef(false);
   const listEndRef = useRef<HTMLDivElement | null>(null);
   // How many trace events already existed for this session before the
@@ -224,6 +231,7 @@ export function ChatPanel({ sessionId, onSessionId, onTurnComplete, trace }: Cha
         },
       ]);
       setPending(response.pending_confirmations ?? []);
+      setPendingBed(response.pending_bed_actions ?? []);
       onTurnComplete(response.touched_entity_codes);
     },
     onError: (message) => {
@@ -250,6 +258,12 @@ export function ChatPanel({ sessionId, onSessionId, onTurnComplete, trace }: Cha
       .catch((err) => {
         console.warn("Could not load pending reschedules:", err);
       });
+    api
+      .getPendingBedActions(id)
+      .then(setPendingBed)
+      .catch((err) => {
+        console.warn("Could not load pending bed actions:", err);
+      });
   }
 
   // On mount: sessionStorage only holds a session_id if this is the same
@@ -271,8 +285,9 @@ export function ChatPanel({ sessionId, onSessionId, onTurnComplete, trace }: Cha
       onTurnComplete([]); // restoring history touches nothing new
       // The server is the source of truth for what is still pending, so the
       // cached list is only refreshed when it says something was waiting.
-      if (cached.pending?.length) {
-        setPending(cached.pending);
+      if (cached.pending?.length || cached.pendingBed?.length) {
+        setPending(cached.pending ?? []);
+        setPendingBed(cached.pendingBed ?? []);
         loadPending(stored);
       }
       return;
@@ -307,8 +322,8 @@ export function ChatPanel({ sessionId, onSessionId, onTurnComplete, trace }: Cha
   // snapshot to hydrate from.
   useEffect(() => {
     if (!sessionId) return;
-    writeCachedMessages(sessionId, messages, pending);
-  }, [sessionId, messages, pending]);
+    writeCachedMessages(sessionId, messages, pending, pendingBed);
+  }, [sessionId, messages, pending, pendingBed]);
 
   useEffect(() => {
     listEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -381,6 +396,7 @@ export function ChatPanel({ sessionId, onSessionId, onTurnComplete, trace }: Cha
         },
       ]);
       setPending(res.pending_confirmations ?? []);
+      setPendingBed(res.pending_bed_actions ?? []);
       onTurnComplete(res.touched_entity_codes);
     } catch (err) {
       setError(String(err));
@@ -396,6 +412,7 @@ export function ChatPanel({ sessionId, onSessionId, onTurnComplete, trace }: Cha
     sessionStorage.removeItem(CACHED_MESSAGES_KEY);
     setMessages([]);
     setPending([]);
+    setPendingBed([]);
     setError(null);
     onSessionId(null);
     onTurnComplete([]);
@@ -410,6 +427,23 @@ export function ChatPanel({ sessionId, onSessionId, onTurnComplete, trace }: Cha
       ...prev,
       {
         key: `assistant-reschedule-${proposalId}-${Date.now()}`,
+        role: "assistant",
+        content: result.message,
+        handledBy: "agent",
+      },
+    ]);
+    if (result.status === "confirmed") onTurnComplete(result.touched_entity_codes);
+  }
+
+  function handleBedAction(
+    proposalId: number,
+    result: ConfirmBedActionResponse | CancelBedActionResponse,
+  ) {
+    setPendingBed((prev) => prev.filter((p) => p.proposal_id !== proposalId));
+    setMessages((prev) => [
+      ...prev,
+      {
+        key: `assistant-bed-${proposalId}-${Date.now()}`,
         role: "assistant",
         content: result.message,
         handledBy: "agent",
@@ -435,6 +469,7 @@ export function ChatPanel({ sessionId, onSessionId, onTurnComplete, trace }: Cha
       sessionStorage.setItem(ACTIVE_SESSION_KEY, id);
       onSessionId(id);
       setPending([]);
+      setPendingBed([]);
       loadPending(id);
       onTurnComplete([]);
     } catch (err) {
@@ -493,6 +528,9 @@ export function ChatPanel({ sessionId, onSessionId, onTurnComplete, trace }: Cha
         ))}
         {sessionId && (
           <RescheduleConfirmation sessionId={sessionId} proposals={pending} onResolved={handleReschedule} />
+        )}
+        {sessionId && (
+          <BedActionConfirmation sessionId={sessionId} proposals={pendingBed} onResolved={handleBedAction} />
         )}
         {(sending || voice.active) && (
           <div className="chat-message chat-message-assistant chat-message-pending">
