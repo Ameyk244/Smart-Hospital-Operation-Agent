@@ -1,0 +1,229 @@
+/* Wards, emergency queue and patient journey pages. Colours come only from
+   the shared tokens, so light and dark mode need no overrides here. */
+
+.pg-badge {
+  display: inline-block;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--code-bg);
+  color: var(--text-h);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.pg-badge-available,
+.pg-badge-admitted {
+  background: var(--ok-bg);
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.pg-badge-occupied,
+.pg-badge-standard {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+
+.pg-badge-cleaning,
+.pg-badge-waiting,
+.pg-badge-urgent {
+  background: var(--warn-bg);
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.pg-badge-critical {
+  background: var(--error-bg);
+  border-color: var(--error);
+  color: var(--error);
+  font-weight: 600;
+}
+
+.pg-badge-discharged {
+  color: var(--muted);
+}
+
+.pg-empty {
+  padding: var(--space-4);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  text-align: center;
+}
+
+/* Wards */
+
+.pg-ward-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-4);
+}
+
+.pg-ward-card {
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel-bg);
+  box-shadow: var(--shadow);
+}
+
+.pg-ward-card h4 {
+  margin: 0;
+  color: var(--text-h);
+}
+
+.pg-ward-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin: var(--space-1) 0 var(--space-2);
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.pg-occupancy {
+  height: 8px;
+  margin-bottom: var(--space-3);
+  border-radius: var(--radius);
+  background: var(--code-bg);
+  overflow: hidden;
+}
+
+.pg-occupancy-fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+.pg-bed-grid {
+  display: block;
+  width: 100%;
+  border: 0;
+}
+
+.pg-bed-grid tbody {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: var(--space-2);
+}
+
+.pg-bed-grid tr {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  min-width: 0;
+}
+
+.pg-bed-grid td {
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.pg-bed-code {
+  font-family: var(--mono);
+  color: var(--text-h);
+}
+
+/* Emergency queue */
+
+.pg-table-scroll {
+  overflow-x: auto;
+}
+
+.pg-wait {
+  font-family: var(--mono);
+  white-space: nowrap;
+}
+
+/* Journey */
+
+.pg-search-results {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-3) 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pg-search-results button {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel-bg);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.pg-search-results button[aria-pressed="true"] {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.pg-stepper {
+  display: flex;
+  gap: var(--space-2);
+  margin: var(--space-4) 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pg-step {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-top: 4px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel-bg);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.pg-step-name {
+  display: block;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.pg-step-done {
+  border-top-color: var(--ok);
+}
+
+.pg-step-current {
+  border-color: var(--accent-border);
+  border-top-color: var(--accent);
+  background: var(--accent-bg);
+  box-shadow: var(--shadow);
+}
+
+.pg-step-current .pg-step-name {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.pg-step-time,
+.pg-step-detail {
+  display: block;
+  margin-top: var(--space-1);
+}
+
+@media (max-width: 720px) {
+  .pg-stepper {
+    flex-direction: column;
+  }
+}

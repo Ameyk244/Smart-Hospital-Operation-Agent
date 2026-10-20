@@ -93,7 +93,7 @@ _WORD_RE = re.compile(r"[a-z]+")
 # all and get rejected, blocking the system's only write operation. Each
 # code is swapped for one placeholder token that counts as a domain noun.
 _ENTITY_CODE_RE = re.compile(
-    r"\b(?:APT|SCN|PT|STF|RM)-\d+\b|\bDEPT-[A-Z]+\b", re.IGNORECASE
+    r"\b(?:APT|SCN|PT|STF|RM|BED|WRD|ER)-\d+\b|\bDEPT-[A-Z]+\b", re.IGNORECASE
 )
 _ENTITY_TOKEN = "entitycode"
 
@@ -161,6 +161,16 @@ _DOMAIN_NOUNS: frozenset[str] = frozenset(
         "hospital",
         "modality",
         "modalities",
+        # Wards, beds, emergency queue, patient journey
+        "ward",
+        "wards",
+        "bed",
+        "beds",
+        "queue",
+        "journey",
+        "triage",
+        "occupied",
+        "occupancy",
         # Modalities (parser's _MODALITY_WORDS + tool arg descriptions)
         "mri",
         "ct",
@@ -230,6 +240,10 @@ _ACTION_WORDS: frozenset[str] = frozenset(
         "reschedule",
         "move",
         "assign",
+        "release",
+        "admit",
+        "discharge",
+        "clean",
         "remember",
         "forget",
         "check",

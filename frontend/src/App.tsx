@@ -1,24 +1,82 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import "./App.css";
 import { OperationsView } from "./components/OperationsView";
 import { ChatPanel } from "./components/ChatPanel";
 import { TracePanel } from "./components/TracePanel";
 import { CostComparisonPage } from "./components/CostComparisonPage";
 import { StatusLights } from "./components/StatusLights";
+import { WardsPage } from "./components/WardsPage";
+import { EmergencyQueuePage } from "./components/EmergencyQueuePage";
+import { JourneyPage } from "./components/JourneyPage";
 import { useTrace } from "./hooks/useTrace";
 import { useStatus } from "./hooks/useStatus";
 
 // There's no router in this project and this doesn't justify adding one:
-// a single secondary page is a view switch, not a navigation graph.
-// Switching to "cost" does unmount ChatPanel, but sessionId lives here,
-// above the switch, and ChatPanel rehydrates its message list from the
-// sessionStorage cache on the way back — so the round trip is invisible.
-type View = "console" | "cost";
+// a handful of pages is a view switch, not a navigation graph.
+// The chat and trace column sits outside the switch, so it never remounts
+// when the page changes.
+type View = "console" | "wards" | "queue" | "journey" | "cost";
 
-// Top-level layout: hospital operations browsing on the left, chat + trace
-// stacked on the right. Both the chat and trace panels are always visible
-// (no tab/toggle) per the project brief — the trace panel is a learning
-// tool, not an optional debug drawer.
+const icon = (paths: ReactNode) => (
+  <svg
+    className="sidebar-icon"
+    viewBox="0 0 24 24"
+    width="18"
+    height="18"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    {paths}
+  </svg>
+);
+
+const NAV_ITEMS: { view: View; label: string; icon: ReactNode }[] = [
+  {
+    view: "console",
+    label: "Operations",
+    icon: icon(<path d="M3 12h4l3-8 4 16 3-8h4" />),
+  },
+  {
+    view: "wards",
+    label: "Wards",
+    icon: icon(<path d="M3 20V8m18 12v-6a3 3 0 0 0-3-3H3m0 5h18M7 11V9" />),
+  },
+  {
+    view: "queue",
+    label: "Emergency queue",
+    icon: icon(
+      <>
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 7v5l3 2" />
+      </>,
+    ),
+  },
+  {
+    view: "journey",
+    label: "Patient journey",
+    icon: icon(
+      <>
+        <circle cx="5" cy="18" r="2" />
+        <circle cx="19" cy="6" r="2" />
+        <path d="M7 18h4a4 4 0 0 0 4-4v-4a4 4 0 0 1 2-3" />
+      </>,
+    ),
+  },
+  {
+    view: "cost",
+    label: "Cost comparison",
+    icon: icon(<path d="M12 2v20M17 6H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />),
+  },
+];
+
+// Top-level layout: sidebar navigation, the selected page in the middle, chat
+// + trace stacked on the right. Both the chat and trace panels are always
+// visible (no tab/toggle) per the project brief — the trace panel is a
+// learning tool, not an optional debug drawer.
 //
 // Trace data is fetched once here (useTrace) and handed down to both
 // TracePanel and ChatPanel (the latter for its compact in-chat progress
@@ -43,11 +101,6 @@ function App() {
         <div className="app-header-row">
           <h1>Smart Hospital Operations Agent</h1>
           <div className="app-header-actions">
-            {view === "console" && (
-              <button type="button" className="chat-new-button" onClick={() => setView("cost")}>
-                Cost comparison
-              </button>
-            )}
             <StatusLights state={status} />
           </div>
         </div>
@@ -57,14 +110,32 @@ function App() {
           what the backend did to answer each message.
         </p>
       </header>
-      {view === "cost" ? (
-        <main className="app-main app-main-single">
-          <CostComparisonPage onBack={() => setView("console")} />
-        </main>
-      ) : (
+      <div className="app-body">
+        <nav className="sidebar" aria-label="Main navigation">
+          <ul className="sidebar-list">
+            {NAV_ITEMS.map((item) => (
+              <li key={item.view}>
+                <button
+                  type="button"
+                  className={`sidebar-item${view === item.view ? " sidebar-item-active" : ""}`}
+                  aria-current={view === item.view ? "page" : undefined}
+                  title={item.label}
+                  onClick={() => setView(item.view)}
+                >
+                  {item.icon}
+                  <span className="sidebar-label">{item.label}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </nav>
         <main className="app-main">
           <section className="app-column app-column-operations">
-            <OperationsView touchedEntityCodes={touchedEntityCodes} />
+            {view === "console" && <OperationsView touchedEntityCodes={touchedEntityCodes} />}
+            {view === "wards" && <WardsPage touchedEntityCodes={touchedEntityCodes} />}
+            {view === "queue" && <EmergencyQueuePage touchedEntityCodes={touchedEntityCodes} />}
+            {view === "journey" && <JourneyPage touchedEntityCodes={touchedEntityCodes} />}
+            {view === "cost" && <CostComparisonPage onBack={() => setView("console")} />}
           </section>
           <section className="app-column app-column-side">
             <div className="app-column-chat">
@@ -80,7 +151,7 @@ function App() {
             </div>
           </section>
         </main>
-      )}
+      </div>
     </div>
   );
 }

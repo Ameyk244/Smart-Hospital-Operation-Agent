@@ -219,3 +219,10 @@ def test_configure_logging_installs_the_access_filter_once():
 def test_proposal_id_is_kept_only_as_a_number():
     assert redact_arguments({"proposal_id": 7}) == {"proposal_id": 7}
     assert redact_arguments({"proposal_id": "7"}) == {"proposal_id": REDACTED}
+
+
+def test_bed_write_arguments_keep_codes_and_redact_anything_else():
+    kept = redact_arguments({"patient_code": "PT-1029", "bed_code": "BED-2"})
+    assert kept == {"patient_code": "PT-1029", "bed_code": "BED-2"}
+    leaked = redact_arguments({"bed_code": "Mary Brown", "query": "Mary Brown"})
+    assert leaked == {"bed_code": REDACTED, "query": REDACTED}

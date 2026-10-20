@@ -204,7 +204,7 @@ backend "did the parser understand it?" and runs the model loop itself on `agent
 ```
 ╔═ BACKEND ═══════════════════════════════════════════════════════════════╗
 ║ 1. backend/app/agent/harness_bridge.py     "run this turn"              ║
-║      packs: system prompt + chat history + your message + the 8 tools   ║
+║      packs: system prompt + chat history + your message + the 14 tools  ║
 ║      registers this turn in harness_registry.py                         ║
 ╚═════════════════════════════════╤═══════════════════════════════════════╝
                                   │ 2. POST /v1/turns   (+ secret token)
@@ -213,7 +213,7 @@ backend "did the parser understand it?" and runs the model loop itself on `agent
 ║ 3. gateway.ts       token ok? body size ok? fewer than 4 turns running? ║
 ║ 4. agent-driver.ts  builds a fresh dsh agent for this one turn          ║
 ║    seed.ts          loads the chat history into it                      ║
-║    tool-proxy.ts    gives it a stand-in for each of the 8 tools         ║
+║    tool-proxy.ts    gives it a stand-in for each of the 14 tools        ║
 ╚═════════════════════════════════╤═══════════════════════════════════════╝
                                   │ 5. dsh loop sends the conversation
                                   ▼
@@ -332,7 +332,7 @@ seven example JSON files that both repos keep identical are in
 |---|---|---|
 | Parser first, then gates, then Jev, then agent | backend | `chat.py` |
 | Tool-call cap (10), invalid-call cap (3), 15 s per tool, argument validation, grounding | **backend**, for both runtimes | `turn.py` |
-| Only `reschedule_appointment` writes hospital data, and every write is audited | backend | `agent/tools/`, `CommandRunner` |
+| Only `reschedule_appointment`, `assign_bed`, `release_bed` and `mark_bed_clean` write hospital data, and every write is audited | backend | `agent/tools/`, `CommandRunner` |
 | Round limit (6) and the whole-turn deadline | gateway | `agent-driver.ts` |
 | The backend's stop reason beats any harness stop reason | backend | `harness_bridge.py` |
 | Token checked first, in constant time, before the body is read | both | `internal_harness.py`, `gateway.ts` |

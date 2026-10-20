@@ -7,7 +7,7 @@ dict at each route.
 """
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -50,4 +50,24 @@ class PendingConfirmation(BaseModel):
             appointment_code=arguments["appointment_code"],
             scanner_code=arguments["scanner_code"],
             new_start=arguments.get("new_start"),
+        )
+
+
+class PendingBedAction(BaseModel):
+    """An assign_bed / release_bed the agent proposed and the user has not yet
+    confirmed or cancelled (`bed_action_proposed` event)."""
+
+    proposal_id: int
+    action: Literal["assign_bed", "release_bed"]
+    bed_code: str
+    patient_code: str | None
+
+    @classmethod
+    def from_event(cls, event: AgentEvent) -> "PendingBedAction":
+        arguments = event.arguments_json
+        return cls(
+            proposal_id=event.id,
+            action=event.tool_name,
+            bed_code=arguments["bed_code"],
+            patient_code=arguments.get("patient_code"),
         )

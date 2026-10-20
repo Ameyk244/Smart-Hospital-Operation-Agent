@@ -31,7 +31,9 @@ from app.parser.parser import parse
 
 _KNOWN_COMMAND_EXAMPLES = (
     "list departments | list scanners [mri|ct|xray] [available|in use|maintenance] | "
-    "show patient <name> | show next appointment | list delayed appointments [mri|ct|xray]"
+    "show patient <name> | show next appointment | list delayed appointments [mri|ct|xray] | "
+    "list wards | list beds [available|occupied|cleaning] | show emergency queue | "
+    "show journey <name>"
 )
 
 
@@ -48,15 +50,19 @@ class ExecuteCommandArgs(BaseModel):
 
 
 def _entity_type_of(item: object) -> str | None:
-    """Distinguishes AppointmentOut/PatientOut/ScannerOut dicts by shape —
-    checked in this order specifically, since an appointment dict also
-    contains a nested scanner dict (which would otherwise match the scanner
-    check) and DepartmentOut/StaffOut match neither and correctly return
-    None."""
+    """Distinguishes AppointmentOut/BedOut/QueueEntryOut/PatientOut/ScannerOut
+    dicts by shape — checked in this order specifically, since an appointment
+    dict also contains a nested scanner dict (which would otherwise match the
+    scanner check) and a bed has a status too. DepartmentOut/StaffOut/WardOut
+    match none and correctly return None."""
     if not isinstance(item, dict):
         return None
     if "appointment_type" in item and "patient" in item:
         return "appointment"
+    if "occupied_since" in item and "ward" in item:
+        return "bed"
+    if "urgency" in item and "patient" in item:
+        return "queue_entry"
     if "mrn" in item:
         return "patient"
     if "type" in item and "status" in item:
@@ -72,12 +78,20 @@ async def _expose_grounding_for_result(
     scanner or appointment code discovered through this path would be
     unusable by a later write tool, defeating the point of decomposition."""
     items = data if isinstance(data, list) else ([data] if isinstance(data, dict) else [])
-    grounded: dict[str, list[str]] = {"appointment": [], "scanner": [], "patient": []}
+    grounded: dict[str, list[str]] = {
+        "appointment": [],
+        "scanner": [],
+        "patient": [],
+        "bed": [],
+    }
     for item in items:
         entity_type = _entity_type_of(item)
         if entity_type is None:
             continue
-        grounded[entity_type].append(item["code"])  # type: ignore[index]
+        if entity_type != "queue_entry":  # a queue entry is not itself grounded, only its patient
+            grounded[entity_type].append(item["code"])  # type: ignore[index]
+        if entity_type in ("bed", "queue_entry") and item.get("patient"):  # type: ignore[union-attr]
+            grounded["patient"].append(item["patient"]["code"])  # type: ignore[index]
         if entity_type == "appointment":
             if item.get("scanner"):  # type: ignore[union-attr]
                 grounded["scanner"].append(item["scanner"]["code"])  # type: ignore[index]

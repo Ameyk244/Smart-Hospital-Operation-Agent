@@ -1,0 +1,172 @@
+import { useEffect, useRef, useState } from "react";
+import type { FormEvent } from "react";
+import { api } from "../api/client";
+import { useRowHighlight } from "../hooks/useRowHighlight";
+import type { Journey, Patient } from "../api/types";
+import "./pages.css";
+
+interface JourneyPageProps {
+  touchedEntityCodes: string[];
+}
+
+export function JourneyPage({ touchedEntityCodes }: JourneyPageProps) {
+  const [query, setQuery] = useState("");
+  const [patients, setPatients] = useState<Patient[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [journey, setJourney] = useState<Journey | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const latestRequest = useRef(0);
+  const selectedRef = useRef<string | null>(null);
+
+  // A chat-driven change may have moved the selected patient's journey.
+  useEffect(() => {
+    if (selectedRef.current) choose(selectedRef.current, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [touchedEntityCodes]);
+
+  const appointments = journey?.appointments ?? [];
+  const { rowRef } = useRowHighlight(appointments, (a) => a.code, touchedEntityCodes);
+
+  function search(e: FormEvent) {
+    e.preventDefault();
+    const q = query.trim();
+    if (!q) return;
+    setSearching(true);
+    setError(null);
+    api
+      .searchPatients(q)
+      .then(setPatients)
+      .catch((err) => setError(String(err)))
+      .finally(() => setSearching(false));
+  }
+
+  function choose(code: string, quiet = false) {
+    const id = ++latestRequest.current;
+    selectedRef.current = code;
+    setSelected(code);
+    if (!quiet) setLoading(true);
+    setError(null);
+    api
+      .getJourney(code)
+      .then((j) => {
+        if (id === latestRequest.current) setJourney(j);
+      })
+      .catch((err) => {
+        if (id !== latestRequest.current) return;
+        setJourney(null);
+        setError(String(err));
+      })
+      .finally(() => {
+        if (id === latestRequest.current) setLoading(false);
+      });
+  }
+
+  return (
+    <section className="panel-section">
+      <h3>Patient journey</h3>
+      <form className="filter-row" onSubmit={search}>
+        <label>
+          Patient name
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search patients"
+          />
+        </label>
+        <button type="submit" disabled={searching || !query.trim()}>
+          Search
+        </button>
+      </form>
+      {searching && <p className="muted">Searching…</p>}
+      {error && <p className="error">{error}</p>}
+      {patients && patients.length === 0 && !searching && (
+        <p className="muted">No patients match this search.</p>
+      )}
+      {patients && patients.length > 0 && (
+        <ul className="pg-search-results">
+          {patients.map((p) => (
+            <li key={p.code}>
+              <button type="button" aria-pressed={p.code === selected} onClick={() => choose(p.code)}>
+                {p.name} ({p.code})
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {!selected && !patients && <p className="muted pg-empty">Search for a patient to see their journey.</p>}
+      {loading && <p className="muted">Loading…</p>}
+      {journey && !loading && (
+        <>
+          <h4>
+            {journey.patient.name} ({journey.patient.code})
+          </h4>
+          {journey.stages.length === 0 ? (
+            <p className="muted">No emergency visit for this patient.</p>
+          ) : (
+          <ol className="pg-stepper" aria-label="Journey stages">
+            {journey.stages.map((s) => {
+              const classes = ["pg-step"];
+              if (s.reached) classes.push("pg-step-done");
+              if (s.stage === journey.current_stage) classes.push("pg-step-current");
+              return (
+                <li
+                  key={s.stage}
+                  className={classes.join(" ")}
+                  aria-current={s.stage === journey.current_stage ? "step" : undefined}
+                >
+                  <span className="pg-step-name">{s.stage}</span>
+                  <span className="pg-step-time">
+                    {!s.reached ? "Not reached" : s.at ? new Date(s.at).toLocaleString() : "—"}
+                  </span>
+                  {s.detail && <span className="pg-step-detail">{s.detail}</span>}
+                </li>
+              );
+            })}
+          </ol>
+          )}
+          <h4>Appointments</h4>
+          <div className="pg-table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Code</th>
+                  <th>Type</th>
+                  <th>Start</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {appointments.map((a) => (
+                  <tr
+                    key={a.code}
+                    ref={rowRef(a.code)}
+                    className={touchedEntityCodes.includes(a.code) ? "row-touched" : undefined}
+                  >
+                    <td>{a.code}</td>
+                    <td>{a.appointment_type}</td>
+                    <td>{new Date(a.scheduled_start).toLocaleString()}</td>
+                    <td>
+                      <span className={`status-badge status-${a.status.toLowerCase()}`}>
+                        {a.status}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+                {appointments.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="muted">
+                      No appointments for this patient.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}

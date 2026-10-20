@@ -18,7 +18,7 @@ from app.agent.grounding import GroundingRegistry
 from app.agent.tools.base import ToolExecutionError, ToolSpec, register_tool
 from app.config import get_settings
 from app.db.models.agent import EventStatus
-from app.db.repositories.event_repository import RESCHEDULE_PROPOSED
+from app.db.repositories.event_repository import BED_ACTION_PROPOSED, RESCHEDULE_PROPOSED
 from app.execution.commands import Command, CommandRunner
 from app.observability.tracing import record_event
 
@@ -101,6 +101,138 @@ RESCHEDULE_APPOINTMENT_TOOL = register_tool(
         ),
         args_schema=RescheduleAppointmentArgs,
         handler=handle_reschedule_appointment,
+        is_write=True,
+    )
+)
+
+
+class AssignBedArgs(BaseModel):
+    patient_code: str = Field(
+        ..., description="A patient code previously returned by search_queue"
+    )
+    bed_code: str = Field(
+        ..., description="A bed code previously returned by search_beds, currently AVAILABLE"
+    )
+
+
+async def _propose_bed_action(
+    session: AsyncSession, session_id: str, tool_name: str, command_args: dict[str, str]
+) -> dict:
+    proposal = await record_event(
+        session,
+        session_id=session_id,
+        round_num=0,
+        event_type=BED_ACTION_PROPOSED,
+        status=EventStatus.SUCCESS,
+        tool_name=tool_name,
+        arguments=command_args,
+    )
+    return {
+        "status": "pending_confirmation",
+        "proposal_id": proposal.id,
+        "message": (
+            "The bed has NOT been changed. The user must press Confirm in the app "
+            "to apply this; do not tell them it was done."
+        ),
+    }
+
+
+async def handle_assign_bed(session: AsyncSession, session_id: str, args: AssignBedArgs) -> dict:
+    grounding = GroundingRegistry(session)
+    await grounding.require_grounded(session_id, "patient", args.patient_code)
+    await grounding.require_grounded(session_id, "bed", args.bed_code)
+
+    command_args = {"patient_code": args.patient_code, "bed_code": args.bed_code}
+    if get_settings().require_bed_confirmation:
+        return await _propose_bed_action(session, session_id, "assign_bed", command_args)
+
+    result = await CommandRunner(session, actor=f"agent_session:{session_id}").execute(
+        Command("assign_bed", command_args)
+    )
+    if not result.success:
+        raise ToolExecutionError(result.error or "assign_bed failed", result.error_category or "tool_error")
+    return result.data
+
+
+ASSIGN_BED_TOOL = register_tool(
+    ToolSpec(
+        name="assign_bed",
+        description=(
+            "Admit a waiting emergency patient to an available bed. patient_code and "
+            "bed_code MUST come from a prior search_queue / search_beds result in this "
+            "conversation — inventing a code will be rejected. The patient must have a "
+            "WAITING queue entry and no bed; the bed must be AVAILABLE."
+        ),
+        args_schema=AssignBedArgs,
+        handler=handle_assign_bed,
+        is_write=True,
+    )
+)
+
+
+class ReleaseBedArgs(BaseModel):
+    bed_code: str = Field(..., description="A bed code previously returned by search_beds")
+
+
+async def handle_release_bed(session: AsyncSession, session_id: str, args: ReleaseBedArgs) -> dict:
+    await GroundingRegistry(session).require_grounded(session_id, "bed", args.bed_code)
+
+    command_args = {"bed_code": args.bed_code}
+    if get_settings().require_bed_confirmation:
+        return await _propose_bed_action(session, session_id, "release_bed", command_args)
+
+    result = await CommandRunner(session, actor=f"agent_session:{session_id}").execute(
+        Command("release_bed", command_args)
+    )
+    if not result.success:
+        raise ToolExecutionError(result.error or "release_bed failed", result.error_category or "tool_error")
+    return result.data
+
+
+RELEASE_BED_TOOL = register_tool(
+    ToolSpec(
+        name="release_bed",
+        description=(
+            "Discharge the patient in an occupied bed and mark the bed for cleaning. "
+            "bed_code MUST come from a prior search_beds result in this conversation — "
+            "inventing a code will be rejected. The bed must be OCCUPIED."
+        ),
+        args_schema=ReleaseBedArgs,
+        handler=handle_release_bed,
+        is_write=True,
+    )
+)
+
+
+class MarkBedCleanArgs(BaseModel):
+    bed_code: str = Field(..., description="A bed code previously returned by search_beds")
+
+
+async def handle_mark_bed_clean(
+    session: AsyncSession, session_id: str, args: MarkBedCleanArgs
+) -> dict:
+    await GroundingRegistry(session).require_grounded(session_id, "bed", args.bed_code)
+
+    result = await CommandRunner(session, actor=f"agent_session:{session_id}").execute(
+        Command("mark_bed_clean", {"bed_code": args.bed_code})
+    )
+    if not result.success:
+        raise ToolExecutionError(
+            result.error or "mark_bed_clean failed", result.error_category or "tool_error"
+        )
+    return result.data
+
+
+MARK_BED_CLEAN_TOOL = register_tool(
+    ToolSpec(
+        name="mark_bed_clean",
+        description=(
+            "Mark a bed whose cleaning is finished as available again. bed_code MUST "
+            "come from a prior search_beds result in this conversation — inventing a "
+            "code will be rejected. The bed must be in CLEANING status."
+        ),
+        args_schema=MarkBedCleanArgs,
+        handler=handle_mark_bed_clean,
         is_write=True,
     )
 )

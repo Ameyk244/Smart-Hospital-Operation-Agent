@@ -135,12 +135,17 @@ EXECUTABLE_COMMANDS: frozenset[str] = frozenset(
         "list_scanners",
         "show_next_appointment",
         "list_delayed_appointments",
+        "list_wards",
     }
 )
 
-# Recognized so Jev has a correct place to put patient-name searches, but
-# never executed by this path.
-RECOGNIZED_BUT_UNSUPPORTED: frozenset[str] = frozenset({"search_patients"})
+# Recognized so Jev has a correct place to put patient-name searches and the
+# filterable bed/queue questions (it has no filter questions for those, so
+# executing them would silently drop "free" / "critical"), but never executed
+# by this path.
+RECOGNIZED_BUT_UNSUPPORTED: frozenset[str] = frozenset(
+    {"search_patients", "patient_journey", "list_beds", "list_emergency_queue"}
+)
 
 _COMMAND_INSTRUCTIONS = (
     "You are routing a message sent to a hospital operations assistant. "
@@ -172,8 +177,26 @@ _COMMAND_CRITERIA: dict[str, str] = {
         "or how many are delayed, optionally narrowed by modality "
         "(MRI, CT, X-ray)."
     ),
+    "list_wards": (
+        "The message asks what wards the hospital has, or to list or show the "
+        "wards and how full they are."
+    ),
+    "list_beds": (
+        "The message asks which hospital beds exist or are free, occupied or "
+        "being cleaned, or to list or show the beds. Recognized only: never "
+        "executed here, because the status/ward filter would be lost."
+    ),
+    "list_emergency_queue": (
+        "The message asks who is waiting in the emergency room or emergency "
+        "queue, or to list or show that queue. Recognized only: never "
+        "executed here, because the urgency filter would be lost."
+    ),
     "search_patients": (
         "The message asks to look up, find or show a patient by name."
+    ),
+    "patient_journey": (
+        "The message asks where a named patient is in their emergency visit, or "
+        "to show a patient's journey, from arrival to discharge."
     ),
     NONE_CHOICE: (
         "The message does not map cleanly to any single command above. This "
@@ -234,13 +257,14 @@ _SCOPE_INSTRUCTIONS = (
     "You are screening a message sent to the assistant of a hospital operations "
     "application. Decide whether the assistant should handle it. In scope: the "
     "application's data and actions (appointments, scanners, imaging modalities, "
-    "patients, departments, staff, delays, saved preferences); questions about how "
+    "patients, departments, staff, delays, saved preferences, wards, beds, the "
+    "emergency queue, patient journeys); questions about how "
     "the application and its features work or how to use it; short explanations of "
     "the hospital-operations concepts it deals with (what an MRI or CT scanner is, "
     "what an appointment status means); greetings and thanks. The application has: "
     "a command parser, a Jev fast path, an AI agent, grounding (an entity code must "
     "appear in a search result before it can be used), a trace panel, status lights, "
-    "a Confirm / Cancel card for proposed reschedules, a cost comparison page, voice "
+    "a Confirm / Cancel card for proposed reschedules and bed changes, a cost comparison page, voice "
     "input and saved preferences; questions about any of these are in scope. A "
     "message may be a short follow-up that only makes sense after the assistant's "
     "previous reply: judge it together with that reply. A person's name or an entity "

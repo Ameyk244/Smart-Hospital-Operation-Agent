@@ -18,6 +18,7 @@ import pytest
 
 from app.agent.jev_fast_path import (
     EXECUTABLE_COMMANDS,
+    RECOGNIZED_BUT_UNSUPPORTED,
     NONE_CHOICE,
     try_jev_fast_path,
 )
@@ -83,13 +84,14 @@ async def test_every_criteria_label_is_executable_or_deliberately_not(
     """Guards the module's core invariant: Jev is only ever offered labels we
     can account for. Anything new in `criteria` must be either executable by
     CommandRunner, the explicit none-option, or the documented
-    recognized-but-unsupported `search_patients`."""
+    recognized-but-unsupported lookups (`search_patients`, `patient_journey`,
+    and the filterable `list_beds` / `list_emergency_queue`)."""
     fake_typesafe.behavior = jev_response("list_departments")
 
     await try_jev_fast_path("anything", jev_settings())
 
     labels = set(fake_typesafe.calls[0]["questions"]["command"].criteria)
-    assert labels == EXECUTABLE_COMMANDS | {NONE_CHOICE, "search_patients"}
+    assert labels == EXECUTABLE_COMMANDS | RECOGNIZED_BUT_UNSUPPORTED | {NONE_CHOICE}
 
 
 @pytest.mark.adversarial
@@ -107,9 +109,18 @@ def test_the_fast_path_can_only_ever_execute_read_commands():
         "search_patients",
         "show_next_appointment",
         "list_delayed_appointments",
+        "list_wards",
+        "list_beds",
+        "list_emergency_queue",
+        "patient_journey",
     }
     assert EXECUTABLE_COMMANDS <= parser_read_commands
-    assert "reassign_scanner" not in EXECUTABLE_COMMANDS
+    assert not {"reassign_scanner", "assign_bed", "release_bed"} & EXECUTABLE_COMMANDS
+    assert "patient_journey" not in EXECUTABLE_COMMANDS
+    # Jev has no filter questions for these, so executing them would drop "free"/"critical".
+    assert not {"list_beds", "list_emergency_queue"} & EXECUTABLE_COMMANDS
+    assert {"list_beds", "list_emergency_queue"} <= RECOGNIZED_BUT_UNSUPPORTED
+    assert "list_wards" in EXECUTABLE_COMMANDS
 
 
 async def test_an_explicit_none_option_is_always_offered(

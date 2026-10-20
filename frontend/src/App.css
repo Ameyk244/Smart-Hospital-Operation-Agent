@@ -6,45 +6,140 @@
 }
 
 .app-header {
-  padding: 16px 24px;
+  padding: var(--space-3) var(--space-5);
   border-bottom: 1px solid var(--border);
   background: var(--panel-bg);
+  box-shadow: var(--shadow);
 }
 
 .app-header h1 {
-  font-size: 20px;
+  font-size: 18px;
+  margin-bottom: var(--space-1);
+}
+
+.app-header p {
+  margin: 0;
+}
+
+.app-body {
+  flex: 1;
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+}
+
+/* --- Sidebar --- */
+
+.sidebar {
+  flex: 0 0 208px;
+  padding: var(--space-4) var(--space-3);
+  border-right: 1px solid var(--border);
+  background: var(--panel-bg);
+}
+
+.sidebar-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  position: sticky;
+  top: var(--space-4);
+}
+
+.sidebar-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid transparent;
+  border-radius: calc(var(--radius) - 2px);
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  text-align: left;
+}
+
+.sidebar-item:hover:not(:disabled) {
+  background: var(--code-bg);
+  border-color: transparent;
+  color: var(--text-h);
+}
+
+.sidebar-item-active,
+.sidebar-item-active:hover:not(:disabled) {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+  color: var(--text-h);
+  font-weight: 600;
+}
+
+.sidebar-item-active .sidebar-icon {
+  color: var(--accent);
+}
+
+.sidebar-icon {
+  flex: none;
+}
+
+/* Narrow screens: icons only; the label stays in the DOM (and in the button's
+   title) so the item keeps its accessible name. */
+@media (max-width: 900px) {
+  .sidebar {
+    flex-basis: 56px;
+    padding: var(--space-3) var(--space-2);
+  }
+
+  .sidebar-item {
+    justify-content: center;
+    padding: var(--space-2);
+  }
+
+  .sidebar-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
 }
 
 .app-main {
   flex: 1;
+  min-width: 0;
   display: grid;
   grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
-  gap: 16px;
-  padding: 16px 24px;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
   align-items: start;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1100px) {
   .app-main {
     grid-template-columns: 1fr;
+    padding: var(--space-4);
   }
 }
 
 .app-column-operations {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--space-4);
+  min-width: 0;
 }
 
 .app-column-side {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--space-4);
   position: sticky;
-  top: 16px;
+  top: var(--space-4);
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1100px) {
   .app-column-side {
     position: static;
   }
@@ -54,8 +149,9 @@
 .app-column-trace {
   background: var(--panel-bg);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 16px;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: var(--space-4);
   display: flex;
   flex-direction: column;
   max-height: 60vh;
@@ -70,50 +166,66 @@
 .operations-view {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--space-4);
 }
 
 .panel-section {
   background: var(--panel-bg);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 16px;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: var(--space-4);
 }
 
 .filter-row {
   display: flex;
-  gap: 12px;
+  gap: var(--space-3);
   flex-wrap: wrap;
   align-items: flex-end;
-  margin-bottom: 12px;
+  margin-bottom: var(--space-3);
 }
 
 .filter-row label {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
   font-size: 12px;
+  font-weight: 500;
   color: var(--muted);
 }
 
 .filter-row input,
 .filter-row select {
-  padding: 6px 8px;
+  padding: 6px 10px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 6px;
   background: var(--bg);
   color: var(--text-h);
   min-width: 140px;
+}
+
+.filter-row input:focus,
+.filter-row select:focus,
+.chat-input-row input:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-bg);
 }
 
 .filter-row button,
 .preset-button {
   padding: 6px 12px;
   border: 1px solid var(--accent-border);
-  border-radius: 4px;
+  border-radius: 6px;
   background: var(--accent-bg);
   color: var(--text-h);
   height: 30px;
+}
+
+.filter-row button:hover:not(:disabled),
+.preset-button:hover:not(:disabled),
+.chat-input-row button:hover:not(:disabled) {
+  border-color: var(--accent);
 }
 
 .filter-row button:disabled {
@@ -129,8 +241,25 @@
 .data-table th,
 .data-table td {
   text-align: left;
-  padding: 6px 8px;
+  padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--border);
+}
+
+.data-table thead th {
+  background: var(--code-bg);
+}
+
+.data-table tbody tr {
+  transition: background-color 0.15s;
+}
+
+.data-table tbody tr:hover {
+  background: var(--accent-bg);
+}
+
+.data-table tbody tr:last-child td,
+.data-table tbody tr:last-child th {
+  border-bottom: none;
 }
 
 .data-table th {
@@ -143,7 +272,7 @@
 
 .status-badge {
   display: inline-block;
-  padding: 2px 8px;
+  padding: 2px 10px;
   border-radius: 999px;
   font-size: 11px;
   font-weight: 600;
@@ -154,14 +283,14 @@
 .status-available,
 .status-scheduled,
 .status-completed {
-  background: rgba(34, 168, 92, 0.14);
-  color: #1c7a45;
+  background: var(--ok-bg);
+  color: var(--ok);
 }
 
 .status-delayed,
 .status-maintenance {
-  background: rgba(217, 119, 6, 0.14);
-  color: #b45309;
+  background: var(--warn-bg);
+  color: var(--warn);
 }
 
 .status-cancelled,
@@ -208,21 +337,6 @@
   }
 }
 
-@media (prefers-color-scheme: dark) {
-  .status-available,
-  .status-scheduled,
-  .status-completed {
-    color: #6fd99a;
-  }
-  .status-delayed,
-  .status-maintenance {
-    color: #f2b366;
-  }
-  .status-cancelled,
-  .status-in_use {
-    color: #ff8983;
-  }
-}
 
 /* --- Chat panel --- */
 
@@ -244,7 +358,7 @@
   padding: 4px 10px;
   font-size: 12px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 6px;
   background: var(--code-bg);
   color: var(--text-h);
   cursor: pointer;
@@ -308,8 +422,9 @@
 .chat-message {
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 8px 10px;
+  padding: 8px 12px;
   font-size: 13px;
+  line-height: 1.45;
 }
 
 .chat-message-user {
@@ -515,9 +630,9 @@
 
 .chat-input-row input {
   flex: 1;
-  padding: 8px 10px;
+  padding: 8px 12px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 6px;
   background: var(--bg);
   color: var(--text-h);
 }
@@ -525,7 +640,7 @@
 .chat-input-row button {
   padding: 8px 16px;
   border: 1px solid var(--accent-border);
-  border-radius: 4px;
+  border-radius: 6px;
   background: var(--accent-bg);
   color: var(--text-h);
 }
@@ -731,14 +846,10 @@
   white-space: nowrap;
 }
 
-.app-main-single {
-  display: block;
-}
-
 .cost-page {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--space-4);
   max-width: 760px;
 }
 

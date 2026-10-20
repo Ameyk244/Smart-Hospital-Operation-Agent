@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from app.execution.commands import Command
 
 _MODALITY_WORDS = {"mri", "ct", "xray"}
+_BED_STATUS_WORDS = {"available": "AVAILABLE", "occupied": "OCCUPIED", "cleaning": "CLEANING"}
 _STATUS_WORDS = {
     "available": "AVAILABLE",
     "in use": "IN_USE",
@@ -61,6 +62,26 @@ def _build_list_scanners(match: re.Match) -> Command:
     return Command("list_scanners", args)
 
 
+def _build_list_wards(_match: re.Match) -> Command:
+    return Command("list_wards")
+
+
+def _build_list_beds(match: re.Match) -> Command:
+    tail = (match.group("tail") or "").strip().lower()
+    for word, status in _BED_STATUS_WORDS.items():
+        if word in tail:
+            return Command("list_beds", {"status": status})
+    return Command("list_beds")
+
+
+def _build_list_emergency_queue(_match: re.Match) -> Command:
+    return Command("list_emergency_queue")
+
+
+def _build_patient_journey(match: re.Match) -> Command:
+    return Command("patient_journey", {"query": match.group("name").strip()})
+
+
 def _build_search_patients(match: re.Match) -> Command:
     return Command("search_patients", {"query": match.group("name").strip()})
 
@@ -91,6 +112,7 @@ _STATUS_TAIL = r"(?:available|in[\s-]use|maintenance)"
 # no filter, so allowing it cannot change what is returned.
 _SCANNER_TAIL = rf"(?:\s+(?:{_MODALITY_TAIL}|{_STATUS_TAIL}|that|are))*"
 _APPOINTMENT_TAIL = rf"(?:\s+{_MODALITY_TAIL})*"
+_BED_TAIL = r"(?:\s+(?:available|occupied|cleaning))?"
 
 # Order matters: first match wins, so more specific patterns come first.
 _GRAMMAR: list[tuple[re.Pattern, Callable[[re.Match], Command]]] = [
@@ -98,6 +120,18 @@ _GRAMMAR: list[tuple[re.Pattern, Callable[[re.Match], Command]]] = [
     (
         re.compile(rf"^list\s+scanners(?P<tail>{_SCANNER_TAIL})$", re.IGNORECASE),
         _build_list_scanners,
+    ),
+    (re.compile(r"^list\s+wards$", re.IGNORECASE), _build_list_wards),
+    (re.compile(rf"^list\s+beds(?P<tail>{_BED_TAIL})$", re.IGNORECASE), _build_list_beds),
+    (
+        re.compile(r"^(?:show|list)\s+emergency\s+queue$", re.IGNORECASE),
+        _build_list_emergency_queue,
+    ),
+    # Before "show patient <name>", or "show patient journey X" would search for
+    # a patient named "journey X".
+    (
+        re.compile(r"^show\s+(?:patient\s+)?journey\s+(?P<name>.+)$", re.IGNORECASE),
+        _build_patient_journey,
     ),
     (
         re.compile(r"^show\s+patient\s+(?P<name>.+)$", re.IGNORECASE),

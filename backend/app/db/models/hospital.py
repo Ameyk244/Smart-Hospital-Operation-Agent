@@ -18,7 +18,7 @@ from datetime import date, datetime
 from sqlalchemy import Date, DateTime, Enum, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base
+from app.db.base import Base, utcnow
 
 
 class ScannerType(str, enum.Enum):
@@ -38,6 +38,25 @@ class AppointmentStatus(str, enum.Enum):
     DELAYED = "DELAYED"
     COMPLETED = "COMPLETED"
     CANCELLED = "CANCELLED"
+
+
+class BedStatus(str, enum.Enum):
+    AVAILABLE = "AVAILABLE"
+    OCCUPIED = "OCCUPIED"
+    CLEANING = "CLEANING"
+
+
+# Declaration order is severity order: Postgres sorts enums by it.
+class QueueUrgency(str, enum.Enum):
+    CRITICAL = "CRITICAL"
+    URGENT = "URGENT"
+    STANDARD = "STANDARD"
+
+
+class QueueStatus(str, enum.Enum):
+    WAITING = "WAITING"
+    ADMITTED = "ADMITTED"
+    DISCHARGED = "DISCHARGED"
 
 
 class Department(Base):
@@ -126,3 +145,65 @@ class Appointment(Base):
     department: Mapped["Department"] = relationship(back_populates="appointments")
     scanner: Mapped["Scanner | None"] = relationship(back_populates="appointments")
     staff: Mapped["Staff | None"] = relationship(back_populates="appointments")
+
+
+class Ward(Base):
+    __tablename__ = "wards"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"))
+
+    department: Mapped["Department"] = relationship()
+    beds: Mapped[list["Bed"]] = relationship(back_populates="ward")
+
+    @property
+    def bed_count(self) -> int:
+        return len(self.beds)
+
+    @property
+    def occupied_count(self) -> int:
+        return sum(b.status == BedStatus.OCCUPIED for b in self.beds)
+
+
+class Bed(Base):
+    __tablename__ = "beds"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    ward_id: Mapped[int] = mapped_column(ForeignKey("wards.id"))
+    status: Mapped[BedStatus] = mapped_column(
+        Enum(BedStatus, name="bed_status"), default=BedStatus.AVAILABLE
+    )
+    patient_id: Mapped[int | None] = mapped_column(ForeignKey("patients.id"), nullable=True)
+    occupied_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    ward: Mapped["Ward"] = relationship(back_populates="beds")
+    patient: Mapped["Patient | None"] = relationship()
+
+
+class QueueEntry(Base):
+    __tablename__ = "queue_entries"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id"))
+    urgency: Mapped[QueueUrgency] = mapped_column(Enum(QueueUrgency, name="queue_urgency"))
+    status: Mapped[QueueStatus] = mapped_column(
+        Enum(QueueStatus, name="queue_status"), default=QueueStatus.WAITING
+    )
+    arrived_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    triaged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    bed_id: Mapped[int | None] = mapped_column(ForeignKey("beds.id"), nullable=True)
+    discharged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    patient: Mapped["Patient"] = relationship()
+    bed: Mapped["Bed | None"] = relationship()
+
+    @property
+    def wait_minutes(self) -> int:
+        """Minutes waited so far; 0 once the patient is admitted or discharged."""
+        if self.status != QueueStatus.WAITING:
+            return 0
+        return int((utcnow() - self.arrived_at).total_seconds() // 60)

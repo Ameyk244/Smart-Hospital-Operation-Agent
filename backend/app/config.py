@@ -153,6 +153,9 @@ class Settings(BaseSettings):
     # moves it immediately, as before.
     require_reschedule_confirmation: bool = False
 
+    # Same for the agent's assign_bed / release_bed (docs/EXPANSION.md 7a).
+    require_bed_confirmation: bool = False
+
     # --- Observability (see observability/README.md) ---
     # Off by default so a fresh clone and the test suite never try to export.
     # Turn on in .env when the local grafana/otel-lgtm stack is running.

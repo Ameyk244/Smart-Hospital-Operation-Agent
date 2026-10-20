@@ -1584,3 +1584,119 @@ A free-tier provider's 5xx (`LlmError SERVER`) failed a whole turn on the first 
 gateway's `llm-retry` row now retries `TRANSPORT` and `SERVER` codes on the same model
 before the backend's one-time fallback model is considered. Two gateway e2e tests cover
 a single 5xx (recovers on the primary) and a double 5xx (falls back).
+
+## Hospital expansion (branch `hospital-expansion`)
+
+Three modules next to the existing operations view: wards and beds, the emergency
+queue, and a patient journey. Design, schema and the HTTP contract are in
+`docs/EXPANSION.md`. The agent stays one global agent; nothing depends on the page the
+user is on.
+
+Built, by three scoped subagents (backend; new pages; sidebar and visual refresh) and
+reviewed against their scopes before anything was committed:
+
+- **Backend.** Tables `wards`, `beds`, `queue_entries` (migration written by hand,
+  additive, with a downgrade). Reads `list_wards`, `list_beds`,
+  `list_emergency_queue`, `patient_journey`; writes `assign_bed` and `release_bed`, both
+  audited and grounded. Parser grammar, gate vocabulary, redaction allowlist, tools
+  (`search_beds`, `search_queue`, `get_patient_journey`, `assign_bed`, `release_bed`)
+  and four read-only routes under `/api/operations`. Jev may name the three new list
+  commands only; `patient_journey` is recognised but never executed.
+- **Frontend.** Wards, Emergency queue and Journey pages, a left sidebar over the
+  existing `view` switch (no router), and a refresh of the tokens, panels, tables and
+  badges. Chat and trace stay on the right on every page.
+- **Invariant changed.** `reschedule_appointment` is no longer the only mutating tool;
+  CLAUDE.md and `rulebook.md` say so.
+
+Checks so far: frontend build, lint and 58 tests pass; 526 backend unit tests pass; the
+24 new database-backed tests pass; a targeted run of the existing e2e operations, command,
+repository, tool, audit, trace-redaction and reschedule-confirmation files passes
+(64 tests, 4m34s), so the change breaks none of them.
+
+Not built: confirmation for the bed writes, Jev measurement on a labelled message set
+(needs a live run), writes from the UI, a journey events table.
+
+Process notes:
+
+- The first edits were made on `master` before the branch existed. Nothing had been
+  committed, so `master` was untouched; the branch was created with the working tree
+  intact.
+- The backend suite's DB-backed tests are slow (about 4 s each; the first test of an
+  e2e file can stall for minutes). A full run reached 9% in ~15 minutes with no
+  failures and was stopped; the targeted run covers the files the change can affect.
+  One e2e test (`test_list_departments`) fails with an event-loop error when it is the
+  first test of a process; the agent reproduced it with the change reverted.
+- A broad `taskkill` of `python3.11.exe` ended the stopped suite and possibly other
+  Python 3.11 processes. Match the exact PID next time.
+
+### Expansion: review fixes, bed confirmation and live check
+
+A code review of the branch found ten issues; seven were fixed and tested (row locks on
+`assign_bed`/`release_bed`, a categorised error instead of an uncaught one, a `reached`
+flag on journey stages, Jev narrowed to `list_wards` because it has no filter questions
+for beds or the queue, `wait_minutes` counting only while waiting, the 50-appointment cut,
+a fuller audit record) plus two UI fixes (stale journey responses, wait display).
+Remaining by design: `assign_bed` does not require triage.
+
+Opt-in `REQUIRE_BED_CONFIRMATION` (default off) mirrors the reschedule confirmation: a
+proposal event, `pending_bed_actions` on the chat response, three session routes and a
+confirmation card in the chat. No schema change. Backend 40 integration tests (8 new) and
+frontend 67 tests pass.
+
+Migration `a4c1e7b92d35` was applied to the dev database by the owner (the permission
+classifier blocked it from the agent session); only the new rows were inserted, not the
+full seed, so existing data is untouched.
+
+Live check against the dev database: all 14 exact-grammar messages (every new command
+and the existing ones) were answered by the parser without a model call; off-topic
+messages were rejected by the domain gate. Found and fixed: the new commands replied
+"OK - ran list_wards." instead of a summary. Found, not ours: with `LLM_PROVIDER=anthropic`
+and a rejected key, any message reaching the agent (including the bare word "bed") returns
+a raw HTTP 500 rather than a friendly error.
+
+### Jev scope verdict: measured on the new vocabulary
+
+The wording change that names wards, beds, the emergency queue and the bed Confirm/Cancel
+card in the scope prompt was measured, as CLAUDE.md requires. Set: 14 hand-labelled
+messages the keyword gate cannot place (8 legitimate follow-ups after a ward, bed, queue or
+proposal reply, 6 off-topic), each with the preceding assistant reply, one `classify_scope`
+call each, current prompt against the previous one, same session.
+
+Result: **13/14 for both prompts.** All 8 legitimate follow-ups were allowed (confidence
+0.95 to 1.0) and 5 of 6 off-topic messages were blocked (1.0). The one miss, "translate this
+to Spanish: good morning", scored 0.49 to 0.51 `not_hospital`, under the 0.9 threshold, so it
+reaches the agent, whose prompt declines it (this predates the change). No regression and no
+measurable gain: the previous reply already carries the context. Limits: 14 messages, one
+run, so it shows the change does not break follow-ups, not a rate. A larger set is needed
+for a rate. No agent requests were used.
+
+### Expansion: detailed run across modes 1, 2 and 3
+
+Scripted checks against the live dev database, with the free OpenRouter model and
+`REQUIRE_BED_CONFIRMATION=true` (startup overrides; `.env` untouched). Model responses
+used: 25 to 42 of the free tier's 50 for the UTC day.
+
+| Check | Mode 1 | Mode 2 | Mode 3 |
+|---|---|---|---|
+| Parser, all commands + case/punctuation/ordering (20) and gate rejections (4) | 26/26 | 26/26 | 26/26 (through the gateway) |
+| Parser near-misses and Jev read-only set (offline) | 15/15 | | |
+| Jev (4 messages) | 3/4 | 3/4 | 3/3 |
+| Agent | 10/10: bed admission proposed (nothing applied), card survives a parser reply, cancel, confirm-after-cancel is 409, `mark_bed_clean` applied | read OK; gateway stopped: lights down, parser still answers, agent says unavailable (4/4) | read OK through the front door |
+
+Finding (not a regression): "when is the next appointment?" is not matched by Jev at the
+0.9 threshold, so it reaches the agent (both runs). The `show_next_appointment` criterion
+predates this work. The live run changed BED-3 to AVAILABLE; it was set back to CLEANING
+(the seed state). Confirm and release were not run live (they would consume a waiting
+patient); both are covered by the 8 and 32 database-backed integration tests.
+
+### Expansion: documentation, mode 3 and merge
+
+README, AGENT.md, JEV.md, `docs/ARCHITECTURE.md`, `docs/HARNESS_EXPLAINED.md`, `SKILLS.md`,
+`rulebook.md`, `docs/EXPANSION.md` and CLAUDE.md now describe the new pages (a left sidebar over
+Operations, Wards, Emergency queue, Patient journey and Cost comparison), the parser commands, the
+agent tools (fourteen, four of which write), Jev's read-only set and opt-in bed confirmation. The
+statement that `reschedule_appointment` is the only hospital write was replaced everywhere.
+
+The app was left running in mode 3 (gateway with the front door on :8891, harness-mode backend on
+:8000, UI on :5173) with the free OpenRouter model and `REQUIRE_BED_CONFIRMATION=true`, as startup
+overrides; `.env` is unchanged. Branch `hospital-expansion` was merged into `master` and pushed.
