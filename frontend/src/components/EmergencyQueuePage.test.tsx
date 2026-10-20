@@ -24,7 +24,18 @@ const ENTRIES: QueueEntry[] = [
     triaged_at: "2026-01-01T10:35:00Z",
     bed: { code: "BED-3", ward: { code: "WRD-1", name: "Ward A" } },
     discharged_at: null,
-    wait_minutes: 5,
+    wait_minutes: 0,
+  },
+  {
+    code: "ER-3",
+    patient: { code: "PAT-3", name: "Grace Hopper" },
+    urgency: "URGENT",
+    status: "WAITING",
+    arrived_at: "2026-01-01T10:20:00Z",
+    triaged_at: null,
+    bed: null,
+    discharged_at: null,
+    wait_minutes: 20,
   },
 ];
 
@@ -36,15 +47,18 @@ function mockFetchReturning(data: unknown) {
 }
 
 describe("EmergencyQueuePage", () => {
-  it("lists CRITICAL entries first and shows wait and bed", async () => {
+  it("lists WAITING by urgency first, then admitted, and shows wait only for WAITING", async () => {
     mockFetchReturning(ENTRIES);
     render(<EmergencyQueuePage touchedEntityCodes={[]} />);
 
     await screen.findByText("ER-1");
     const rows = screen.getAllByRole("row").slice(1);
-    expect(rows[0]).toHaveTextContent("ER-2");
+    expect(rows[0]).toHaveTextContent("ER-3");
     expect(rows[1]).toHaveTextContent("ER-1");
+    expect(rows[2]).toHaveTextContent("ER-2");
     expect(screen.getByText("1h 30m")).toBeInTheDocument();
+    expect(screen.getByText("20 min")).toBeInTheDocument();
+    expect(rows[2].querySelector(".pg-wait")).toHaveTextContent("—");
     expect(screen.getByText("BED-3 (Ward A)")).toBeInTheDocument();
   });
 

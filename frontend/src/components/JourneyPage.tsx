@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { api } from "../api/client";
 import { useRowHighlight } from "../hooks/useRowHighlight";
@@ -17,6 +17,7 @@ export function JourneyPage({ touchedEntityCodes }: JourneyPageProps) {
   const [journey, setJourney] = useState<Journey | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const latestRequest = useRef(0);
 
   const appointments = journey?.appointments ?? [];
   const { rowRef } = useRowHighlight(appointments, (a) => a.code, touchedEntityCodes);
@@ -35,17 +36,23 @@ export function JourneyPage({ touchedEntityCodes }: JourneyPageProps) {
   }
 
   function choose(code: string) {
+    const id = ++latestRequest.current;
     setSelected(code);
     setLoading(true);
     setError(null);
     api
       .getJourney(code)
-      .then(setJourney)
+      .then((j) => {
+        if (id === latestRequest.current) setJourney(j);
+      })
       .catch((err) => {
+        if (id !== latestRequest.current) return;
         setJourney(null);
         setError(String(err));
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (id === latestRequest.current) setLoading(false);
+      });
   }
 
   return (
@@ -91,7 +98,7 @@ export function JourneyPage({ touchedEntityCodes }: JourneyPageProps) {
           <ol className="pg-stepper" aria-label="Journey stages">
             {journey.stages.map((s) => {
               const classes = ["pg-step"];
-              if (s.at) classes.push("pg-step-done");
+              if (s.reached) classes.push("pg-step-done");
               if (s.stage === journey.current_stage) classes.push("pg-step-current");
               return (
                 <li
@@ -101,7 +108,7 @@ export function JourneyPage({ touchedEntityCodes }: JourneyPageProps) {
                 >
                   <span className="pg-step-name">{s.stage}</span>
                   <span className="pg-step-time">
-                    {s.at ? new Date(s.at).toLocaleString() : "Not reached"}
+                    {!s.reached ? "Not reached" : s.at ? new Date(s.at).toLocaleString() : "—"}
                   </span>
                   {s.detail && <span className="pg-step-detail">{s.detail}</span>}
                 </li>

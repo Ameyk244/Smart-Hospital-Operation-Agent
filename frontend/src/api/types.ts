@@ -84,6 +84,7 @@ export type JourneyStageName = "ARRIVED" | "TRIAGED" | "BED_ASSIGNED" | "SCAN" |
 
 export interface JourneyStage {
   stage: JourneyStageName;
+  reached: boolean;
   at: string | null;
   detail: string | null;
 }

@@ -102,8 +102,10 @@ type QueueEntry = { code: string; patient: { code: string; name: string };
                     status: "WAITING" | "ADMITTED" | "DISCHARGED";
                     arrived_at: string; triaged_at: string | null;
                     bed: { code: string; ward: { code: string; name: string } } | null;
-                    discharged_at: string | null; wait_minutes: number };
+                    discharged_at: string | null;
+                    wait_minutes: number };   // minutes waited so far; 0 once admitted
 type JourneyStage = { stage: "ARRIVED" | "TRIAGED" | "BED_ASSIGNED" | "SCAN" | "DISCHARGED";
+                      reached: boolean;   // the UI shows done/not done from this, never from `at`
                       at: string | null; detail: string | null };
 type Journey = { patient: { code: string; name: string };
                  stages: JourneyStage[]; current_stage: string;

@@ -58,8 +58,9 @@ export function EmergencyQueuePage({ touchedEntityCodes }: EmergencyQueuePagePro
     () =>
       [...entries].sort(
         (a, b) =>
+          Number(a.status !== "WAITING") - Number(b.status !== "WAITING") ||
           (URGENCY_RANK[a.urgency] ?? 99) - (URGENCY_RANK[b.urgency] ?? 99) ||
-          b.wait_minutes - a.wait_minutes,
+          (a.status === "WAITING" ? b.wait_minutes - a.wait_minutes : 0),
       ),
     [entries],
   );
@@ -125,7 +126,7 @@ export function EmergencyQueuePage({ touchedEntityCodes }: EmergencyQueuePagePro
                       {e.status}
                     </span>
                   </td>
-                  <td className="pg-wait">{formatWait(e.wait_minutes)}</td>
+                  <td className="pg-wait">{e.status === "WAITING" ? formatWait(e.wait_minutes) : "—"}</td>
                   <td>{e.bed ? `${e.bed.code} (${e.bed.ward.name})` : "—"}</td>
                 </tr>
               ))}
