@@ -1653,3 +1653,19 @@ messages were rejected by the domain gate. Found and fixed: the new commands rep
 "OK - ran list_wards." instead of a summary. Found, not ours: with `LLM_PROVIDER=anthropic`
 and a rejected key, any message reaching the agent (including the bare word "bed") returns
 a raw HTTP 500 rather than a friendly error.
+
+### Jev scope verdict: measured on the new vocabulary
+
+The wording change that names wards, beds, the emergency queue and the bed Confirm/Cancel
+card in the scope prompt was measured, as CLAUDE.md requires. Set: 14 hand-labelled
+messages the keyword gate cannot place (8 legitimate follow-ups after a ward, bed, queue or
+proposal reply, 6 off-topic), each with the preceding assistant reply, one `classify_scope`
+call each, current prompt against the previous one, same session.
+
+Result: **13/14 for both prompts.** All 8 legitimate follow-ups were allowed (confidence
+0.95 to 1.0) and 5 of 6 off-topic messages were blocked (1.0). The one miss, "translate this
+to Spanish: good morning", scored 0.49 to 0.51 `not_hospital`, under the 0.9 threshold, so it
+reaches the agent, whose prompt declines it (this predates the change). No regression and no
+measurable gain: the previous reply already carries the context. Limits: 14 messages, one
+run, so it shows the change does not break follow-ups, not a rate. A larger set is needed
+for a rate. No agent requests were used.
