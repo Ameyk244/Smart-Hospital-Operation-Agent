@@ -40,22 +40,26 @@ class QueueRepository:
         result = await self._session.execute(stmt.order_by(QueueEntry.urgency, QueueEntry.arrived_at))
         return list(result.scalars().all())
 
-    async def get_waiting(self, patient: Patient) -> QueueEntry | None:
-        result = await self._session.execute(
+    async def get_waiting(self, patient: Patient, *, for_update: bool = False) -> QueueEntry | None:
+        stmt = (
             self._base_query()
             .where(QueueEntry.patient_id == patient.id, QueueEntry.status == QueueStatus.WAITING)
             .order_by(QueueEntry.arrived_at)
             .limit(1)
         )
+        if for_update:
+            stmt = stmt.with_for_update(of=QueueEntry)
+        result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def get_admitted_in(self, bed: Bed) -> QueueEntry:
+    async def get_admitted_in(self, bed: Bed) -> QueueEntry | None:
         result = await self._session.execute(
-            self._base_query().where(
-                QueueEntry.bed_id == bed.id, QueueEntry.status == QueueStatus.ADMITTED
-            )
+            self._base_query()
+            .where(QueueEntry.bed_id == bed.id, QueueEntry.status == QueueStatus.ADMITTED)
+            .limit(1)
+            .with_for_update(of=QueueEntry)
         )
-        return result.scalar_one()
+        return result.scalar_one_or_none()
 
     async def get_latest(self, patient: Patient) -> QueueEntry | None:
         result = await self._session.execute(

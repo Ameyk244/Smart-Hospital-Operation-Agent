@@ -136,14 +136,16 @@ EXECUTABLE_COMMANDS: frozenset[str] = frozenset(
         "show_next_appointment",
         "list_delayed_appointments",
         "list_wards",
-        "list_beds",
-        "list_emergency_queue",
     }
 )
 
-# Recognized so Jev has a correct place to put patient-name searches, but
-# never executed by this path.
-RECOGNIZED_BUT_UNSUPPORTED: frozenset[str] = frozenset({"search_patients", "patient_journey"})
+# Recognized so Jev has a correct place to put patient-name searches and the
+# filterable bed/queue questions (it has no filter questions for those, so
+# executing them would silently drop "free" / "critical"), but never executed
+# by this path.
+RECOGNIZED_BUT_UNSUPPORTED: frozenset[str] = frozenset(
+    {"search_patients", "patient_journey", "list_beds", "list_emergency_queue"}
+)
 
 _COMMAND_INSTRUCTIONS = (
     "You are routing a message sent to a hospital operations assistant. "
@@ -181,11 +183,13 @@ _COMMAND_CRITERIA: dict[str, str] = {
     ),
     "list_beds": (
         "The message asks which hospital beds exist or are free, occupied or "
-        "being cleaned, or to list or show the beds."
+        "being cleaned, or to list or show the beds. Recognized only: never "
+        "executed here, because the status/ward filter would be lost."
     ),
     "list_emergency_queue": (
         "The message asks who is waiting in the emergency room or emergency "
-        "queue, or to list or show that queue."
+        "queue, or to list or show that queue. Recognized only: never "
+        "executed here, because the urgency filter would be lost."
     ),
     "search_patients": (
         "The message asks to look up, find or show a patient by name."

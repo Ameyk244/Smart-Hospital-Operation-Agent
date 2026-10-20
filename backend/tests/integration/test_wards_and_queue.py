@@ -29,7 +29,9 @@ from app.agent.tools.search_tools import (
     handle_search_queue,
 )
 from app.db.models.audit import AuditRecord
+from app.db.models.hospital import BedStatus
 from app.db.repositories.audit_repository import AuditRepository
+from app.db.repositories.ward_repository import BedRepository
 from app.db.repositories.grounding_repository import GroundingRepository
 from app.db.repositories.session_repository import SessionRepository
 from app.execution.commands import Command, CommandRunner
@@ -105,7 +107,9 @@ async def test_queue_is_most_urgent_first_and_filterable(seeded_session):
     entry = next(e for e in result.data if e["code"] == "ER-1")
     assert entry["bed"] == {"code": "BED-1", "ward": {"code": "WRD-1", "name": "Emergency Bay"}}
     assert entry["patient"].keys() == {"code", "name"}
-    assert entry["wait_minutes"] >= 90
+    assert entry["wait_minutes"] == 0  # admitted: no longer waiting
+    er3 = next(e for e in result.data if e["code"] == "ER-3")
+    assert er3["wait_minutes"] >= 0 and er3["status"] == "WAITING"
 
     waiting = (await _run(seeded_session, "list_emergency_queue", {"status": "WAITING"})).data
     assert {e["code"] for e in waiting} == {"ER-3", "ER-4", "ER-5"}
@@ -125,6 +129,8 @@ async def test_journey_of_an_admitted_patient(seeded_session):
     by_stage = {s["stage"]: s for s in journey["stages"]}
     assert by_stage["BED_ASSIGNED"]["detail"] == "BED-5 (Cardiac Ward)"
     assert by_stage["DISCHARGED"]["at"] is None
+    assert {s["stage"]: s["reached"] for s in journey["stages"]}["BED_ASSIGNED"] is True
+    assert by_stage["DISCHARGED"]["reached"] is False
     assert isinstance(journey["appointments"], list)
 
 
@@ -195,6 +201,19 @@ async def test_release_bed_discharges_and_marks_for_cleaning(seeded_session):
     assert entry["discharged_at"] is not None
     journey = (await _run(seeded_session, "patient_journey", {"patient_code": entry["patient"]["code"]})).data
     assert journey["current_stage"] == "DISCHARGED"
+    by_stage = {s["stage"]: s for s in journey["stages"]}
+    assert by_stage["BED_ASSIGNED"]["reached"] is True and by_stage["BED_ASSIGNED"]["at"] is None
+    assert by_stage["DISCHARGED"]["reached"] is True
+    assert entry["wait_minutes"] == 0
+
+
+async def test_release_bed_without_an_admitted_entry_is_a_failed_result(seeded_session):
+    bed = await BedRepository(seeded_session).get_by_code("BED-2")
+    bed.status = BedStatus.OCCUPIED
+    await seeded_session.flush()
+
+    result = await _run(seeded_session, "release_bed", {"bed_code": "BED-2"})
+    assert not result.success and result.error_category == "bed_not_occupied"
 
 
 async def test_release_bed_rule_violations(seeded_session):
@@ -217,17 +236,24 @@ async def test_assign_and_release_each_write_one_audit_record_with_codes_only(se
     assign, release = records
     assert assign.actor == "agent_session:test"
     assert assign.before_json == {
+        "ward_code": "WRD-1",
         "bed_status": "AVAILABLE",
         "patient_code": None,
+        "occupied_since": None,
         "queue_entry_code": "ER-3",
         "queue_status": "WAITING",
     }
-    assert assign.after_json == {
+    assert assign.after_json.keys() == assign.before_json.keys()
+    assert assign.after_json["occupied_since"] is not None
+    assert {k: v for k, v in assign.after_json.items() if k != "occupied_since"} == {
+        "ward_code": "WRD-1",
         "bed_status": "OCCUPIED",
         "patient_code": "PT-1029",
         "queue_entry_code": "ER-3",
         "queue_status": "ADMITTED",
     }
+    assert release.before_json["occupied_since"] == assign.after_json["occupied_since"]
+    assert release.after_json["occupied_since"] is None
     assert release.after_json["bed_status"] == "CLEANING"
     assert release.after_json["queue_status"] == "DISCHARGED"
     assert patient["name"] not in repr([(r.before_json, r.after_json) for r in records])

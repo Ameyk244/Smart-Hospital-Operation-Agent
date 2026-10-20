@@ -42,8 +42,11 @@ class BedRepository:
             .execution_options(populate_existing=True)
         )
 
-    async def get_by_code(self, code: str) -> Bed | None:
-        result = await self._session.execute(self._base_query().where(Bed.code == code))
+    async def get_by_code(self, code: str, *, for_update: bool = False) -> Bed | None:
+        stmt = self._base_query().where(Bed.code == code)
+        if for_update:
+            stmt = stmt.with_for_update(of=Bed)
+        result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
     async def search(

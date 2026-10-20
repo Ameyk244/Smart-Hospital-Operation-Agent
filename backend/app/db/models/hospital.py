@@ -203,5 +203,7 @@ class QueueEntry(Base):
 
     @property
     def wait_minutes(self) -> int:
-        """Minutes from arrival until discharge, or until now while still here."""
-        return int(((self.discharged_at or utcnow()) - self.arrived_at).total_seconds() // 60)
+        """Minutes waited so far; 0 once the patient is admitted or discharged."""
+        if self.status != QueueStatus.WAITING:
+            return 0
+        return int((utcnow() - self.arrived_at).total_seconds() // 60)

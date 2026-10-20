@@ -128,8 +128,8 @@ hospital-data writes. `assign_bed` and `release_bed` are audited like a reschedu
 (entity type `bed`; before/after hold only bed status, patient code, queue-entry
 code and queue status) and are not confirmation-gated. Rule violations come back
 as `bed_unavailable`, `already_bedded`, `no_waiting_entry` or `bed_not_occupied`.
-Jev may name only the read commands `list_wards`, `list_beds` and
-`list_emergency_queue`; the parser grammar has no bed write. The agent
+Jev may execute only `list_wards` (it has no filter questions for beds or the
+queue, so those go to the parser or the agent); the parser grammar has no bed write. The agent
 cannot create or delete appointments, edit patients, change scanner status,
 modify departments, or execute arbitrary SQL.
 

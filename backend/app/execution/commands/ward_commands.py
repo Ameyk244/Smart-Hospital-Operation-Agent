@@ -14,7 +14,7 @@ Business rules enforced here, not by any caller:
 A violation raises `CommandError`; unknown codes raise `ValueError`.
 
 Both writes are audited in the same transaction. Before/after carry only
-codes and statuses, never names.
+codes, statuses and timestamps, never names.
 """
 
 from typing import Any
@@ -48,8 +48,10 @@ async def list_beds(session: AsyncSession, args: dict[str, Any]) -> list[dict]:
 
 def _audit_state(bed: Bed, entry: QueueEntry) -> dict[str, Any]:
     return {
+        "ward_code": bed.ward.code,
         "bed_status": bed.status.value,
         "patient_code": bed.patient.code if bed.patient else None,
+        "occupied_since": bed.occupied_since.isoformat() if bed.occupied_since else None,
         "queue_entry_code": entry.code,
         "queue_status": entry.status.value,
     }
@@ -66,7 +68,7 @@ async def assign_bed(session: AsyncSession, args: dict[str, Any], *, actor: str)
     if patient is None:
         raise ValueError(f"No patient with code {patient_code!r}")
     bed_repo = BedRepository(session)
-    bed = await bed_repo.get_by_code(bed_code)
+    bed = await bed_repo.get_by_code(bed_code, for_update=True)
     if bed is None:
         raise ValueError(f"No bed with code {bed_code!r}")
 
@@ -77,7 +79,7 @@ async def assign_bed(session: AsyncSession, args: dict[str, Any], *, actor: str)
         )
     if await bed_repo.occupied_by(patient) is not None:
         raise CommandError(f"Patient {patient_code} already has a bed", category="already_bedded")
-    entry = await QueueRepository(session).get_waiting(patient)
+    entry = await QueueRepository(session).get_waiting(patient, for_update=True)
     if entry is None:
         raise CommandError(
             f"Patient {patient_code} has no waiting queue entry", category="no_waiting_entry"
@@ -103,7 +105,7 @@ async def release_bed(session: AsyncSession, args: dict[str, Any], *, actor: str
         raise CommandError("bed_code is required", category="invalid_argument")
 
     bed_repo = BedRepository(session)
-    bed = await bed_repo.get_by_code(bed_code)
+    bed = await bed_repo.get_by_code(bed_code, for_update=True)
     if bed is None:
         raise ValueError(f"No bed with code {bed_code!r}")
     if bed.status != BedStatus.OCCUPIED:
@@ -113,6 +115,10 @@ async def release_bed(session: AsyncSession, args: dict[str, Any], *, actor: str
         )
 
     entry = await QueueRepository(session).get_admitted_in(bed)
+    if entry is None:
+        raise CommandError(
+            f"Bed {bed_code} has no admitted queue entry", category="bed_not_occupied"
+        )
     before = _audit_state(bed, entry)
     await bed_repo.release(bed, entry, discharged_at=utcnow())
     await AuditRepository(session).record(

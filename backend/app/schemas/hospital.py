@@ -119,6 +119,7 @@ class QueueEntryOut(BaseModel):
 
 class JourneyStageOut(BaseModel):
     stage: str
+    reached: bool
     at: datetime | None
     detail: str | None
 

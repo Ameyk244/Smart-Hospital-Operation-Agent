@@ -19,6 +19,9 @@ from app.execution.commands.coercion import coerce_queue_status, coerce_queue_ur
 from app.schemas.hospital import JourneyOut, QueueEntryOut
 
 
+_JOURNEY_APPOINTMENT_LIMIT = 500
+
+
 @register("list_emergency_queue")
 async def list_emergency_queue(session: AsyncSession, args: dict[str, Any]) -> list[dict]:
     entries = await QueueRepository(session).search(
@@ -82,13 +85,17 @@ async def patient_journey(session: AsyncSession, args: dict[str, Any]) -> dict:
     else:
         raise CommandError("patient_code or query is required", category="invalid_argument")
 
-    appointments = await AppointmentRepository(session).search(patient_code=patient.code, limit=50)
+    appointments = await AppointmentRepository(session).search(
+        patient_code=patient.code, limit=_JOURNEY_APPOINTMENT_LIMIT
+    )
     entry = await QueueRepository(session).get_latest(patient)
     stages = _stages(entry, appointments) if entry else []
     reached = [stage for stage, done, _, _ in stages if done]
     journey = {
         "patient": patient,
-        "stages": [{"stage": s, "at": at, "detail": detail} for s, _, at, detail in stages],
+        "stages": [
+            {"stage": s, "reached": done, "at": at, "detail": detail} for s, done, at, detail in stages
+        ],
         "current_stage": reached[-1] if reached else "NONE",
         "appointments": appointments,
     }
