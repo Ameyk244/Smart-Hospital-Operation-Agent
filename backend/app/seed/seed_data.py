@@ -28,13 +28,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models.hospital import (
     Appointment,
     AppointmentStatus,
+    Bed,
+    BedStatus,
     Department,
     Patient,
+    QueueEntry,
+    QueueStatus,
+    QueueUrgency,
     Room,
     Scanner,
     ScannerStatus,
     ScannerType,
     Staff,
+    Ward,
 )
 from app.db.session import async_session_factory, engine
 
@@ -62,6 +68,37 @@ DEPARTMENTS = [
 
 STAFF_ROLES = ["Radiologist", "Technologist", "Nurse", "Physician"]
 
+WARDS = [
+    ("WRD-1", "Emergency Bay", "DEPT-ER"),
+    ("WRD-2", "Cardiac Ward", "DEPT-CARD"),
+    ("WRD-3", "Orthopedic Ward", "DEPT-ORTH"),
+]
+
+# (ward code, status); BED-n numbers follow list order.
+BED_PLAN = [
+    ("WRD-1", BedStatus.OCCUPIED),
+    ("WRD-1", BedStatus.AVAILABLE),
+    ("WRD-1", BedStatus.CLEANING),
+    ("WRD-1", BedStatus.AVAILABLE),
+    ("WRD-2", BedStatus.OCCUPIED),
+    ("WRD-2", BedStatus.AVAILABLE),
+    ("WRD-2", BedStatus.AVAILABLE),
+    ("WRD-3", BedStatus.AVAILABLE),
+    ("WRD-3", BedStatus.CLEANING),
+    ("WRD-3", BedStatus.AVAILABLE),
+]
+
+# (patient index, urgency, status, bed number, minutes since arrival); the bed
+# number matches BED_PLAN, and a WAITING entry has none.
+QUEUE_PLAN = [
+    (26, QueueUrgency.CRITICAL, QueueStatus.ADMITTED, 1, 95),
+    (27, QueueUrgency.URGENT, QueueStatus.ADMITTED, 5, 70),
+    (28, QueueUrgency.CRITICAL, QueueStatus.WAITING, None, 12),
+    (29, QueueUrgency.URGENT, QueueStatus.WAITING, None, 35),
+    (7, QueueUrgency.STANDARD, QueueStatus.WAITING, None, 50),
+    (20, QueueUrgency.STANDARD, QueueStatus.DISCHARGED, 3, 240),
+]
+
 
 async def seed(session: AsyncSession) -> dict[str, int]:
     rng = random.Random(SEED)
@@ -69,6 +106,9 @@ async def seed(session: AsyncSession) -> dict[str, int]:
     # Wipe hospital-domain tables only, in FK-safe order. Agent-domain tables
     # (sessions/conversation/preferences/events) are a separate lifecycle and
     # are never touched here.
+    await session.execute(delete(QueueEntry))
+    await session.execute(delete(Bed))
+    await session.execute(delete(Ward))
     await session.execute(delete(Appointment))
     await session.execute(delete(Scanner))
     await session.execute(delete(Room))
@@ -259,6 +299,46 @@ async def seed(session: AsyncSession) -> dict[str, int]:
     session.add_all(appointments)
     await session.flush()
 
+    wards = [
+        Ward(code=code, name=name, department_id=dept_by_code[dept_code].id)
+        for code, name, dept_code in WARDS
+    ]
+    session.add_all(wards)
+    await session.flush()
+    ward_by_code = {w.code: w for w in wards}
+
+    beds = [
+        Bed(code=f"BED-{n}", ward_id=ward_by_code[ward_code].id, status=status)
+        for n, (ward_code, status) in enumerate(BED_PLAN, start=1)
+    ]
+    session.add_all(beds)
+    await session.flush()
+
+    queue_entries: list[QueueEntry] = []
+    for n, (patient_index, urgency, status, bed_number, minutes) in enumerate(QUEUE_PLAN, start=1):
+        arrived = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+        bed = beds[bed_number - 1] if bed_number else None
+        triaged = arrived + timedelta(minutes=10) if minutes >= 15 else None
+        if status == QueueStatus.ADMITTED:
+            bed.patient_id = patients[patient_index].id
+            bed.occupied_since = arrived + timedelta(minutes=25)
+        queue_entries.append(
+            QueueEntry(
+                code=f"ER-{n}",
+                patient_id=patients[patient_index].id,
+                urgency=urgency,
+                status=status,
+                arrived_at=arrived,
+                triaged_at=triaged,
+                bed_id=bed.id if bed else None,
+                discharged_at=arrived + timedelta(minutes=minutes - 30)
+                if status == QueueStatus.DISCHARGED
+                else None,
+            )
+        )
+    session.add_all(queue_entries)
+    await session.flush()
+
     return {
         "departments": len(departments),
         "staff": len(staff),
@@ -266,6 +346,9 @@ async def seed(session: AsyncSession) -> dict[str, int]:
         "scanners": len(scanners),
         "patients": len(patients),
         "appointments": len(appointments),
+        "wards": len(wards),
+        "beds": len(beds),
+        "queue_entries": len(queue_entries),
     }
 
 

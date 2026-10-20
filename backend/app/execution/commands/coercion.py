@@ -9,7 +9,14 @@ shape; factored out once instead of copied into each command module.
 
 from typing import Any, TypeVar
 
-from app.db.models.hospital import AppointmentStatus, ScannerStatus, ScannerType
+from app.db.models.hospital import (
+    AppointmentStatus,
+    BedStatus,
+    QueueStatus,
+    QueueUrgency,
+    ScannerStatus,
+    ScannerType,
+)
 from app.execution.commands.base import CommandError
 
 E = TypeVar("E")
@@ -38,3 +45,15 @@ def coerce_scanner_status(value: Any) -> ScannerStatus | None:
 
 def coerce_appointment_status(value: Any) -> AppointmentStatus | None:
     return _coerce_enum(value, AppointmentStatus, "appointment status")
+
+
+def coerce_bed_status(value: Any) -> BedStatus | None:
+    return _coerce_enum(value, BedStatus, "bed status")
+
+
+def coerce_queue_urgency(value: Any) -> QueueUrgency | None:
+    return _coerce_enum(value, QueueUrgency, "queue urgency")
+
+
+def coerce_queue_status(value: Any) -> QueueStatus | None:
+    return _coerce_enum(value, QueueStatus, "queue status")
