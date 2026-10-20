@@ -50,7 +50,7 @@ from app.observability import metrics, spans
 from app.observability.logging_config import get_logger
 from app.observability.tracing import record_event
 from app.parser.parser import parse
-from app.schemas.observability import PendingConfirmation
+from app.schemas.observability import PendingBedAction, PendingConfirmation
 
 logger = get_logger("api.chat")
 
@@ -105,6 +105,8 @@ class ChatResponse(BaseModel):
     # Reschedules the agent proposed that still await the user's Confirm or
     # Cancel; only populated when REQUIRE_RESCHEDULE_CONFIRMATION is on.
     pending_confirmations: list[PendingConfirmation] = []
+    # Same for assign_bed / release_bed, when REQUIRE_BED_CONFIRMATION is on.
+    pending_bed_actions: list[PendingBedAction] = []
 
 
 def _plural(n: int, noun: str) -> str:
@@ -165,6 +167,30 @@ def _format_deterministic_message(command: Command, success: bool, error: str | 
             return "No delayed appointments found."
         codes = ", ".join(a["code"] for a in appointments)
         return f"Found {_plural(len(appointments), 'delayed appointment')}: {codes}."
+
+    if command.name == "list_wards":
+        wards = data or []
+        if not wards:
+            return "No wards found."
+        parts = ", ".join(f"{w['name']} ({w['occupied_count']}/{w['bed_count']} beds occupied)" for w in wards)
+        return f"Found {_plural(len(wards), 'ward')}: {parts}."
+
+    if command.name == "list_beds":
+        beds = data or []
+        if not beds:
+            return "No beds matched that filter."
+        parts = ", ".join(f"{b['code']} ({b['ward']['name']}, {b['status']})" for b in beds)
+        return f"Found {_plural(len(beds), 'bed')}: {parts}."
+
+    if command.name == "list_emergency_queue":
+        entries = data or []
+        if not entries:
+            return "The emergency queue is empty."
+        parts = ", ".join(f"{e['code']} {e['patient']['name']} ({e['urgency']}, {e['status']})" for e in entries)
+        return f"Found {_plural(len(entries), 'queue entry')}: {parts}."
+
+    if command.name == "patient_journey":
+        return f"{data['patient']['name']}: current stage {data['current_stage']}."
 
     return f"OK — ran {command.name}."  # safety net; see docstring
 
@@ -580,6 +606,11 @@ async def _route_chat_message(
         if settings.require_reschedule_confirmation
         else []
     )
+    pending_beds = (
+        await EventRepository(db).pending_bed_proposals(session_id)
+        if settings.require_bed_confirmation
+        else []
+    )
     return "agent", ChatResponse(
         session_id=session_id,
         handled_by="agent",
@@ -587,6 +618,7 @@ async def _route_chat_message(
         terminated_reason=final_state["terminated_reason"],
         touched_entity_codes=final_state.get("touched_entity_codes", []),
         pending_confirmations=[PendingConfirmation.from_event(p) for p in pending],
+        pending_bed_actions=[PendingBedAction.from_event(p) for p in pending_beds],
     )
 
 

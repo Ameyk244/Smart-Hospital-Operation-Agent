@@ -24,6 +24,7 @@ if sys.platform == "win32":
 
 from app.agent.checkpointer import build_checkpointer  # noqa: E402
 from app.api.routes import (  # noqa: E402
+    bed_actions,
     chat,
     commands,
     cost,
@@ -73,6 +74,7 @@ app.include_router(chat.router)
 app.include_router(operations.router)
 app.include_router(sessions.router)
 app.include_router(reschedules.router)
+app.include_router(bed_actions.router)
 app.include_router(cost.router)
 app.include_router(status.router)
 app.include_router(voice.router)

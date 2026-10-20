@@ -204,6 +204,9 @@ writes are never reachable from it. The UI is read-only (changes go through
 chat) and navigation is a left sidebar over the existing `view` switch, with no
 router. Adds three tables, so it needs an Alembic migration that, like any DDL,
 needs explicit approval in that turn.
+`REQUIRE_BED_CONFIRMATION` (opt-in, default off) makes the agent's `assign_bed` /
+`release_bed` only propose a change until the user confirms it in the chat
+(`docs/EXPANSION.md` section 7a); it reuses `agent_events`, with no schema change.
 
 ## Process norms
 - Commit only when explicitly asked; never `git add -A`/`.` blindly —

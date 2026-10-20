@@ -64,6 +64,7 @@ async def _resolve(
     proposal_id: int,
     *,
     event_type: str,
+    tool_name: str,
     user_text: str,
     reply: str,
     session_factory,
@@ -75,7 +76,7 @@ async def _resolve(
         round_num=0,
         event_type=event_type,
         status=EventStatus.SUCCESS,
-        tool_name="reschedule_appointment",
+        tool_name=tool_name,
         arguments={"proposal_id": proposal_id},
     )
     messages = SessionRepository(db)
@@ -114,6 +115,7 @@ async def confirm_reschedule(
         session_id,
         proposal_id,
         event_type=RESCHEDULE_CONFIRMED,
+        tool_name="reschedule_appointment",
         user_text="Confirmed the proposed move.",
         reply=reply,
         session_factory=session_factory,
@@ -141,6 +143,7 @@ async def cancel_reschedule(
         session_id,
         proposal_id,
         event_type=RESCHEDULE_CANCELLED,
+        tool_name="reschedule_appointment",
         user_text="Cancelled the proposed move.",
         reply=reply,
         session_factory=session_factory,

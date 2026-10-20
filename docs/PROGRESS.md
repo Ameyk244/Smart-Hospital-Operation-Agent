@@ -1628,3 +1628,28 @@ Process notes:
   first test of a process; the agent reproduced it with the change reverted.
 - A broad `taskkill` of `python3.11.exe` ended the stopped suite and possibly other
   Python 3.11 processes. Match the exact PID next time.
+
+### Expansion: review fixes, bed confirmation and live check
+
+A code review of the branch found ten issues; seven were fixed and tested (row locks on
+`assign_bed`/`release_bed`, a categorised error instead of an uncaught one, a `reached`
+flag on journey stages, Jev narrowed to `list_wards` because it has no filter questions
+for beds or the queue, `wait_minutes` counting only while waiting, the 50-appointment cut,
+a fuller audit record) plus two UI fixes (stale journey responses, wait display).
+Remaining by design: `assign_bed` does not require triage.
+
+Opt-in `REQUIRE_BED_CONFIRMATION` (default off) mirrors the reschedule confirmation: a
+proposal event, `pending_bed_actions` on the chat response, three session routes and a
+confirmation card in the chat. No schema change. Backend 40 integration tests (8 new) and
+frontend 67 tests pass.
+
+Migration `a4c1e7b92d35` was applied to the dev database by the owner (the permission
+classifier blocked it from the agent session); only the new rows were inserted, not the
+full seed, so existing data is untouched.
+
+Live check against the dev database: all 14 exact-grammar messages (every new command
+and the existing ones) were answered by the parser without a model call; off-topic
+messages were rejected by the domain gate. Found and fixed: the new commands replied
+"OK - ran list_wards." instead of a summary. Found, not ours: with `LLM_PROVIDER=anthropic`
+and a rejected key, any message reaching the agent (including the bare word "bed") returns
+a raw HTTP 500 rather than a friendly error.

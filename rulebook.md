@@ -126,7 +126,12 @@ harness_unavailable`; there is no fallback to the in-process runtime. Contract:
 `reschedule_appointment`, `assign_bed` and `release_bed` are the agent's only
 hospital-data writes. `assign_bed` and `release_bed` are audited like a reschedule
 (entity type `bed`; before/after hold only bed status, patient code, queue-entry
-code and queue status) and are not confirmation-gated. Rule violations come back
+code and queue status). With `REQUIRE_BED_CONFIRMATION=true` (default off) they
+only **propose**: a `bed_action_proposed` trace row, a tool result saying the bed
+has not been changed, and a Confirm / Cancel card; Confirm runs the same command
+as `user_confirmed:<id>` (`/api/sessions/{id}/bed-actions/{pid}/confirm|cancel`,
+pending list at `/pending-bed-actions`, also in `ChatResponse.pending_bed_actions`).
+Off, they act immediately. Rule violations come back
 as `bed_unavailable`, `already_bedded`, `no_waiting_entry` or `bed_not_occupied`.
 Jev may execute only `list_wards` (it has no filter questions for beds or the
 queue, so those go to the parser or the agent); the parser grammar has no bed write. The agent

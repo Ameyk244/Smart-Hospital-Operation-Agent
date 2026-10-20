@@ -88,7 +88,7 @@ SYSTEM_PROMPT = (
     "them by Jev; everything else comes to you. The left panel browses departments, "
     "scanners, appointments and patients; the trace panel shows what was done for "
     "each message; the header lights show whether the agent, the harness and Jev are "
-    "on (green), off or not configured (grey) or not answering (red); when confirmation is required, a reschedule is only proposed and the user "
+    "on (green), off or not configured (grey) or not answering (red); when confirmation is required, a reschedule or bed change is only proposed and the user "
     "presses Confirm or Cancel in the chat; codes (SCN-5, APT-3004, PT-1020) must "
     "appear in a search result before they can be used (grounding). Do not describe "
     "features you are not sure exist. Be "

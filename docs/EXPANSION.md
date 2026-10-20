@@ -16,8 +16,9 @@ agent: no tool, gate or prompt depends on the page the user is on.
   same transaction). Their arguments go on the redaction allowlist.
 - The UI stays read-only; changes are made through chat. No page references
   Grafana or telemetry.
-- Confirmation is not built for these two writes (see section 8). The existing
-  reschedule confirmation flow is untouched.
+- Both writes can require confirmation (section 7a), opt-in through
+  `REQUIRE_BED_CONFIRMATION` (default off, like `REQUIRE_RESCHEDULE_CONFIRMATION`).
+  The reschedule confirmation flow keeps its behaviour.
 - This ends the invariant "`reschedule_appointment` is the only tool that
   mutates hospital data". `assign_bed` and `release_bed` also do. Update
   CLAUDE.md and `rulebook.md` when the code lands.
@@ -130,10 +131,34 @@ with no change.
   spacing. Behaviour, props, text content that tests assert on, and the chat and
   trace panels' structure do not change.
 
+## 7a. Bed confirmation (opt-in)
+
+`REQUIRE_BED_CONFIRMATION=true` makes the agent's `assign_bed` / `release_bed`
+only record a proposal; the bed changes when the user confirms in the app. Off:
+both act immediately, as before. The parser has no bed write, so only the agent
+path is gated. Same mechanism as reschedule, no schema change (it reuses
+`agent_events`):
+
+- Events `bed_action_proposed`, `bed_action_confirmed`, `bed_action_cancelled`;
+  the proposal's `tool_name` is `assign_bed` or `release_bed` and its
+  `arguments_json` is the command's arguments (already on the redaction list).
+- The tool returns `{status: "pending_confirmation", proposal_id, message}` and
+  tells the model the bed was NOT changed.
+- `ChatResponse.pending_bed_actions: PendingBedAction[]`, filled only while the
+  flag is on:
+  `type PendingBedAction = { proposal_id: number; action: "assign_bed" | "release_bed";
+  bed_code: string; patient_code: string | null }`.
+- Routes (session-scoped, like reschedule):
+  `GET  /api/sessions/{sid}/pending-bed-actions` -> `PendingBedAction[]`
+  `POST /api/sessions/{sid}/bed-actions/{pid}/confirm` -> `{status, message, touched_entity_codes}`
+  `POST /api/sessions/{sid}/bed-actions/{pid}/cancel`  -> `{status, message}`
+  Confirm runs the same command through `CommandRunner` as
+  `user_confirmed:{sid}`; 404 unknown proposal, 409 already resolved or the
+  command failed. Both outcomes are added to the chat history and the checkpoint.
+- UI: a confirmation card in the chat for each pending action (Confirm / Cancel).
+
 ## 8. Not built (on purpose)
 
-- Confirmation card for `assign_bed` / `release_bed` (reschedule's flow is tied
-  to its own event types; generalising it would touch existing code).
 - Writes from the UI; adding patients to the queue; triage edits.
 - A journey events table; a capacity forecast.
 - Jev measurement for the new read commands against a labelled set (needs a live
