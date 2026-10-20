@@ -24,6 +24,10 @@ read-only, return `handled_by: deterministic`, and create no agent trace.
 | `list scanners [mri|ct|xray]` | READ | Scanners |
 | `list scanners [available|in use|maintenance]` | READ | Scanners |
 | `list scanners [mri|ct|xray] [available|in use|maintenance]` | READ | Scanners |
+| `list wards` | READ | Wards |
+| `list beds [available|occupied|cleaning]` | READ | Beds |
+| `show emergency queue` / `list emergency queue` | READ | Emergency queue |
+| `show journey <name>` / `show patient journey <name>` | READ | Patient journey |
 
 Anything else after `list scanners` or `list delayed appointments` (other than
 `that`/`are` before a scanner filter) makes the parser miss, so the request goes
@@ -70,6 +74,12 @@ agent tools. Business rules belong here, not in the LLM.
 | `search_appointments` | READ | Appointments | Filter appointments |
 | `list_delayed_appointments` | READ | Appointments | List delayed appointments |
 | `reassign_scanner` | WRITE | Appointments | Change scanner and optionally time |
+| `list_wards` | READ | Wards | List wards with bed and occupied counts |
+| `list_beds` | READ | Beds | Filter beds by status or ward |
+| `list_emergency_queue` | READ | Emergency queue | Filter queue entries by urgency or status |
+| `patient_journey` | READ | Patients | Derive a patient's emergency journey from `patient_code` or `query` |
+| `assign_bed` | WRITE | Beds | Admit a waiting patient to an available bed |
+| `release_bed` | WRITE | Beds | Discharge an occupied bed's patient and mark it for cleaning |
 
 `reassign_scanner` validates the appointment, scanner, modality, and scanner
 availability before committing. The agent-facing name for this operation is
@@ -97,6 +107,9 @@ harness_unavailable`; there is no fallback to the in-process runtime. Contract:
 | `search_appointments` | Appointments | Search by status, type, patient, department, or scanner |
 | `search_scanners` | Scanners | List scanners by modality, status, or department; grounds the codes returned |
 | `get_scanner_availability` | Scanners | Check a grounded scanner |
+| `search_beds` | Beds | List beds by status or ward; grounds the bed codes returned |
+| `search_queue` | Emergency queue | List queue entries by urgency or status; grounds queue-entry and patient codes |
+| `get_patient_journey` | Patients | Show a patient's emergency journey; grounds the patient code |
 | `execute_command` | Shared command layer | Run one of the deterministic parser commands |
 | `list_preferences` | Session memory | Read remembered preferences |
 
@@ -105,10 +118,18 @@ harness_unavailable`; there is no fallback to the in-process runtime. Contract:
 | Tool | Write target | Purpose |
 |---|---|---|
 | `reschedule_appointment` | Hospital data | Reassign a grounded appointment to a grounded scanner and optionally change its time |
+| `assign_bed` | Hospital data | Admit a grounded waiting patient to a grounded AVAILABLE bed |
+| `release_bed` | Hospital data | Discharge the patient in a grounded OCCUPIED bed; the bed becomes CLEANING |
 | `remember_preference` | Session memory only | Store a preference |
 | `forget_preference` | Session memory only | Delete a preference |
 
-`reschedule_appointment` is the agent's only hospital-data write. The agent
+`reschedule_appointment`, `assign_bed` and `release_bed` are the agent's only
+hospital-data writes. `assign_bed` and `release_bed` are audited like a reschedule
+(entity type `bed`; before/after hold only bed status, patient code, queue-entry
+code and queue status) and are not confirmation-gated. Rule violations come back
+as `bed_unavailable`, `already_bedded`, `no_waiting_entry` or `bed_not_occupied`.
+Jev may name only the read commands `list_wards`, `list_beds` and
+`list_emergency_queue`; the parser grammar has no bed write. The agent
 cannot create or delete appointments, edit patients, change scanner status,
 modify departments, or execute arbitrary SQL.
 

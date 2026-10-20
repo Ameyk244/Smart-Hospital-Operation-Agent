@@ -1584,3 +1584,47 @@ A free-tier provider's 5xx (`LlmError SERVER`) failed a whole turn on the first 
 gateway's `llm-retry` row now retries `TRANSPORT` and `SERVER` codes on the same model
 before the backend's one-time fallback model is considered. Two gateway e2e tests cover
 a single 5xx (recovers on the primary) and a double 5xx (falls back).
+
+## Hospital expansion (branch `hospital-expansion`)
+
+Three modules next to the existing operations view: wards and beds, the emergency
+queue, and a patient journey. Design, schema and the HTTP contract are in
+`docs/EXPANSION.md`. The agent stays one global agent; nothing depends on the page the
+user is on.
+
+Built, by three scoped subagents (backend; new pages; sidebar and visual refresh) and
+reviewed against their scopes before anything was committed:
+
+- **Backend.** Tables `wards`, `beds`, `queue_entries` (migration written by hand,
+  additive, with a downgrade). Reads `list_wards`, `list_beds`,
+  `list_emergency_queue`, `patient_journey`; writes `assign_bed` and `release_bed`, both
+  audited and grounded. Parser grammar, gate vocabulary, redaction allowlist, tools
+  (`search_beds`, `search_queue`, `get_patient_journey`, `assign_bed`, `release_bed`)
+  and four read-only routes under `/api/operations`. Jev may name the three new list
+  commands only; `patient_journey` is recognised but never executed.
+- **Frontend.** Wards, Emergency queue and Journey pages, a left sidebar over the
+  existing `view` switch (no router), and a refresh of the tokens, panels, tables and
+  badges. Chat and trace stay on the right on every page.
+- **Invariant changed.** `reschedule_appointment` is no longer the only mutating tool;
+  CLAUDE.md and `rulebook.md` say so.
+
+Checks so far: frontend build, lint and 58 tests pass; 526 backend unit tests pass; the
+24 new database-backed tests pass; a targeted run of the existing e2e operations, command,
+repository, tool, audit, trace-redaction and reschedule-confirmation files passes
+(64 tests, 4m34s), so the change breaks none of them.
+
+Not built: confirmation for the bed writes, Jev measurement on a labelled message set
+(needs a live run), writes from the UI, a journey events table.
+
+Process notes:
+
+- The first edits were made on `master` before the branch existed. Nothing had been
+  committed, so `master` was untouched; the branch was created with the working tree
+  intact.
+- The backend suite's DB-backed tests are slow (about 4 s each; the first test of an
+  e2e file can stall for minutes). A full run reached 9% in ~15 minutes with no
+  failures and was stopped; the targeted run covers the files the change can affect.
+  One e2e test (`test_list_departments`) fails with an event-loop error when it is the
+  first test of a process; the agent reproduced it with the change reverted.
+- A broad `taskkill` of `python3.11.exe` ended the stopped suite and possibly other
+  Python 3.11 processes. Match the exact PID next time.

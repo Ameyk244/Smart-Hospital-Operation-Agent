@@ -124,9 +124,11 @@ minimum number actually needed.
 - Grounding-by-rejection: entity codes (appointment/scanner/patient) must
   be exposed to a session via a search/lookup before a write tool can
   reference them. Grounding is scoped per session.
-- `reschedule_appointment` is the only tool in the whole system that
-  mutates hospital data. Everything else is either read-only or writes to
-  session-scoped preference memory, not the hospital schema.
+- Three tools mutate hospital data: `reschedule_appointment`, `assign_bed`
+  and `release_bed` (branch `hospital-expansion`, `docs/EXPANSION.md`). All
+  three are grounded and audited through `CommandRunner`. Everything else is
+  either read-only or writes to session-scoped preference memory, not the
+  hospital schema.
 
 ## Harness runtime (branch `harness-smartgateway`)
 The agent's model loop can run in a separate harness process (a plugin on a
@@ -191,6 +193,17 @@ is the browser's only entry and must stay up for everything). See
    leave it out and note it in the doc's "not built" list.
 4. Report progress as work happens (what is done, what is next), and update
    `docs/PROGRESS.md` and `SKILLS.md` as it happens.
+
+## Hospital expansion (branch `hospital-expansion`)
+Wards and beds, the emergency queue and the patient journey, built on the
+same rails as everything else: new parser commands, agent tools, gate
+vocabulary and Jev read commands, with the agent still one global agent (never
+page-specific). Design, schema and the HTTP contract are in
+`docs/EXPANSION.md`. Jev may only name the new *read* commands; the two bed
+writes are never reachable from it. The UI is read-only (changes go through
+chat) and navigation is a left sidebar over the existing `view` switch, with no
+router. Adds three tables, so it needs an Alembic migration that, like any DDL,
+needs explicit approval in that turn.
 
 ## Process norms
 - Commit only when explicitly asked; never `git add -A`/`.` blindly —
