@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { api } from "../api/client";
 import { useRowHighlight } from "../hooks/useRowHighlight";
@@ -18,6 +18,13 @@ export function JourneyPage({ touchedEntityCodes }: JourneyPageProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const latestRequest = useRef(0);
+  const selectedRef = useRef<string | null>(null);
+
+  // A chat-driven change may have moved the selected patient's journey.
+  useEffect(() => {
+    if (selectedRef.current) choose(selectedRef.current, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [touchedEntityCodes]);
 
   const appointments = journey?.appointments ?? [];
   const { rowRef } = useRowHighlight(appointments, (a) => a.code, touchedEntityCodes);
@@ -35,10 +42,11 @@ export function JourneyPage({ touchedEntityCodes }: JourneyPageProps) {
       .finally(() => setSearching(false));
   }
 
-  function choose(code: string) {
+  function choose(code: string, quiet = false) {
     const id = ++latestRequest.current;
+    selectedRef.current = code;
     setSelected(code);
-    setLoading(true);
+    if (!quiet) setLoading(true);
     setError(null);
     api
       .getJourney(code)
@@ -95,6 +103,9 @@ export function JourneyPage({ touchedEntityCodes }: JourneyPageProps) {
           <h4>
             {journey.patient.name} ({journey.patient.code})
           </h4>
+          {journey.stages.length === 0 ? (
+            <p className="muted">No emergency visit for this patient.</p>
+          ) : (
           <ol className="pg-stepper" aria-label="Journey stages">
             {journey.stages.map((s) => {
               const classes = ["pg-step"];
@@ -115,6 +126,7 @@ export function JourneyPage({ touchedEntityCodes }: JourneyPageProps) {
               );
             })}
           </ol>
+          )}
           <h4>Appointments</h4>
           <div className="pg-table-scroll">
             <table className="data-table">

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import { useRowHighlight } from "../hooks/useRowHighlight";
 import type { Bed, Ward } from "../api/types";
@@ -16,14 +16,17 @@ export function WardsPage({ touchedEntityCodes }: WardsPageProps) {
   const [beds, setBeds] = useState<Bed[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const loadedStatus = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    // A refresh for the same filter keeps the current data on screen.
+    if (loadedStatus.current !== status) setLoading(true);
     setError(null);
     Promise.all([api.listWards(), api.listBeds({ status: status || undefined })])
       .then(([wardData, bedData]) => {
         if (cancelled) return;
+        loadedStatus.current = status;
         setWards(wardData);
         setBeds(bedData);
       })
@@ -36,7 +39,7 @@ export function WardsPage({ touchedEntityCodes }: WardsPageProps) {
     return () => {
       cancelled = true;
     };
-  }, [status]);
+  }, [status, touchedEntityCodes]);
 
   const { rowRef } = useRowHighlight(beds, (b) => b.code, touchedEntityCodes);
 

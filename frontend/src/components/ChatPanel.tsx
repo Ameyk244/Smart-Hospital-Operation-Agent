@@ -205,6 +205,14 @@ export function ChatPanel({ sessionId, onSessionId, onTurnComplete, trace }: Cha
   // preview, the same way handleSubmit uses the typed text.
   const lastVoiceTranscriptRef = useRef("");
 
+  // Only an agent turn reports the session's pending proposals; parser and Jev
+  // replies carry empty lists, which must not hide a proposal still pending.
+  function applyPending(response: ChatResponse) {
+    if (response.handled_by !== "agent") return;
+    setPending(response.pending_confirmations ?? []);
+    setPendingBed(response.pending_bed_actions ?? []);
+  }
+
   // Voice input: see useVoiceInput.ts for what it owns (the WebSocket +
   // audio capture) versus what stays here (the same message-list/session
   // bookkeeping handleSubmit already does for typed turns) — these
@@ -230,8 +238,7 @@ export function ChatPanel({ sessionId, onSessionId, onTurnComplete, trace }: Cha
           terminatedReason: response.terminated_reason,
         },
       ]);
-      setPending(response.pending_confirmations ?? []);
-      setPendingBed(response.pending_bed_actions ?? []);
+      applyPending(response);
       onTurnComplete(response.touched_entity_codes);
     },
     onError: (message) => {
@@ -395,8 +402,7 @@ export function ChatPanel({ sessionId, onSessionId, onTurnComplete, trace }: Cha
           progressSummary,
         },
       ]);
-      setPending(res.pending_confirmations ?? []);
-      setPendingBed(res.pending_bed_actions ?? []);
+      applyPending(res);
       onTurnComplete(res.touched_entity_codes);
     } catch (err) {
       setError(String(err));

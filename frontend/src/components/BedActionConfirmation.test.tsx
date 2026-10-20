@@ -32,10 +32,27 @@ function createFetchMock(opts: {
   chatPending?: PendingBedAction[];
   listPending?: PendingBedAction[];
   resolve?: (action: "confirm" | "cancel") => Response;
+  // Replies to chat posts after the first, consumed in order.
+  laterReplies?: { handled_by: string; pending?: PendingBedAction[] }[];
 }) {
+  let chatCalls = 0;
   return vi.fn((url: string, init?: RequestInit) => {
     const u = String(url);
     if (u.includes("/api/chat") && init?.method === "POST") {
+      if (opts.laterReplies && chatCalls++ > 0) {
+        const { handled_by, pending } = opts.laterReplies.shift()!;
+        return Promise.resolve(
+          jsonResponse({
+            session_id: "sess-1",
+            handled_by,
+            message: `reply via ${handled_by}`,
+            data: null,
+            terminated_reason: null,
+            touched_entity_codes: [],
+            pending_bed_actions: pending,
+          }),
+        );
+      }
       return Promise.resolve(
         jsonResponse({
           session_id: "sess-1",
@@ -99,6 +116,28 @@ describe("BedActionConfirmation in the chat", () => {
     await sendAndWaitForCard();
 
     expect(screen.queryByRole("region", { name: "Pending bed actions" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the card through a deterministic reply, and an agent reply with an empty list clears it", async () => {
+    vi.stubGlobal(
+      "fetch",
+      createFetchMock({
+        chatPending: [ASSIGN],
+        laterReplies: [{ handled_by: "deterministic", pending: [] }, { handled_by: "agent", pending: [] }],
+      }),
+    );
+    await sendAndWaitForCard();
+    const card = () => screen.queryByRole("button", { name: "Confirm admitting PT-1029 to BED-2" });
+
+    fireEvent.change(screen.getByPlaceholderText("Type a message…"), { target: { value: "list wards" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByText("reply via deterministic");
+    expect(card()).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText("Type a message…"), { target: { value: "anything else" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByText("reply via agent");
+    expect(card()).not.toBeInTheDocument();
   });
 
   it("Confirm posts the right ids, shows the message, removes the card and reports touched codes", async () => {

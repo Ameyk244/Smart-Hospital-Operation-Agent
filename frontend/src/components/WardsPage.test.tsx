@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { WardsPage } from "./WardsPage";
 import type { Bed, Ward } from "../api/types";
 
@@ -44,6 +44,20 @@ describe("WardsPage", () => {
     mockFetch([], []);
     render(<WardsPage touchedEntityCodes={[]} />);
     expect(await screen.findByText("No wards found.")).toBeInTheDocument();
+  });
+
+  it("refetches without a loading flash when touchedEntityCodes changes", async () => {
+    mockFetch(WARDS, BEDS);
+    const fetchMock = vi.mocked(fetch);
+    const { rerender } = render(<WardsPage touchedEntityCodes={[]} />);
+    await screen.findByText("1/2 occupied");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    rerender(<WardsPage touchedEntityCodes={["BED-1"]} />);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+    expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+    expect(screen.getByText("1/2 occupied")).toBeInTheDocument();
   });
 
   it("shows an error when the request fails", async () => {

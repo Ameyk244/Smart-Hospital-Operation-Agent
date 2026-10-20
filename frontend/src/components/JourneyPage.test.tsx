@@ -82,6 +82,46 @@ describe("JourneyPage", () => {
     expect(screen.queryByText("Not reached")).not.toBeInTheDocument();
   });
 
+  it("re-fetches the selected patient's journey when touchedEntityCodes changes", async () => {
+    mockFetch();
+    const fetchMock = vi.mocked(fetch);
+    const journeyCalls = () => fetchMock.mock.calls.filter(([u]) => String(u).includes("/journey")).length;
+    const { rerender } = render(<JourneyPage touchedEntityCodes={[]} />);
+
+    fireEvent.change(screen.getByLabelText("Patient name"), { target: { value: "Ada" } });
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Ada Lovelace/ }));
+    await screen.findByText("TRIAGED");
+    expect(journeyCalls()).toBe(1);
+
+    rerender(<JourneyPage touchedEntityCodes={["BED-1"]} />);
+
+    await waitFor(() => expect(journeyCalls()).toBe(2));
+    expect(screen.getByText("TRIAGED")).toBeInTheDocument();
+  });
+
+  it("explains an empty journey and still shows the appointments table", async () => {
+    const journey: Journey = { ...JOURNEY, stages: [], current_stage: "NONE" };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) =>
+        Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(url.includes("/journey") ? journey : PATIENTS),
+        } as Response),
+      ),
+    );
+    render(<JourneyPage touchedEntityCodes={[]} />);
+
+    fireEvent.change(screen.getByLabelText("Patient name"), { target: { value: "Ada" } });
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Ada Lovelace/ }));
+
+    expect(await screen.findByText("No emergency visit for this patient.")).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Journey stages" })).not.toBeInTheDocument();
+    expect(screen.getByText("No appointments for this patient.")).toBeInTheDocument();
+  });
+
   it("applies only the latest selection when responses arrive out of order", async () => {
     const two: Patient[] = [
       PATIENTS[0],
