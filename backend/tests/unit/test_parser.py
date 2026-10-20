@@ -219,3 +219,49 @@ def test_recognised_delayed_appointment_tails_still_match(text, args):
     outcome = parse(text)
     assert outcome.matched is True
     assert outcome.command.args == args
+
+
+def test_list_wards():
+    outcome = parse("list wards")
+    assert outcome.command.name == "list_wards"
+    assert outcome.command.args == {}
+
+
+@pytest.mark.parametrize(
+    "text, args",
+    [
+        ("list beds", {}),
+        ("list beds available", {"status": "AVAILABLE"}),
+        ("List beds occupied.", {"status": "OCCUPIED"}),
+        ("list beds cleaning", {"status": "CLEANING"}),
+    ],
+)
+def test_list_beds(text, args):
+    outcome = parse(text)
+    assert outcome.command.name == "list_beds"
+    assert outcome.command.args == args
+
+
+@pytest.mark.parametrize("text", ["show emergency queue", "list emergency queue", "Show emergency queue?"])
+def test_emergency_queue(text):
+    assert parse(text).command.name == "list_emergency_queue"
+
+
+@pytest.mark.parametrize("text", ["show journey Mary Brown", "show patient journey Mary Brown"])
+def test_patient_journey_is_matched_before_show_patient(text):
+    outcome = parse(text)
+    assert outcome.command.name == "patient_journey"
+    assert outcome.command.args == {"query": "Mary Brown"}
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["list wards now", "list beds banana", "list beds free", "show emergency queue please", "show journey"],
+)
+def test_new_commands_are_exact_or_they_miss(text):
+    assert parse(text).matched is False
+
+
+@pytest.mark.parametrize("text", ["assign bed BED-2 to PT-1029", "release bed BED-1"])
+def test_the_parser_never_builds_a_bed_write(text):
+    assert parse(text).matched is False

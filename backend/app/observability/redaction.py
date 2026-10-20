@@ -74,10 +74,13 @@ _ALLOWED_ARGUMENTS: dict[str, Callable[[Any], bool]] = {
     "scanner_code": _matches(_CODE),
     "patient_code": _matches(_CODE),
     "department_code": _matches(_CODE),
+    "bed_code": _matches(_CODE),
+    "ward_code": _matches(_CODE),
     # enums
     "status": _matches(_ENUM),
     "appointment_type": _matches(_ENUM),
     "type": _matches(_ENUM),
+    "urgency": _matches(_ENUM),
     # reschedule target time
     "new_start": _matches(_DATETIME),
     # counts / measurements

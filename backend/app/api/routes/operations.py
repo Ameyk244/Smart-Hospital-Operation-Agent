@@ -67,3 +67,31 @@ async def search_appointments(
 @router.get("/patients")
 async def search_patients(query: str, db: AsyncSession = Depends(get_db)) -> object:
     return await _run(db, "search_patients", {"query": query})
+
+
+@router.get("/wards")
+async def list_wards(db: AsyncSession = Depends(get_db)) -> object:
+    return await _run(db, "list_wards", {})
+
+
+@router.get("/beds")
+async def list_beds(
+    ward_code: str | None = None,
+    status: str | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> object:
+    return await _run(db, "list_beds", {"ward_code": ward_code, "status": status})
+
+
+@router.get("/queue")
+async def list_emergency_queue(
+    urgency: str | None = None,
+    status: str | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> object:
+    return await _run(db, "list_emergency_queue", {"urgency": urgency, "status": status})
+
+
+@router.get("/journey")
+async def patient_journey(patient_code: str, db: AsyncSession = Depends(get_db)) -> object:
+    return await _run(db, "patient_journey", {"patient_code": patient_code})

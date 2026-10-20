@@ -8,7 +8,9 @@ startup, the agent tools — must import `app.execution.commands` (not just
 from app.execution.commands import (  # noqa: F401
     appointment_commands,
     patient_commands,
+    queue_commands,
     reference_commands,
+    ward_commands,
 )
 from app.execution.commands.base import Command, CommandError, CommandResult, CommandRunner
 
