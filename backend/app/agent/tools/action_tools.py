@@ -104,3 +104,71 @@ RESCHEDULE_APPOINTMENT_TOOL = register_tool(
         is_write=True,
     )
 )
+
+
+class AssignBedArgs(BaseModel):
+    patient_code: str = Field(
+        ..., description="A patient code previously returned by search_queue"
+    )
+    bed_code: str = Field(
+        ..., description="A bed code previously returned by search_beds, currently AVAILABLE"
+    )
+
+
+async def handle_assign_bed(session: AsyncSession, session_id: str, args: AssignBedArgs) -> dict:
+    grounding = GroundingRegistry(session)
+    await grounding.require_grounded(session_id, "patient", args.patient_code)
+    await grounding.require_grounded(session_id, "bed", args.bed_code)
+
+    result = await CommandRunner(session, actor=f"agent_session:{session_id}").execute(
+        Command("assign_bed", {"patient_code": args.patient_code, "bed_code": args.bed_code})
+    )
+    if not result.success:
+        raise ToolExecutionError(result.error or "assign_bed failed", result.error_category or "tool_error")
+    return result.data
+
+
+ASSIGN_BED_TOOL = register_tool(
+    ToolSpec(
+        name="assign_bed",
+        description=(
+            "Admit a waiting emergency patient to an available bed. patient_code and "
+            "bed_code MUST come from a prior search_queue / search_beds result in this "
+            "conversation — inventing a code will be rejected. The patient must have a "
+            "WAITING queue entry and no bed; the bed must be AVAILABLE."
+        ),
+        args_schema=AssignBedArgs,
+        handler=handle_assign_bed,
+        is_write=True,
+    )
+)
+
+
+class ReleaseBedArgs(BaseModel):
+    bed_code: str = Field(..., description="A bed code previously returned by search_beds")
+
+
+async def handle_release_bed(session: AsyncSession, session_id: str, args: ReleaseBedArgs) -> dict:
+    await GroundingRegistry(session).require_grounded(session_id, "bed", args.bed_code)
+
+    result = await CommandRunner(session, actor=f"agent_session:{session_id}").execute(
+        Command("release_bed", {"bed_code": args.bed_code})
+    )
+    if not result.success:
+        raise ToolExecutionError(result.error or "release_bed failed", result.error_category or "tool_error")
+    return result.data
+
+
+RELEASE_BED_TOOL = register_tool(
+    ToolSpec(
+        name="release_bed",
+        description=(
+            "Discharge the patient in an occupied bed and mark the bed for cleaning. "
+            "bed_code MUST come from a prior search_beds result in this conversation — "
+            "inventing a code will be rejected. The bed must be OCCUPIED."
+        ),
+        args_schema=ReleaseBedArgs,
+        handler=handle_release_bed,
+        is_write=True,
+    )
+)

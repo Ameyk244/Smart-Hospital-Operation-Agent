@@ -101,3 +101,111 @@ SEARCH_SCANNERS_TOOL = register_tool(
         is_write=False,
     )
 )
+
+
+class SearchBedsArgs(BaseModel):
+    status: str | None = Field(None, description="One of AVAILABLE, OCCUPIED, CLEANING")
+    ward_code: str | None = Field(None, description="A ward code, e.g. WRD-1")
+
+
+async def handle_search_beds(
+    session: AsyncSession, session_id: str, args: SearchBedsArgs
+) -> list[dict]:
+    result = await CommandRunner(session).execute(
+        Command("list_beds", args.model_dump(exclude_none=True))
+    )
+    if not result.success:
+        raise ToolExecutionError(result.error or "search_beds failed", result.error_category or "tool_error")
+
+    beds: list[dict] = result.data
+    await GroundingRegistry(session).expose(session_id, "bed", [b["code"] for b in beds])
+    return beds
+
+
+SEARCH_BEDS_TOOL = register_tool(
+    ToolSpec(
+        name="search_beds",
+        description=(
+            "List hospital beds, optionally narrowed by status or ward. Returns each "
+            "bed's code, ward, status and occupant. Only a bed code returned by this "
+            "tool may later be passed to assign_bed or release_bed."
+        ),
+        args_schema=SearchBedsArgs,
+        handler=handle_search_beds,
+        is_write=False,
+    )
+)
+
+
+class SearchQueueArgs(BaseModel):
+    urgency: str | None = Field(None, description="One of CRITICAL, URGENT, STANDARD")
+    status: str | None = Field(None, description="One of WAITING, ADMITTED, DISCHARGED")
+
+
+async def handle_search_queue(
+    session: AsyncSession, session_id: str, args: SearchQueueArgs
+) -> list[dict]:
+    result = await CommandRunner(session).execute(
+        Command("list_emergency_queue", args.model_dump(exclude_none=True))
+    )
+    if not result.success:
+        raise ToolExecutionError(result.error or "search_queue failed", result.error_category or "tool_error")
+
+    entries: list[dict] = result.data
+    grounding = GroundingRegistry(session)
+    await grounding.expose(session_id, "queue_entry", [e["code"] for e in entries])
+    await grounding.expose(session_id, "patient", [e["patient"]["code"] for e in entries])
+    return entries
+
+
+SEARCH_QUEUE_TOOL = register_tool(
+    ToolSpec(
+        name="search_queue",
+        description=(
+            "List emergency queue entries, most urgent first, optionally narrowed by "
+            "urgency or status. Returns each entry's code, patient, urgency, status "
+            "and wait. Makes the patient codes usable in assign_bed."
+        ),
+        args_schema=SearchQueueArgs,
+        handler=handle_search_queue,
+        is_write=False,
+    )
+)
+
+
+class GetPatientJourneyArgs(BaseModel):
+    query: str | None = Field(None, description="A patient name or part of one")
+    patient_code: str | None = Field(
+        None, description="A patient code, e.g. PT-1001; use it when the name is ambiguous"
+    )
+
+
+async def handle_get_patient_journey(
+    session: AsyncSession, session_id: str, args: GetPatientJourneyArgs
+) -> dict:
+    result = await CommandRunner(session).execute(
+        Command("patient_journey", args.model_dump(exclude_none=True))
+    )
+    if not result.success:
+        raise ToolExecutionError(
+            result.error or "get_patient_journey failed", result.error_category or "tool_error"
+        )
+
+    journey: dict = result.data
+    await GroundingRegistry(session).expose(session_id, "patient", [journey["patient"]["code"]])
+    return journey
+
+
+GET_PATIENT_JOURNEY_TOOL = register_tool(
+    ToolSpec(
+        name="get_patient_journey",
+        description=(
+            "Show where a patient is in their emergency visit (arrived, triaged, bed "
+            "assigned, scan, discharged) together with their appointments. Give a "
+            "name, or a patient code if the name matches several patients."
+        ),
+        args_schema=GetPatientJourneyArgs,
+        handler=handle_get_patient_journey,
+        is_write=False,
+    )
+)

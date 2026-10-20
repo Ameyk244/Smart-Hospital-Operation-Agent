@@ -135,12 +135,15 @@ EXECUTABLE_COMMANDS: frozenset[str] = frozenset(
         "list_scanners",
         "show_next_appointment",
         "list_delayed_appointments",
+        "list_wards",
+        "list_beds",
+        "list_emergency_queue",
     }
 )
 
 # Recognized so Jev has a correct place to put patient-name searches, but
 # never executed by this path.
-RECOGNIZED_BUT_UNSUPPORTED: frozenset[str] = frozenset({"search_patients"})
+RECOGNIZED_BUT_UNSUPPORTED: frozenset[str] = frozenset({"search_patients", "patient_journey"})
 
 _COMMAND_INSTRUCTIONS = (
     "You are routing a message sent to a hospital operations assistant. "
@@ -172,8 +175,24 @@ _COMMAND_CRITERIA: dict[str, str] = {
         "or how many are delayed, optionally narrowed by modality "
         "(MRI, CT, X-ray)."
     ),
+    "list_wards": (
+        "The message asks what wards the hospital has, or to list or show the "
+        "wards and how full they are."
+    ),
+    "list_beds": (
+        "The message asks which hospital beds exist or are free, occupied or "
+        "being cleaned, or to list or show the beds."
+    ),
+    "list_emergency_queue": (
+        "The message asks who is waiting in the emergency room or emergency "
+        "queue, or to list or show that queue."
+    ),
     "search_patients": (
         "The message asks to look up, find or show a patient by name."
+    ),
+    "patient_journey": (
+        "The message asks where a named patient is in their emergency visit, or "
+        "to show a patient's journey, from arrival to discharge."
     ),
     NONE_CHOICE: (
         "The message does not map cleanly to any single command above. This "

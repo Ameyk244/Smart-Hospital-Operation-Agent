@@ -386,3 +386,22 @@ def test_unambiguous_attempts_are_denied(text):
 @pytest.mark.parametrize("text", NOT_DENIED)
 def test_ordinary_hospital_messages_are_not_denied(text):
     assert not is_denied(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "which beds are free",
+        "show me the wards",
+        "who is in the emergency queue",
+        "assign PT-1029 to BED-2",
+        "release BED-1",
+        "show the journey of Mary Brown",
+    ],
+)
+def test_ward_bed_queue_and_journey_requests_pass(text):
+    assert check_domain_gate(text).in_domain is True
+
+
+def test_a_bed_word_after_an_off_topic_request_is_still_rejected():
+    assert check_domain_gate("What's 47 times 12? bed").in_domain is False
