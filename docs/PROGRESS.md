@@ -1669,3 +1669,22 @@ reaches the agent, whose prompt declines it (this predates the change). No regre
 measurable gain: the previous reply already carries the context. Limits: 14 messages, one
 run, so it shows the change does not break follow-ups, not a rate. A larger set is needed
 for a rate. No agent requests were used.
+
+### Expansion: detailed run across modes 1, 2 and 3
+
+Scripted checks against the live dev database, with the free OpenRouter model and
+`REQUIRE_BED_CONFIRMATION=true` (startup overrides; `.env` untouched). Model responses
+used: 25 to 42 of the free tier's 50 for the UTC day.
+
+| Check | Mode 1 | Mode 2 | Mode 3 |
+|---|---|---|---|
+| Parser, all commands + case/punctuation/ordering (20) and gate rejections (4) | 26/26 | 26/26 | 26/26 (through the gateway) |
+| Parser near-misses and Jev read-only set (offline) | 15/15 | | |
+| Jev (4 messages) | 3/4 | 3/4 | 3/3 |
+| Agent | 10/10: bed admission proposed (nothing applied), card survives a parser reply, cancel, confirm-after-cancel is 409, `mark_bed_clean` applied | read OK; gateway stopped: lights down, parser still answers, agent says unavailable (4/4) | read OK through the front door |
+
+Finding (not a regression): "when is the next appointment?" is not matched by Jev at the
+0.9 threshold, so it reaches the agent (both runs). The `show_next_appointment` criterion
+predates this work. The live run changed BED-3 to AVAILABLE; it was set back to CLEANING
+(the seed state). Confirm and release were not run live (they would consume a waiting
+patient); both are covered by the 8 and 32 database-backed integration tests.
