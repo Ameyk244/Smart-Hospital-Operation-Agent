@@ -187,7 +187,7 @@ def _format_deterministic_message(command: Command, success: bool, error: str | 
         if not entries:
             return "The emergency queue is empty."
         parts = ", ".join(f"{e['code']} {e['patient']['name']} ({e['urgency']}, {e['status']})" for e in entries)
-        return f"Found {_plural(len(entries), 'queue entry')}: {parts}."
+        return f"Found {_plural(len(entries), 'patient')} in the emergency queue: {parts}."
 
     if command.name == "patient_journey":
         return f"{data['patient']['name']}: current stage {data['current_stage']}."

@@ -20,7 +20,7 @@ def test_beds_list_code_ward_and_status():
 
 def test_queue_lists_patient_urgency_and_status():
     data = [{"code": "ER-3", "patient": {"name": "Wei Gonzalez"}, "urgency": "CRITICAL", "status": "WAITING"}]
-    assert _msg("list_emergency_queue", data) == "Found 1 queue entry: ER-3 Wei Gonzalez (CRITICAL, WAITING)."
+    assert _msg("list_emergency_queue", data) == "Found 1 patient in the emergency queue: ER-3 Wei Gonzalez (CRITICAL, WAITING)."
 
 
 def test_journey_names_the_current_stage():
