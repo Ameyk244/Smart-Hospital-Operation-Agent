@@ -45,6 +45,56 @@ export interface Appointment {
   notes: string | null;
 }
 
+// --- /api/operations/wards, beds, queue, journey ---
+
+export interface Ward {
+  code: string;
+  name: string;
+  department: Department;
+  bed_count: number;
+  occupied_count: number;
+}
+
+export type BedStatus = "AVAILABLE" | "OCCUPIED" | "CLEANING";
+
+export interface Bed {
+  code: string;
+  ward: { code: string; name: string };
+  status: BedStatus;
+  patient: { code: string; name: string; mrn: string } | null;
+  occupied_since: string | null;
+}
+
+export type QueueUrgency = "CRITICAL" | "URGENT" | "STANDARD";
+export type QueueStatus = "WAITING" | "ADMITTED" | "DISCHARGED";
+
+export interface QueueEntry {
+  code: string;
+  patient: { code: string; name: string };
+  urgency: QueueUrgency;
+  status: QueueStatus;
+  arrived_at: string;
+  triaged_at: string | null;
+  bed: { code: string; ward: { code: string; name: string } } | null;
+  discharged_at: string | null;
+  wait_minutes: number;
+}
+
+export type JourneyStageName = "ARRIVED" | "TRIAGED" | "BED_ASSIGNED" | "SCAN" | "DISCHARGED";
+
+export interface JourneyStage {
+  stage: JourneyStageName;
+  at: string | null;
+  detail: string | null;
+}
+
+export interface Journey {
+  patient: { code: string; name: string };
+  stages: JourneyStage[];
+  current_stage: string;
+  appointments: Appointment[];
+}
+
 // --- /api/chat ---
 
 // "jev" is the experimental typed-decision fast path: the regex parser

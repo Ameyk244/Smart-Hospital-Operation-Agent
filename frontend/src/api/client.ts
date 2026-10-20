@@ -1,16 +1,20 @@
 import type {
   AgentEvent,
   Appointment,
+  Bed,
   ChatResponse,
   ConversationMessage,
   CancelRescheduleResponse,
   ConfirmRescheduleResponse,
   CostComparison,
   Department,
+  Journey,
   Patient,
   PendingReschedule,
+  QueueEntry,
   Scanner,
   StatusResponse,
+  Ward,
 } from "./types";
 
 // Configurable via VITE_API_BASE_URL (see .env.example); defaults to the
@@ -91,6 +95,22 @@ export const api = {
 
   searchPatients(query: string): Promise<Patient[]> {
     return request(`/api/operations/patients${buildQuery({ query })}`);
+  },
+
+  listWards(): Promise<Ward[]> {
+    return request("/api/operations/wards");
+  },
+
+  listBeds(filters: { ward_code?: string; status?: string } = {}): Promise<Bed[]> {
+    return request(`/api/operations/beds${buildQuery(filters)}`);
+  },
+
+  listQueue(filters: { urgency?: string; status?: string } = {}): Promise<QueueEntry[]> {
+    return request(`/api/operations/queue${buildQuery(filters)}`);
+  },
+
+  getJourney(patientCode: string): Promise<Journey> {
+    return request(`/api/operations/journey${buildQuery({ patient_code: patientCode })}`);
   },
 
   sendChat(text: string, sessionId?: string): Promise<ChatResponse> {
