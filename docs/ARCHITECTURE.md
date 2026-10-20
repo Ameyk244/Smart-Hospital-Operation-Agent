@@ -141,6 +141,15 @@ message broker, or microservices.
 4. `scanners`
 5. `patients`
 6. `appointments`
+7. `wards`
+8. `beds`
+9. `queue_entries`
+
+The last three hold the emergency department: a ward belongs to a department, a bed to a ward
+(`AVAILABLE`, `OCCUPIED` or `CLEANING`, with the patient and admit time while occupied), and a queue
+entry is one emergency visit (`CRITICAL`/`URGENT`/`STANDARD`, `WAITING`/`ADMITTED`/`DISCHARGED`). The
+patient journey has no table: it is derived on read from the latest queue entry, its bed and the
+patient's appointments. Design and contract: `docs/EXPANSION.md`.
 
 ### Agent-owned application tables
 
@@ -171,6 +180,10 @@ understanding layer. All parser-exposed commands are read-only:
 | `show patient <name>` | `search_patients` |
 | `show [the] next appointment` | `show_next_appointment` |
 | `list delayed appointments [type]` | `list_delayed_appointments` |
+| `list wards` | `list_wards` |
+| `list beds [available|occupied|cleaning]` | `list_beds` |
+| `show emergency queue` / `list emergency queue` | `list_emergency_queue` |
+| `show [patient] journey <name>` | `patient_journey` |
 
 Before matching, `parse()` normalizes its input: repeated whitespace collapses
 and trailing sentence punctuation is dropped. It is the one function typed
@@ -188,15 +201,21 @@ The command registry also contains operations used by APIs or agent tools:
 | `list_patient_appointments` | READ |
 | `search_appointments` | READ |
 | `reassign_scanner` | WRITE |
+| `assign_bed` | WRITE |
+| `release_bed` | WRITE |
+| `mark_bed_clean` | WRITE |
 
-`reassign_scanner` is the only canonical hospital write. It validates that
+The four writes are all `audited=True`: `CommandRunner` passes the actor and each writes an audit record
+in the same transaction. `reassign_scanner` validates that
 the appointment and scanner exist, scanner modality matches the appointment,
 and the scanner is currently `AVAILABLE`. It preserves duration and may keep
-the current start time or use a supplied ISO-8601 start time.
+the current start time or use a supplied ISO-8601 start time. The bed commands lock the bed row so
+concurrent calls cannot double-book, and enforce their own rules (`assign_bed` needs an `AVAILABLE` bed and a
+`WAITING` entry; `release_bed` needs an `OCCUPIED` bed; `mark_bed_clean` needs a `CLEANING` bed).
 
 ## 6. Registered Agent Tools
 
-There are exactly eight registered agent tools:
+There are exactly fourteen registered agent tools:
 
 | Tool | Access | CommandRunner | Purpose |
 |---|---|---|---|
@@ -204,14 +223,22 @@ There are exactly eight registered agent tools:
 | `search_scanners` | READ | Yes | List scanners by modality, status, or department and ground the returned scanner codes |
 | `execute_command` | READ | Yes | Parse and run one exact deterministic command; ground codes in its result |
 | `get_scanner_availability` | READ | Yes | Read one already-grounded scanner's status |
+| `search_beds` | READ | Yes | Filter beds by ward and status; ground bed, ward and patient codes |
+| `search_queue` | READ | Yes | Filter the emergency queue by urgency and status; ground patient codes |
+| `get_patient_journey` | READ | Yes | A patient's stages from arrival to discharge |
 | `reschedule_appointment` | HOSPITAL WRITE | Yes | Reassign a grounded appointment to a grounded scanner and optionally change time |
+| `assign_bed` | HOSPITAL WRITE | Yes | Admit a grounded waiting patient to a grounded available bed |
+| `release_bed` | HOSPITAL WRITE | Yes | Discharge the patient in a grounded occupied bed; the bed goes to cleaning |
+| `mark_bed_clean` | HOSPITAL WRITE | Yes | Return a grounded cleaning bed to available |
 | `list_preferences` | READ | No | Read explicit session preferences |
 | `remember_preference` | MEMORY WRITE | No | Store an explicitly requested preference |
 | `forget_preference` | MEMORY WRITE | No | Remove a preference by key |
 
 The agent cannot create/delete appointments, create/edit patients, change
-scanner status, edit departments, run arbitrary SQL, or invoke an unregistered
-operation. `reschedule_appointment` is its only hospital-data write.
+scanner status, edit departments, add patients to the emergency queue, run arbitrary SQL, or invoke an
+unregistered operation. Its hospital-data writes are `reschedule_appointment`, `assign_bed`, `release_bed` and
+`mark_bed_clean`. With `REQUIRE_RESCHEDULE_CONFIRMATION` or `REQUIRE_BED_CONFIRMATION` on, the matching
+writes only record a proposal until the user confirms in the chat.
 
 ## 7. LangGraph Execution
 
@@ -345,11 +372,18 @@ persist conversation messages but do not create LangGraph tool traces.
 | `GET /api/operations/scanners` | Read/filter scanners through `CommandRunner` |
 | `GET /api/operations/appointments` | Read/filter appointments through `CommandRunner` |
 | `GET /api/operations/patients` | Search patients through `CommandRunner` |
+| `GET /api/operations/wards` | Wards with bed and occupied counts |
+| `GET /api/operations/beds` | Beds, filterable by ward and status |
+| `GET /api/operations/queue` | Emergency queue, filterable by urgency and status |
+| `GET /api/operations/journey` | One patient's journey stages and appointments |
 | `GET /api/sessions/{id}/messages` | Restore persisted conversation messages |
 | `GET /api/sessions/{id}/trace` | Read agent action events |
 | `GET /api/sessions/{id}/pending-reschedules` | Reschedules the agent proposed that await confirmation (`REQUIRE_RESCHEDULE_CONFIRMATION`) |
 | `POST /api/sessions/{id}/reschedule/{proposal_id}/confirm` | Apply a proposed reschedule through `CommandRunner`, attributed to the user |
 | `POST /api/sessions/{id}/reschedule/{proposal_id}/cancel` | Discard a proposed reschedule |
+| `GET /api/sessions/{id}/pending-bed-actions` | Bed changes the agent proposed that await confirmation (`REQUIRE_BED_CONFIRMATION`) |
+| `POST /api/sessions/{id}/bed-actions/{proposal_id}/confirm` | Apply a proposed bed change through `CommandRunner`, attributed to the user |
+| `POST /api/sessions/{id}/bed-actions/{proposal_id}/cancel` | Discard a proposed bed change |
 | `GET /api/health` | Health check |
 | `GET /api/status` | Which of the agent runtime, harness and Jev are `on`, `off` or `down`, for the header lights; no URLs, models or keys |
 | `POST /internal/v1/turns/{turn_id}/tool_calls` | Harness runtime only: token-guarded tool-call callback; never published by a proxy |

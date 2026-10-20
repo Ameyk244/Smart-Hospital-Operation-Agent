@@ -151,11 +151,16 @@ All parser-exposed commands are reads:
 | `show patient <name>` | `search_patients` | READ |
 | `show [the] next appointment` | `show_next_appointment` | READ |
 | `list delayed appointments [mri|ct|xray]` | `list_delayed_appointments` | READ |
+| `list wards` | `list_wards` | READ |
+| `list beds [available|occupied|cleaning]` | `list_beds` | READ |
+| `show emergency queue` / `list emergency queue` | `list_emergency_queue` | READ |
+| `show [patient] journey <name>` | `patient_journey` | READ |
 
 Matching is case-insensitive, collapses repeated whitespace and ignores
 trailing punctuation (spoken transcripts and typed sentences routinely end in
 `.` or `?`), but is not fuzzy. A phrase such as `show me the next appointment` deliberately misses
-the grammar and becomes an agent candidate.
+the grammar and becomes an agent candidate. `list beds` accepts at most one status
+word, so `list beds occupied available` also misses rather than silently dropping one.
 
 Direct deterministic commands do not create grounding records. Grounding is
 an LLM safety boundary and is created by agent tools that expose entities.
@@ -174,7 +179,14 @@ Both entrances converge on `CommandRunner`. Registered operations are:
 | `show_next_appointment` | READ | Parser and `execute_command` |
 | `search_appointments` | READ | Agent search tool and operations API |
 | `list_delayed_appointments` | READ | Parser and `execute_command` |
+| `list_wards` | READ | Parser, Jev, `execute_command`, operations API |
+| `list_beds` | READ | Parser, `execute_command`, operations API |
+| `list_emergency_queue` | READ | Parser, `execute_command`, operations API |
+| `patient_journey` | READ | Parser, `execute_command`, operations API |
 | `reassign_scanner` | WRITE | Agent `reschedule_appointment` tool |
+| `assign_bed` | WRITE | Agent `assign_bed` tool |
+| `release_bed` | WRITE | Agent `release_bed` tool |
+| `mark_bed_clean` | WRITE | Agent `mark_bed_clean` tool |
 
 `CommandRunner` commits success and rolls back expected command/not-found
 failures. Unexpected infrastructure or programming errors are not hidden.
@@ -209,11 +221,23 @@ read commands. It grounds typed entity codes found in the result.
 Returns one scanner's `AVAILABLE`, `IN_USE`, or `MAINTENANCE` status through
 the canonical command layer. The scanner must already be grounded.
 
-### Hospital write
+#### `search_beds`, `search_queue`, `get_patient_journey`
+
+Emergency-department reads. `search_beds` filters beds by ward and status and
+grounds the bed, ward and patient codes it returns; `search_queue` filters the
+emergency queue by urgency and status and grounds the patient codes;
+`get_patient_journey` returns a patient's stages from arrival to discharge.
+`execute_command` also grounds bed and queue results, so a later bed write is
+accepted whichever read was used.
+
+### Hospital writes
+
+Four tools change hospital data: `reschedule_appointment` and the three bed tools
+below. Each executes through `CommandRunner` and is audited.
 
 #### `reschedule_appointment`
 
-This is the agent's only hospital-data write. It requires a grounded
+Moves an appointment to another scanner. It requires a grounded
 appointment code and scanner code, then executes `reassign_scanner`.
 
 The command layer enforces:
@@ -232,6 +256,21 @@ With `REQUIRE_RESCHEDULE_CONFIRMATION=true` the tool does not execute the move: 
 runs the same grounding checks, records a `reschedule_proposed` event and returns
 `pending_confirmation`; the user confirms or cancels in the chat UI, and confirming
 runs this same command. The default is off, which keeps the behaviour above.
+
+#### `assign_bed`, `release_bed`, `mark_bed_clean`
+
+`assign_bed` admits a patient with a `WAITING` emergency queue entry to an `AVAILABLE`
+bed (the bed becomes `OCCUPIED`, the entry `ADMITTED`). `release_bed` discharges the
+patient in an `OCCUPIED` bed (the bed becomes `CLEANING`, the entry `DISCHARGED`).
+`mark_bed_clean` moves a `CLEANING` bed back to `AVAILABLE`. The first two need a
+grounded patient and bed; `mark_bed_clean` needs a grounded bed. The commands lock the
+bed row so concurrent calls cannot double-book, and the audit record carries only codes
+and statuses.
+
+With `REQUIRE_BED_CONFIRMATION=true`, `assign_bed` and `release_bed` record a
+`bed_action_proposed` event and return `pending_confirmation`; the chat shows a card and
+confirming runs the same command as the user (`user_confirmed:<session>`). `mark_bed_clean`
+is not gated, since it only changes a status label. The default is off.
 
 ### Session-memory tools
 
@@ -257,6 +296,7 @@ No registered tool permits the agent to:
 - create, delete, or cancel appointments;
 - edit patient demographics;
 - change scanner status;
+- add patients to the emergency queue or change triage;
 - create or edit departments, rooms, or staff;
 - run arbitrary SQL;
 - invoke Alembic or change the schema;
@@ -290,8 +330,8 @@ Important properties:
 - codes seen in another chat session are rejected;
 - grounding does not replace business validation.
 
-`search_appointments` and `execute_command` expose codes. The scanner
-observation and appointment write tools call `require_grounded()` before the
+`search_appointments`, `search_beds`, `search_queue` and `execute_command` expose codes. The scanner
+observation and the write tools (appointments and beds) call `require_grounded()` before the
 canonical operation runs. Grounding failures become rejected tool results for
 the model to explain; they do not reach the write command.
 

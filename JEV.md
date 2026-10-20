@@ -31,9 +31,12 @@ Jev can route these canonical operations:
 | `list_scanners` | Modality and scanner status |
 | `show_next_appointment` | None |
 | `list_delayed_appointments` | Modality |
+| `list_wards` | None |
 
-`search_patients` may be recognized but is not executed because its free-text
-name cannot be safely produced by the fixed-choice decision schema. All
+`search_patients`, `patient_journey`, `list_beds` and `list_emergency_queue` are recognized but not
+executed. The first two need a free-text patient name, which the fixed-choice decision schema cannot
+produce; the bed and queue lists have status and urgency filters Jev has no questions for, so executing them
+would silently return the unfiltered list. All
 writes, multi-step requests, preferences, and contextual reasoning continue
 to the LangGraph agent. Jev cannot reschedule an appointment.
 
@@ -78,7 +81,7 @@ reads a `ScoreAnswer.score` value. Likewise, the explicit labels `none` and
 
 | Question key | Allowed labels | Used for |
 |---|---|---|
-| `command` | `list_departments`, `list_scanners`, `show_next_appointment`, `list_delayed_appointments`, `search_patients`, `none` | Primary routing decision |
+| `command` | `list_departments`, `list_scanners`, `show_next_appointment`, `list_delayed_appointments`, `list_wards`, `search_patients`, `patient_journey`, `list_beds`, `list_emergency_queue`, `none` | Primary routing decision |
 | `scanner_type` | `MRI`, `CT`, `XRAY`, `unspecified` | `list_scanners.type` |
 | `scanner_status` | `AVAILABLE`, `IN_USE`, `MAINTENANCE`, `unspecified` | `list_scanners.status` |
 | `appointment_type` | `MRI`, `CT`, `XRAY`, `unspecified` | `list_delayed_appointments.appointment_type` |
@@ -272,3 +275,10 @@ client code with command routing (`_ask_jev`) and is recorded as a
 `scope_checked` trace row, not a `jev_invoked` one, so the cost comparison does not
 include it. Measured on a labelled set (the wording was tuned until both numbers
 were zero): 0 of 18 legitimate messages blocked, 0 of 16 off-topic ones let through.
+
+After the wards, beds and emergency queue were added, the in-scope wording was extended and checked on a
+second, smaller labelled set of 14 messages (8 follow-ups about beds, the queue and the admission card, each
+with the previous reply, and 6 off-topic). The new wording and the previous one both scored 13 of 14: every
+legitimate follow-up was allowed and 5 of 6 off-topic messages were blocked. The miss ("translate this to
+Spanish") scored about 0.5, below the threshold, so it reached the agent, which declines it; the old wording
+missed it too. It is a no-regression check on one run of 14 messages, not a rate.

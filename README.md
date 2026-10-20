@@ -2,7 +2,7 @@
 
 A full-stack hospital operations system built around a deterministic-first architecture.
 
-Exact operational commands are handled without an LLM. Natural-language read requests can take a confidence-gated Jev fast path into the same command layer, while richer requests fall back to a bounded LangGraph agent that can search hospital data, reason over tool results, and safely reschedule appointments using grounded entity references.
+Exact operational commands are handled without an LLM. Natural-language read requests can take a confidence-gated Jev fast path into the same command layer, while richer requests fall back to a bounded LangGraph agent that can search hospital data, reason over tool results, and safely reschedule appointments and manage emergency-department beds using grounded entity references.
 
 The project uses only synthetic patient and hospital data.
 
@@ -14,6 +14,9 @@ The project uses only synthetic patient and hospital data.
 - PostgreSQL-backed hospital and agent state
 - Grounded appointment and scanner references
 - Safe scanner reassignment with business-rule validation
+- Wards and beds, an emergency queue and a patient journey, each with its own page, parser commands and agent tools
+- Opt-in confirm-before-change for bed assignment and release (`REQUIRE_BED_CONFIRMATION`)
+- Left sidebar navigation across Operations, Wards, Emergency queue, Patient journey and Cost comparison
 - Persistent conversations and session preferences
 - Agent execution traces visible in the frontend
 - Streaming voice input (mic button) into the same routing pipeline, with local speech-to-text and no new API key
@@ -24,6 +27,20 @@ The project uses only synthetic patient and hospital data.
 - Harness extensions (all opt-in): per-round token usage, a gateway-local `current_time` tool, confirm-before-reschedule (`REQUIRE_RESCHEDULE_CONFIRMATION`), a fallback model, and record/replay tests
 - Layered guardrails: any message about the app reaches the agent, while off-topic or unsafe requests are blocked (see `AGENT.md` section 3)
 - Status lights in the UI for the agent, harness and Jev
+
+## Pages
+
+A left sidebar switches the main view; the chat and trace panels stay on the right on every page, and the agent is the same global agent everywhere.
+
+| Page | What it shows |
+|---|---|
+| Operations | Departments, scanners, appointments and patient search |
+| Wards | Ward occupancy and a bed board (available, occupied, cleaning); refreshes after a chat-driven change |
+| Emergency queue | Waiting, admitted and discharged patients by urgency and wait time (refreshes every 30 seconds) |
+| Patient journey | One patient's path from arrival to discharge, plus their appointments |
+| Cost comparison | Token cost of the Jev fast path against the agent |
+
+The pages are read-only. Changes are made through chat, so every change goes through the same grounded, audited command layer.
 
 ## Architecture
 
@@ -127,6 +144,8 @@ The agent can work with:
 - MRI, CT, and X-ray scanners
 - Scanner availability
 - Scanner reassignment
+- Wards, beds and the emergency queue (admit a waiting patient to a bed, release a bed, mark a cleaned bed available)
+- A patient's journey from arrival to discharge
 - Explicit session preferences
 - Contextual follow-up questions
 
@@ -192,6 +211,34 @@ list delayed appointments mri
 list delayed appointments ct
 list delayed appointments xray
 ```
+
+### Wards and Beds
+
+```text
+list wards
+list beds
+list beds available
+list beds occupied
+list beds cleaning
+```
+
+### Emergency Queue
+
+```text
+show emergency queue
+list emergency queue
+```
+
+### Patient Journey
+
+Replace `<name>` with a patient name.
+
+```text
+show journey <name>
+show patient journey <name>
+```
+
+Only one status word is accepted after `list beds`. Extra words make the parser miss on purpose, so the request goes on to Jev or the agent.
 
 ---
 
@@ -303,7 +350,10 @@ which appointments are running late?
 how many delayed MRI appointments are there?
 which MRI scanners are available?
 what is the next scheduled appointment?
+what wards does the hospital have?
 ```
+
+Jev can execute only `list_departments`, `list_scanners`, `show_next_appointment`, `list_delayed_appointments` and `list_wards`. It recognises beds, the emergency queue and journeys but never runs them (it has no filter questions for them), so those messages go to the agent.
 
 Successful responses return `handled_by="jev"` and display the `jev` badge.
 Each consultation records a `jev_invoked` trace event. See `JEV.md` for the
@@ -316,8 +366,8 @@ full decision, fallback, configuration, and observability contract.
 The LangGraph agent is the final fallback for eligible hospital requests that
 the parser and Jev do not resolve. It uses the configured Anthropic or
 OpenRouter chat model, can reason over conversation context, and may call one
-or more of the eight registered tools (`search_appointments`, `search_scanners`, `execute_command`, `get_scanner_availability`, `reschedule_appointment` and the three preference tools). Its hospital operations still pass
-through `CommandRunner`, and rescheduling is its only hospital-data write.
+or more of the fourteen registered tools (`search_appointments`, `search_scanners`, `execute_command`, `get_scanner_availability`, `search_beds`, `search_queue`, `get_patient_journey`, the three preference tools and the four writes below). Its hospital operations still pass
+through `CommandRunner`. Four tools change hospital data: `reschedule_appointment`, `assign_bed`, `release_bed` and `mark_bed_clean`.
 
 ### Appointment Search
 
@@ -357,7 +407,7 @@ Find appointments belonging to patient PT-1003
 
 ### Appointment Rescheduling
 
-Rescheduling is the agent's only hospital-data write operation.
+Rescheduling moves an appointment to another scanner.
 
 ```text
 Find the delayed MRI appointments and move the first one to another available MRI scanner
@@ -369,6 +419,22 @@ Move it to the other available MRI scanner
 ```
 
 The agent validates that the appointment and scanner exist, the modalities match, and the target scanner is available.
+
+### Wards, Beds and Emergency Queue
+
+```text
+Who has been waiting the longest in the ER?
+Which beds are free right now?
+Which beds are being cleaned, and in which ward?
+Admit Wei Gonzalez to a free bed in the Emergency Bay
+Discharge the patient in BED-1
+Mark BED-3 clean
+Where is John Anderson in his emergency visit?
+```
+
+`assign_bed` needs a patient with a waiting queue entry and an available bed; `release_bed` discharges the patient and sets the bed to cleaning; `mark_bed_clean` returns a cleaning bed to the pool. All three need codes that a search showed earlier in the session and are audited.
+
+With `REQUIRE_BED_CONFIRMATION=true`, `assign_bed` and `release_bed` only record a proposal and the chat shows a Confirm and Cancel card; the bed changes when you confirm. `mark_bed_clean` is not gated. The default is off.
 
 ---
 
@@ -572,6 +638,8 @@ Create a new appointment
 Cancel every delayed appointment
 Delete appointment APT-2001
 Change scanner SCN-1 to maintenance
+Add a patient to the emergency queue
+Change a patient's triage level
 Create a new department
 Edit the patient's date of birth
 Run this SQL query against the database

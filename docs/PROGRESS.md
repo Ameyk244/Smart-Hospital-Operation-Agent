@@ -1688,3 +1688,15 @@ Finding (not a regression): "when is the next appointment?" is not matched by Je
 predates this work. The live run changed BED-3 to AVAILABLE; it was set back to CLEANING
 (the seed state). Confirm and release were not run live (they would consume a waiting
 patient); both are covered by the 8 and 32 database-backed integration tests.
+
+### Expansion: documentation, mode 3 and merge
+
+README, AGENT.md, JEV.md, `docs/ARCHITECTURE.md`, `docs/HARNESS_EXPLAINED.md`, `SKILLS.md`,
+`rulebook.md`, `docs/EXPANSION.md` and CLAUDE.md now describe the new pages (a left sidebar over
+Operations, Wards, Emergency queue, Patient journey and Cost comparison), the parser commands, the
+agent tools (fourteen, four of which write), Jev's read-only set and opt-in bed confirmation. The
+statement that `reschedule_appointment` is the only hospital write was replaced everywhere.
+
+The app was left running in mode 3 (gateway with the front door on :8891, harness-mode backend on
+:8000, UI on :5173) with the free OpenRouter model and `REQUIRE_BED_CONFIRMATION=true`, as startup
+overrides; `.env` is unchanged. Branch `hospital-expansion` was merged into `master` and pushed.

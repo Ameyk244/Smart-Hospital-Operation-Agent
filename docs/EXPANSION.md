@@ -166,15 +166,19 @@ path is gated. Same mechanism as reschedule, no schema change (it reuses
 
 - Writes from the UI; adding patients to the queue; triage edits.
 - A journey events table; a capacity forecast.
-- Jev measurement for the new read commands against a labelled set (needs a live
-  run the owner must approve).
+- `assign_bed` does not require triage (a waiting patient can be bedded before `triaged_at` is set).
+- Jev executing `list_beds`, `list_emergency_queue` or `patient_journey`: it has no filter or name
+  questions for them, so they go to the parser or the agent.
+- Confirmation for `mark_bed_clean` (it only changes a status label).
+- A ward grounding type: no tool requires a grounded ward.
 
-## 9. Build order and ownership
+## 9. Status and how it was built
 
-1. Backend: models, repositories, commands, routes, tools, parser, gate, Jev,
-   seed, migration file (written, **not run**), tests. One agent, because these
-   share files.
-2. Frontend, in parallel with each other: pages (new files plus `api/`) and the
-   shell/refresh (`App.tsx`, `App.css`, `index.css`).
-3. Review every diff against its scope; run the suites one at a time.
-4. Owner approves: Alembic upgrade and seed on the dev database.
+Built on branch `hospital-expansion` and merged to `master`. Order: backend (data, commands, routes,
+tools, parser, gate, Jev, seed, migration), frontend in parallel (pages; sidebar and refresh), then a
+code review and fixes twice, then confirmation (section 7a). Review fixes added `mark_bed_clean`, row
+locks, the `reached` flag on journey stages and `wait_minutes` counting only while waiting.
+
+The migration (`a4c1e7b92d35`) was applied to the dev database by the owner. On an existing database,
+add only the new rows (the full seed script deletes and regenerates every hospital row). Verified on
+the live app in all three run modes (see `docs/PROGRESS.md`).
