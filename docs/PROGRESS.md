@@ -1719,3 +1719,14 @@ reasons; each feature below is additive and off by default.
    included); a refused write counts as an invalid call so a model that keeps retrying is stopped.
 3. **Compaction: not built, measured.** 265 recorded model rounds: max input 11.5k tokens,
    none over 20k; longest session 58 messages. dsh compaction triggers near 70k tokens.
+4. **Task skills (backend, opt-in).** `AGENT_SKILLS_ENABLED=true` appends up to two short guidance
+   files from `backend/app/agent/skills/` (bed allocation, scanner reschedule, ER queue, patient
+   journey, app help, shift handover) to the system prompt, chosen by a small explicit keyword
+   table. No new tool and no gateway or contract change: the harness already gets `system` each
+   turn. **Limit:** it applies in harness mode and in process without a checkpointer; in process
+   with a checkpointer (the normal mode 1) the system message is fixed when the thread starts, so
+   the flag has no effect there, as for remembered preferences. Review fixes: broad words
+   (`help`, `confirm`, `emergency`) removed, `app_help` takes priority so "how do I assign a bed"
+   explains instead of steering a write.
+5. **Scheduler: designed, not built.** `docs/SCHEDULER.md`; needs two tables, so the migration
+   waits for explicit approval.
