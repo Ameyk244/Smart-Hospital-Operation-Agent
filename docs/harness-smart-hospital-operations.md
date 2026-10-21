@@ -76,6 +76,7 @@ No schema change and no migration: the registry is in memory, and
 | `HARNESS_URL` | `http://127.0.0.1:8891` | Where the backend reaches the harness |
 | `HARNESS_TOKEN` | unset | Shared secret, at least 32 characters. Local only; **not** a paid API key. Required when `AGENT_RUNTIME=harness`; startup **fails fast** if it is missing or short (`Settings` validator) |
 | `HARNESS_MODEL` | `anthropic/claude-sonnet-5` | The model id the harness must serve. Sent per turn; the harness refuses a mismatch |
+| `MAX_WRITE_CALLS_PER_TURN` | `0` | Opt-in cap on write-tool calls per turn, enforced in `ToolTurn` (both runtimes). A call over the cap is not executed, is recorded as `write_limit_exceeded` and does not end the turn |
 | `HARNESS_FALLBACK_MODEL` | unset | A second model id the gateway also serves. If a turn ends with `model_error` before any tool call ran, the bridge retries it once with this model (section 7, rule 15) |
 | `HARNESS_MAX_TOKENS` | `4096` | `llm.max_tokens` sent per turn: the cap on one model round. OpenRouter refuses a request whose cap the account balance cannot cover (HTTP 402), so lower it for a small balance |
 | `HARNESS_TURN_TIMEOUT_SECONDS` | `120` | Whole-turn budget. Sent as `deadline_in_ms`; the backend's HTTP timeout is this plus a fixed grace |
@@ -322,6 +323,7 @@ upstream sockets, step fence, hello poller or pre-attach buffer; no streaming
 | `HOSPITAL_BACKEND_URL` | `http://127.0.0.1:8000` | Backend base URL |
 | `HOSPITAL_LLM_MODEL` | `anthropic/claude-sonnet-5` | The one model served; must equal the backend's `HARNESS_MODEL` or every turn finishes with `error` and no model call |
 | `HOSPITAL_LLM_FALLBACK_MODELS` | empty | Comma-separated extra model ids the gateway also serves (the allowed list is `HOSPITAL_LLM_MODEL` plus these). A turn asking for a model outside the list is refused with `model_mismatch` and no model call |
+| `HOSPITAL_LLM_RETRY_RATE_LIMIT` | unset (off) | `true` also retries a provider 429 once (jitter 0.2); off keeps the pinned `[TRANSPORT, SERVER]` policy |
 | `HOSPITAL_LLM_BASE_URL` | `https://openrouter.ai/api/v1` | Provider base URL |
 
 The backend sends sampling and limits per turn (`llm.max_tokens`,

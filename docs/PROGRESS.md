@@ -1700,3 +1700,22 @@ statement that `reschedule_appointment` is the only hospital write was replaced 
 The app was left running in mode 3 (gateway with the front door on :8891, harness-mode backend on
 :8000, UI on :5173) with the free OpenRouter model and `REQUIRE_BED_CONFIRMATION=true`, as startup
 overrides; `.env` is unchanged. Branch `hospital-expansion` was merged into `master` and pushed.
+
+### Harness features (branch `harness-features`, both repos)
+
+Chosen after a README-level survey of what dsh ships against this project's rules (fresh agent
+per turn, no stored chat text, tools proxied to the backend). Most of dsh was ruled out for those
+reasons; each feature below is additive and off by default.
+
+1. **Retry of rate-limited requests (gateway).** `HOSPITAL_LLM_RETRY_RATE_LIMIT=true` adds
+   `RATE_LIMIT` to the retryable codes (one retry, jitter 0.2). Two mock-LLM e2e tests: 429 then
+   200 completes when on, fails with `model_error` when off. Provider text lands only in dsh's
+   in-memory `llm/retry` session event, which the gateway never reads; same exposure as the
+   existing 5xx retries.
+2. **Write-call cap (backend).** `MAX_WRITE_CALLS_PER_TURN` (0 = off). Enforced in `ToolTurn`, so
+   it holds in process and through the harness; carried across graph rounds like `tool_call_count`.
+   Over the cap: not executed, `write_limit_exceeded` event, turn continues. Five tests, scripted
+   model, test database only. Review fixes: only successful writes use the cap (preference writes
+   included); a refused write counts as an invalid call so a model that keeps retrying is stopped.
+3. **Compaction: not built, measured.** 265 recorded model rounds: max input 11.5k tokens,
+   none over 20k; longest session 58 messages. dsh compaction triggers near 70k tokens.
