@@ -176,6 +176,8 @@ Remember that I prefer MRI Scanner 2.
 What preferences do you remember?
 ```
 
+**Opt-in limits and guidance.** `MAX_WRITE_CALLS_PER_TURN` (default 0, off) stops a turn after that many successful write tools; a refused write is not executed and counts as an invalid call. `AGENT_SKILLS_ENABLED` (default off) appends short task guidance from `backend/app/agent/skills/` to the system prompt; it takes effect in harness mode and in process without a checkpointer.
+
 ## 4. Contextual Follow-Ups
 
 Short follow-ups can reach the agent when the same session contains a recent,

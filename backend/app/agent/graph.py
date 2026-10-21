@@ -41,6 +41,7 @@ from opentelemetry import trace
 from opentelemetry.context import Context
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.agent.skills import select_skills
 from app.agent.state import AgentState
 from app.agent.tools import all_tool_dicts
 from app.agent.turn import ToolTurn
@@ -365,24 +366,26 @@ def build_graph(
 
 
 async def build_system_message(
-    session_factory: async_sessionmaker[AsyncSession], session_id: str
+    session_factory: async_sessionmaker[AsyncSession],
+    session_id: str,
+    user_text: str | None = None,
 ) -> SystemMessage:
     """Base system prompt, plus this session's remembered preferences
     (concept 40: memory injection) when there are any — never fabricated,
     only what the `remember_preference` tool actually wrote for this exact
-    session_id."""
+    session_id — plus task guidance for `user_text` when one is given."""
     async with session_factory() as session:
         prefs = await PreferenceRepository(session).list_for_session(session_id)
-    if not prefs:
-        return SystemMessage(content=SYSTEM_PROMPT)
-    pref_lines = "\n".join(f"- {p.key}: {p.value}" for p in prefs)
-    return SystemMessage(
-        content=(
-            f"{SYSTEM_PROMPT}\n\n"
-            "Remembered preferences for this session (apply only where relevant to "
+    content = SYSTEM_PROMPT
+    if prefs:
+        pref_lines = "\n".join(f"- {p.key}: {p.value}" for p in prefs)
+        content += (
+            "\n\nRemembered preferences for this session (apply only where relevant to "
             f"the current request, don't force them into unrelated answers):\n{pref_lines}"
         )
-    )
+    if user_text and (skills := select_skills(user_text)):
+        content += f"\n\nTask guidance for this request:\n{skills}"
+    return SystemMessage(content=content)
 
 
 async def run_agent(
@@ -430,7 +433,13 @@ async def run_agent(
         ) + [HumanMessage(content=user_text)]
     else:
         config = {"recursion_limit": recursion_limit}
-        system_message = await build_system_message(session_factory, session_id)
+        # Rebuilt every turn here, so skills can follow the message; with a
+        # checkpointer the system message is fixed when the thread starts.
+        system_message = await build_system_message(
+            session_factory,
+            session_id,
+            user_text if settings.agent_skills_enabled else None,
+        )
         # `history` (concepts 35, 42): prior turns from ConversationMessage,
         # already converted to LangChain messages by the caller — the
         # fallback path for when no checkpointer is configured, so a

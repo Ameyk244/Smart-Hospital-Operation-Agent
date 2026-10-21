@@ -294,7 +294,9 @@ async def run_agent_via_harness(
         await SessionRepository(session).get_or_create(session_id)
         await session.commit()
 
-    system_message = await build_system_message(session_factory, session_id)
+    system_message = await build_system_message(
+        session_factory, session_id, user_text if settings.agent_skills_enabled else None
+    )
     prior = (
         await get_thread_messages(
             session_id=session_id,

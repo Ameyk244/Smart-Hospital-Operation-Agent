@@ -157,6 +157,10 @@ class Settings(BaseSettings):
     # Same for the agent's assign_bed / release_bed (docs/EXPANSION.md 7a).
     require_bed_confirmation: bool = False
 
+    # When on, short task guidance (app/agent/skills/) is appended to the
+    # system prompt for messages that call for it. Off: the prompt is unchanged.
+    agent_skills_enabled: bool = False
+
     # --- Observability (see observability/README.md) ---
     # Off by default so a fresh clone and the test suite never try to export.
     # Turn on in .env when the local grafana/otel-lgtm stack is running.

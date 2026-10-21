@@ -279,6 +279,18 @@ async def test_payload_limits_follow_the_settings(world):
     }
 
 
+async def test_payload_system_carries_task_guidance_only_when_enabled(world):
+    await world.chat("Admit the waiting patient to an available bed")
+    world.configure(agent_skills_enabled=True)
+    await world.chat("Admit the waiting patient to an available bed")
+    await world.chat(ASK)
+
+    plain, guided, unmatched = (p["system"] for p in world.harness.payloads)
+    assert "Task guidance" not in plain
+    assert "Bed allocation" in guided
+    assert unmatched == plain
+
+
 async def test_second_turn_history_carries_the_first_turns_tool_exchange(world):
     world.harness.script = [SEARCH]
     first = await world.chat(ASK)
