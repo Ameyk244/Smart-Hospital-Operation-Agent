@@ -340,6 +340,7 @@ Default per-turn bounds:
 |---|---:|
 | `MAX_AGENT_ROUNDS` | 6 |
 | `MAX_TOOL_CALLS` | 10 |
+| `MAX_WRITE_CALLS_PER_TURN` | 0 (no cap) |
 | `MAX_INVALID_TOOL_CALLS` | 3 |
 | `TOOL_TIMEOUT_SECONDS` | 15 |
 | `LLM_TIMEOUT_SECONDS` | 30 |

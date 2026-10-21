@@ -44,6 +44,8 @@ services:
         value: 10
       - key: MAX_INVALID_TOOL_CALLS
         value: 3
+      - key: MAX_WRITE_CALLS_PER_TURN
+        value: 0
       - key: TOOL_TIMEOUT_SECONDS
         value: 15
       - key: LLM_TIMEOUT_SECONDS

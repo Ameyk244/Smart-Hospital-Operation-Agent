@@ -120,6 +120,7 @@ class Settings(BaseSettings):
     # --- Bounded agent execution (see docs/ARCHITECTURE.md §5) ---
     max_agent_rounds: int = 6
     max_tool_calls: int = 10
+    max_write_calls_per_turn: int = Field(0, ge=0)
     tool_timeout_seconds: int = 15
     llm_timeout_seconds: int = 30
     max_invalid_tool_calls: int = 3

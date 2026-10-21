@@ -62,6 +62,7 @@ class ToolTurn:
         settings: Settings,
         tool_call_count: int = 0,
         invalid_call_count: int = 0,
+        write_call_count: int = 0,
         touched_entity_codes: list[str] | None = None,
     ) -> None:
         self._session_id = session_id
@@ -69,6 +70,7 @@ class ToolTurn:
         self._settings = settings
         self.tool_call_count = tool_call_count
         self.invalid_call_count = invalid_call_count
+        self.write_call_count = write_call_count
         self.terminated_reason: str | None = None
         # Carried forward across rounds *within this turn* (tool_node can
         # run several times before the loop ends) but reset to [] fresh at
@@ -131,6 +133,14 @@ class ToolTurn:
             await self._record_rejection(round_num, spec.name, args, "invalid_argument")
             return error
 
+        if spec.is_write:
+            limit = self._settings.max_write_calls_per_turn
+            if limit and self.write_call_count >= limit:
+                self.invalid_call_count += 1
+                _tool_outcome(tool_span, spec.name, EventStatus.REJECTED.value, "write_limit_exceeded")
+                await self._record_rejection(round_num, spec.name, args, "write_limit_exceeded")
+                return "Not executed: this turn's write-call limit was reached."
+
         start = time.monotonic()
         async with self._session_factory() as session:
             try:
@@ -180,6 +190,7 @@ class ToolTurn:
 
             await session.commit()
             self.tool_call_count += 1
+            self.write_call_count += spec.is_write
             latency_ms = int((time.monotonic() - start) * 1000)
             _tool_outcome(tool_span, spec.name, EventStatus.SUCCESS.value, None, time.monotonic() - start)
             await self._record_executed(

@@ -383,6 +383,7 @@ two paid model calls.
 - `round_count`;
 - `tool_call_count`;
 - `invalid_call_count`;
+- `write_call_count` (successful write tools; with `MAX_WRITE_CALLS_PER_TURN` set, a write over the cap is not executed, counts as an invalid call and does not end the turn);
 - `terminated_reason`;
 - `touched_entity_codes` for the current turn.
 

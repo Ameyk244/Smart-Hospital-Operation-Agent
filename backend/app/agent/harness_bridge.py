@@ -382,6 +382,7 @@ async def run_agent_via_harness(
         "round_count": rounds,
         "tool_call_count": recorder.turn.tool_call_count,
         "invalid_call_count": recorder.turn.invalid_call_count,
+        "write_call_count": recorder.turn.write_call_count,
         "terminated_reason": reason,
         "touched_entity_codes": recorder.turn.touched_entity_codes,
     }

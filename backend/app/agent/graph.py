@@ -314,6 +314,7 @@ def _make_tool_node(
             settings=settings,
             tool_call_count=state["tool_call_count"],
             invalid_call_count=state["invalid_call_count"],
+            write_call_count=state["write_call_count"],
             touched_entity_codes=state.get("touched_entity_codes", []),
         )
         new_messages = [
@@ -332,6 +333,7 @@ def _make_tool_node(
             "messages": new_messages,
             "tool_call_count": turn.tool_call_count,
             "invalid_call_count": turn.invalid_call_count,
+            "write_call_count": turn.write_call_count,
             "terminated_reason": turn.terminated_reason,
             "touched_entity_codes": turn.touched_entity_codes,
         }
@@ -444,6 +446,7 @@ async def run_agent(
         "round_count": 0,
         "tool_call_count": 0,
         "invalid_call_count": 0,
+        "write_call_count": 0,
         "terminated_reason": None,
         "touched_entity_codes": [],
     }

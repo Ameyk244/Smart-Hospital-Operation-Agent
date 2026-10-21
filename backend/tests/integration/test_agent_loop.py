@@ -401,3 +401,32 @@ async def test_too_many_invalid_calls_terminates(agent_session_factory):
 
     assert final_state["terminated_reason"] == "too_many_invalid_calls"
     assert final_state["invalid_call_count"] == 2
+
+
+async def test_write_cap_holds_across_graph_rounds(agent_session_factory):
+    def remember(key: str, call_id: str) -> AIMessage:
+        return AIMessage(
+            content="",
+            tool_calls=[
+                {"name": "remember_preference", "args": {"key": key, "value": "x"}, "id": call_id, "type": "tool_call"}
+            ],
+        )
+
+    model = ScriptedChatModel(
+        responses=[remember("a", "call_1"), remember("b", "call_2"), AIMessage(content="Done.")]
+    )
+
+    final_state = await run_agent(
+        session_id="test-write-cap-rounds",
+        user_text="remember a and b",
+        chat_model=model,
+        session_factory=agent_session_factory,
+        settings=_settings(max_write_calls_per_turn=1),
+    )
+
+    tool_messages = [m for m in final_state["messages"] if m.type == "tool"]
+    assert "write-call limit was reached" not in tool_messages[0].content
+    assert tool_messages[1].content == "Not executed: this turn's write-call limit was reached."
+    assert final_state["terminated_reason"] is None
+    assert final_state["write_call_count"] == 1
+    assert final_state["invalid_call_count"] == 1

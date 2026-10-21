@@ -20,6 +20,7 @@ class AgentState(TypedDict):
     round_count: int
     tool_call_count: int
     invalid_call_count: int
+    write_call_count: int
     terminated_reason: str | None
     # Deliberately NOT a reducer-merged field (unlike `messages`): like
     # round_count/tool_call_count, this must reset to [] on every fresh
