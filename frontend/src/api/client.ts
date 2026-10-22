@@ -1,5 +1,7 @@
 import type {
   AgentEvent,
+  Alert,
+  ScheduledTask,
   Appointment,
   Bed,
   CancelBedActionResponse,
@@ -114,6 +116,14 @@ export const api = {
 
   getJourney(patientCode: string): Promise<Journey> {
     return request(`/api/operations/journey${buildQuery({ patient_code: patientCode })}`);
+  },
+
+  listAlerts(status: "open" | "all" = "open"): Promise<Alert[]> {
+    return request(`/api/operations/alerts${buildQuery({ status })}`);
+  },
+
+  listScheduledTasks(): Promise<ScheduledTask[]> {
+    return request("/api/operations/scheduled-tasks");
   },
 
   sendChat(text: string, sessionId?: string): Promise<ChatResponse> {
