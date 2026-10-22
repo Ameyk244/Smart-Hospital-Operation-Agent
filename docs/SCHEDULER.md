@@ -1,9 +1,9 @@
-# Scheduled watches and reports (design, not built)
+# Scheduled watches and alerts
 
 The app only reacts today: nothing runs unless someone sends a message. This adds
 repeatable, **read-only** work that the backend runs by itself and shows in the UI.
-Status: design for review. It needs two new tables, so the Alembic migration needs
-explicit approval in the turn it is run. Nothing here is implemented.
+Status: built on branch `harness-features`, off by default. Two new tables (migration
+`b7d2f4a96c18`, additive).
 
 ## 1. Scope and rules carried over
 
@@ -19,14 +19,14 @@ explicit approval in the turn it is run. Nothing here is implemented.
   arguments (ids and enums only), a threshold and a period. An alert holds the task id,
   a short enum-based message and entity codes. Both go on the redaction allowlist.
 - Off by default (`SCHEDULER_ENABLED=false`). With it off nothing starts and the
-  parser does not recognise the new commands.
+  the new commands answer "The scheduler is off" and the HTTP routes return `[]`.
 
 ## 2. Data (migration needs approval in the turn it is run)
 
 | Table | Columns |
 |---|---|
-| `scheduled_tasks` | `id`, `code` (TSK-n, unique), `session_id` -> agent_sessions, `kind` (`WATCH`/`REPORT`), `command` (a read command name), `arguments_json`, `condition` (enum, e.g. `QUEUE_WAIT_OVER`), `threshold` (int, nullable), `period_seconds`, `active`, `last_run_at`, `next_run_at` |
-| `alerts` | `id`, `task_id` -> scheduled_tasks, `created_at`, `severity` (enum), `summary` (templated from enums and numbers), `entity_codes` (JSON), `acknowledged_at` |
+| `scheduled_tasks` | `id`, `code` (TSK-n, unique), `kind` (`WATCH`), `condition` (enum), `threshold` (int), `scope_code` (nullable), `period_seconds`, `active`, `last_run_at`, `next_run_at`, `created_at`. The command each condition reads comes from the condition, not a column |
+| `alerts` | `id`, `task_id` -> scheduled_tasks, `dedupe_key`, `severity` (`INFO`/`WARNING`/`CRITICAL`), `summary` (templated from enums and numbers), `entity_codes` (JSON), `created_at`, `acknowledged_at` |
 
 ## 3. Runner
 
@@ -37,12 +37,36 @@ and entity), and sets `next_run_at`. A failure of one task is recorded as an eve
 never stops the loop. The telemetry path stays optional: the runner works with the
 collector down.
 
-## 4. Commands and API
+## 4. Conditions, commands and API
 
-- Parser: `watch emergency queue wait over 30 minutes`, `list watches`, `stop watch TSK-2`,
-  `acknowledge alert 5`. Exact, `$`-anchored, same normalisation as the rest of the grammar.
-- HTTP (read-only, under `/api/operations`): `GET /alerts`, `GET /scheduled-tasks`.
-- UI: an alert badge and a list; acknowledging goes through chat.
+Three watch conditions in the first version, each a pure function of one existing read
+command's result:
+
+| Condition | Command it runs | Fires when |
+|---|---|---|
+| `QUEUE_WAIT_OVER` N minutes | `list_emergency_queue` | a WAITING entry has `wait_minutes` > N (alert per entry code) |
+| `FREE_BEDS_UNDER` N | `list_beds` (status AVAILABLE) | fewer than N available beds (alert per hospital, or per ward when a ward code is given) |
+| `DELAYED_APPOINTMENTS_OVER` N | `search`/`list` of DELAYED appointments | more than N delayed appointments |
+
+Default period 5 minutes (`SCHEDULER_TICK_SECONDS`, tick 30 s). Global to the hospital.
+
+Parser (exact, `$`-anchored, same normalisation as the rest of the grammar):
+
+- `watch queue wait over 30 minutes`
+- `watch free beds under 2` / `watch free beds under 2 in WRD-1`
+- `watch delayed appointments over 3`
+- `list watches`, `stop watch TSK-2`
+- `list alerts`, `acknowledge alert 5`, `acknowledge all alerts`
+
+HTTP (read-only, `/api/operations`):
+
+- `GET /alerts?status=open|all` -> `[{id, task_code, severity, summary, entity_codes, created_at, acknowledged_at}]`
+- `GET /scheduled-tasks` -> `[{code, condition, threshold, scope_code, period_seconds, active, last_run_at}]`
+- both return `[]` when the scheduler is off; `GET /api/status` adds `"scheduler": {"status": "on"|"off"}`.
+
+UI: a bell with an open-alert count in the header, and an Alerts page in the sidebar listing
+open alerts (severity, summary, codes, time) and the active watches. Read-only: acknowledging
+and creating watches go through chat.
 
 ## 5. Not built (on purpose)
 
@@ -50,9 +74,20 @@ collector down.
   (a later opt-in step that would use the harness with read tools only).
 - Push, email or SMS delivery.
 
-## 6. Open decisions
+## 6. Decisions and known limits
 
-- Allowed conditions in the first version (proposal: ER wait over N minutes, free beds
-  under N in a ward).
-- Whether alerts expire. Whether tasks are per session or global to the hospital
-  (proposal: global, since an alert is for staff, not a conversation).
+- Global to the hospital, not per session. Period is a constant 5 minutes per watch;
+  `SCHEDULER_TICK_SECONDS` only paces the loop.
+- A threshold must be at least 1, an identical active watch is refused, and at most 20
+  watches can be active. Stopping a watch acknowledges its open alerts.
+- Alerts de-duplicate against **open** alerts only: acknowledging while the problem persists
+  raises a fresh alert on the next check (a reminder, not silence). Silence the problem by
+  stopping the watch.
+- An open alert keeps the summary and codes it was raised with; it is not updated as the
+  count changes.
+- The tick holds row locks while it runs the checks, so `stop watch` can wait behind a
+  tick. Writes from chat are audited with actor `unattributed`, like every other
+  command that runs without an agent session.
+- `execute_command` (agent) refuses audited commands, so the agent cannot create or stop
+  watches. The agent tool registry stays at 14.
+- Not done: alert expiry; the real lifespan start was checked live, not in a test.
