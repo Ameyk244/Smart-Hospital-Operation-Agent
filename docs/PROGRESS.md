@@ -1742,3 +1742,9 @@ reasons; each feature below is additive and off by default.
    additions (unplaced messages use Jev's scope check), alerts capped at 50 in the tool only, threshold
    upper bound, unknown ward is a clean `not_found`. Known: a thread's system prompt is frozen when it
    starts, so toggling the scheduler mid-thread leaves that thread's prompt stale.
+
+Final run of the `harness-features` branch in all three modes, one parser, one Jev and one agent
+message each (free MiniMax model, all new switches on): mode 1 (in process, no gateway), mode 2
+(gateway without the front door, UI on the backend) and mode 3 (front door, UI on the gateway) all
+answered `deterministic`, `jev` and `agent` with no termination reason and no backend errors; the
+agent turns in modes 2 and 3 took 3 rounds through the gateway. Not run: the full backend suite.
