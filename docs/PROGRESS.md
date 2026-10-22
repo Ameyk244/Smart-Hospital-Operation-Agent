@@ -1730,3 +1730,7 @@ reasons; each feature below is additive and off by default.
    explains instead of steering a write.
 5. **Scheduler: designed, not built.** `docs/SCHEDULER.md`; needs two tables, so the migration
    waits for explicit approval.
+6. **Scheduler: built** (migration `b7d2f4a96c18`, additive; `SCHEDULER_ENABLED`). Live in mode 3: watches
+   created in chat, a duplicate refused, alerts raised for ER-3 and ER-4, one acknowledged, one watch
+   stopped, scheduler light on in `/api/status`. Parser, Jev and agent messages unchanged. Details and
+   known limits in `docs/SCHEDULER.md`.
