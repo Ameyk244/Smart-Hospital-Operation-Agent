@@ -1734,3 +1734,11 @@ reasons; each feature below is additive and off by default.
    created in chat, a duplicate refused, alerts raised for ER-3 and ER-4, one acknowledged, one watch
    stopped, scheduler light on in `/api/status`. Parser, Jev and agent messages unchanged. Details and
    known limits in `docs/SCHEDULER.md`.
+7. **Scheduler tools for the agent.** Five tools (`list_watches`, `list_alerts`, `create_watch`,
+   `stop_watch`, `acknowledge_alert`) offered, with a watch sentence in the prompt and a `watches`
+   skill, only when `SCHEDULER_ENABLED` is on (`ToolSpec.requires_setting`); off, the tool list is the
+   original 14 and the prompt is unchanged. Live in mode 3: "alert me whenever fewer than 2 beds are
+   available" created watch TSK-3 through the agent (19 tools, 3 rounds). Review fixes: no domain-gate
+   additions (unplaced messages use Jev's scope check), alerts capped at 50 in the tool only, threshold
+   upper bound, unknown ward is a clean `not_found`. Known: a thread's system prompt is frozen when it
+   starts, so toggling the scheduler mid-thread leaves that thread's prompt stale.
