@@ -295,7 +295,7 @@ async def run_agent_via_harness(
         await session.commit()
 
     system_message = await build_system_message(
-        session_factory, session_id, user_text if settings.agent_skills_enabled else None
+        session_factory, session_id, settings, user_text if settings.agent_skills_enabled else None
     )
     prior = (
         await get_thread_messages(
@@ -313,7 +313,7 @@ async def run_agent_via_harness(
         "system": system_message.content,
         "history": to_openai_messages([m for m in prior if not isinstance(m, SystemMessage)]),
         "user": user_text,
-        "tools": all_tool_dicts(),
+        "tools": all_tool_dicts(settings),
         "llm": {
             "model": settings.harness_model,
             "max_tokens": settings.harness_max_tokens,

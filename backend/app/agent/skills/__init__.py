@@ -11,6 +11,7 @@ MAX_SKILLS = 2
 # Order is priority when more than MAX_SKILLS match.
 SKILL_KEYWORDS: dict[str, tuple[str, ...]] = {
     "app_help": ("how do i", "how does", "how can i", "what can you do", "trace panel"),
+    "watches": ("watch", "watches", "watching", "alert", "alerts", "alert me", "notify me", "monitor", "acknowledge"),
     "shift_handover": ("handover", "hand over", "shift summary", "end of shift"),
     "bed_allocation": ("assign", "admit", "release bed", "discharge", "bed", "beds"),
     "scanner_reschedule": ("reschedule", "rebook", "move", "different scanner"),
@@ -26,12 +27,12 @@ def _load(name: str) -> str:
     return (_DIR / f"{name}.md").read_text(encoding="utf-8").strip()
 
 
-def select_skills(user_text: str) -> str:
+def select_skills(user_text: str, scheduler_enabled: bool = False) -> str:
     words = " ".join(re.findall(r"[a-z]+", user_text.lower()))
     padded = f" {words} "
     matched = [
         name
         for name, keywords in SKILL_KEYWORDS.items()
-        if any(f" {k} " in padded for k in keywords)
+        if (scheduler_enabled or name != "watches") and any(f" {k} " in padded for k in keywords)
     ]
     return "\n\n".join(_load(name) for name in matched[:MAX_SKILLS])

@@ -22,6 +22,8 @@ from typing import Any
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import Settings
+
 # A tool handler receives its own fresh DB session (see app/agent/graph.py's
 # tool_node — each tool call gets its own session/transaction, independent
 # of any request-scoped session), the calling session_id (for grounding and
@@ -42,6 +44,8 @@ class ToolSpec:
     # scanner_code), so there's no single "the" entity type to hang a
     # generic check off of.
     is_write: bool
+    # Name of a Settings flag that must be true for the tool to be offered or callable.
+    requires_setting: str | None = None
 
 
 class ToolExecutionError(Exception):
@@ -81,5 +85,10 @@ def to_openai_tool_dict(spec: ToolSpec) -> dict[str, Any]:
     }
 
 
-def all_tool_dicts() -> list[dict[str, Any]]:
-    return [to_openai_tool_dict(spec) for spec in TOOL_REGISTRY.values()]
+def get_tool(name: str, settings: Settings) -> ToolSpec | None:
+    spec = TOOL_REGISTRY.get(name)
+    return spec if spec and (spec.requires_setting is None or getattr(settings, spec.requires_setting)) else None
+
+
+def all_tool_dicts(settings: Settings) -> list[dict[str, Any]]:
+    return [to_openai_tool_dict(s) for s in TOOL_REGISTRY.values() if get_tool(s.name, settings)]

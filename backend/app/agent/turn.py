@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.entity_codes import extract_entity_codes
 from app.agent.grounding import GroundingRejectedError
-from app.agent.tools import TOOL_REGISTRY, ToolExecutionError
+from app.agent.tools import ToolExecutionError, get_tool
 from app.agent.tools.base import ToolSpec
 from app.config import Settings
 from app.db.models.agent import EventStatus
@@ -91,7 +91,7 @@ class ToolTurn:
         is None when the model's arguments could not be parsed."""
         # Registered name or "unknown": a model-invented name is free
         # text and never goes on a span or a metric.
-        tool_label = name if name in TOOL_REGISTRY else metrics.UNKNOWN_TOOL
+        tool_label = name if get_tool(name, self._settings) else metrics.UNKNOWN_TOOL
         with spans.span(
             "tool.execute", {"tool.name": tool_label}, context=parent_context
         ) as tool_span:
@@ -119,7 +119,7 @@ class ToolTurn:
     async def _execute(
         self, tool_span: trace.Span, name: str, args: dict | None, round_num: int
     ) -> str:
-        spec = TOOL_REGISTRY.get(name)
+        spec = get_tool(name, self._settings)
         if spec is None:
             self.invalid_call_count += 1
             _tool_outcome(tool_span, metrics.UNKNOWN_TOOL, EventStatus.REJECTED.value, "unknown_tool")

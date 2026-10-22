@@ -3,7 +3,7 @@ graph. Covers the counters and termination reasons the agent loop relies on.
 """
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.agent.turn import ToolTurn
 from app.db.models.agent import AgentEvent, EventStatus
@@ -19,6 +19,7 @@ FABRICATED_RESCHEDULE = {"appointment_code": "APT-9999", "scanner_code": "SCN-1"
 async def _turn(session_factory, **settings) -> ToolTurn:
     async with session_factory() as session:
         await SessionRepository(session).get_or_create(SESSION_ID)
+        await session.execute(delete(AgentEvent).where(AgentEvent.session_id == SESSION_ID))
         await session.commit()
     return ToolTurn(session_id=SESSION_ID, session_factory=session_factory, settings=_settings(**settings))
 

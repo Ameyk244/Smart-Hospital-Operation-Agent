@@ -4,8 +4,8 @@ Why it exists: backs "watch ...", "list watches", "stop watch", "list alerts"
 and "acknowledge ..." in the deterministic grammar. The four writes touch only
 `scheduled_tasks` and `alerts`, never hospital data, and are audited with codes
 and booleans only. With `SCHEDULER_ENABLED` off every command answers that the
-scheduler is off. The agent has no tool for these; its `execute_command` refuses
-audited commands.
+scheduler is off. The agent reaches them through the scheduler tools (app/agent/tools/scheduler_tools.py);
+its `execute_command` refuses audited commands.
 """
 
 from typing import Any
@@ -87,7 +87,7 @@ async def create_watch(session: AsyncSession, args: dict[str, Any], *, actor: st
         if condition != WatchCondition.FREE_BEDS_UNDER:
             raise CommandError("Only a free-beds watch can be limited to a ward", category="invalid_argument")
         if await session.scalar(select(Ward.id).where(Ward.code == ward_code)) is None:
-            raise ValueError(f"No ward with code {ward_code!r}")
+            raise CommandError(f"No ward with code {ward_code!r}", category="not_found")
     active = (await session.scalars(select(ScheduledTask).where(ScheduledTask.active))).all()
     if len(active) >= MAX_ACTIVE_WATCHES:
         raise CommandError(f"At most {MAX_ACTIVE_WATCHES} watches can be active", category="invalid_argument")
@@ -150,7 +150,7 @@ async def stop_watch(session: AsyncSession, args: dict[str, Any], *, actor: str)
 @register("list_alerts")
 async def list_alerts(session: AsyncSession, args: dict[str, Any]) -> list[dict]:
     _require_enabled()
-    stmt = _alerts_query().order_by(Alert.id.desc())
+    stmt = _alerts_query().order_by(Alert.id.desc()).limit(args.get("limit"))
     if args.get("status", "OPEN") != "ALL":
         stmt = stmt.where(Alert.acknowledged_at.is_(None))
     return [_alert_dict(a) for a in await session.scalars(stmt)]

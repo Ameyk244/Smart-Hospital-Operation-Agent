@@ -8,8 +8,9 @@ from app.agent.tools import (  # noqa: F401
     command_tools,
     memory_tools,
     observation_tools,
+    scheduler_tools,
     search_tools,
 )
-from app.agent.tools.base import TOOL_REGISTRY, ToolExecutionError, ToolSpec, all_tool_dicts
+from app.agent.tools.base import TOOL_REGISTRY, ToolExecutionError, ToolSpec, all_tool_dicts, get_tool
 
-__all__ = ["TOOL_REGISTRY", "ToolExecutionError", "ToolSpec", "all_tool_dicts"]
+__all__ = ["TOOL_REGISTRY", "ToolExecutionError", "ToolSpec", "all_tool_dicts", "get_tool"]

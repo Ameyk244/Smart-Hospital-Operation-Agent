@@ -14,19 +14,19 @@ class _Model(FakeMessagesListChatModel):
 
 
 async def test_without_user_text_the_message_is_the_plain_prompt(agent_session_factory):
-    message = await build_system_message(agent_session_factory, "skills-plain")
+    message = await build_system_message(agent_session_factory, "skills-plain", Settings())
 
     assert message.content == SYSTEM_PROMPT
 
 
 async def test_user_text_appends_the_matching_guidance(agent_session_factory):
-    message = await build_system_message(agent_session_factory, "skills-on", BED_TEXT)
+    message = await build_system_message(agent_session_factory, "skills-on", Settings(), BED_TEXT)
 
     assert message.content == f"{SYSTEM_PROMPT}\n\nTask guidance for this request:\n{select_skills(BED_TEXT)}"
 
 
 async def test_unmatched_user_text_appends_nothing(agent_session_factory):
-    message = await build_system_message(agent_session_factory, "skills-none", "list scanners mri")
+    message = await build_system_message(agent_session_factory, "skills-none", Settings(), "list scanners mri")
 
     assert message.content == SYSTEM_PROMPT
 
