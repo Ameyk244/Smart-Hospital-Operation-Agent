@@ -215,7 +215,7 @@ concurrent calls cannot double-book, and enforce their own rules (`assign_bed` n
 
 ## 6. Registered Agent Tools
 
-There are exactly fourteen registered agent tools:
+There are fourteen registered agent tools, plus five scheduler tools (`list_watches`, `list_alerts`, `create_watch`, `stop_watch`, `acknowledge_alert`) offered only when `SCHEDULER_ENABLED=true`:
 
 | Tool | Access | CommandRunner | Purpose |
 |---|---|---|---|

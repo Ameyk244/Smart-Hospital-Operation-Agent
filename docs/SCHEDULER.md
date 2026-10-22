@@ -14,12 +14,12 @@ Status: built on branch `harness-features`, off by default. Two new tables (migr
   `CommandRunner`, the single execution chokepoint. No write tool is reachable, and no
   LLM is involved in a watch.
 - Tasks are created through chat (a parser command, so the cheap path stays
-  deterministic), never from the UI; the UI only shows alerts, as it only reads elsewhere.
+  deterministic, or the agent's scheduler tools), never from the UI; the UI only shows alerts, as it only reads elsewhere.
 - No patient names or free text are stored: a task holds a command name, its
   arguments (ids and enums only), a threshold and a period. An alert holds the task id,
   a short enum-based message and entity codes. Both go on the redaction allowlist.
-- Off by default (`SCHEDULER_ENABLED=false`). With it off nothing starts and the
-  the new commands answer "The scheduler is off" and the HTTP routes return `[]`.
+- Off by default (`SCHEDULER_ENABLED=false`). With it off nothing starts, the
+  new commands answer "The scheduler is off" and the HTTP routes return `[]`.
 
 ## 2. Data (migration needs approval in the turn it is run)
 
@@ -88,6 +88,10 @@ and creating watches go through chat.
 - The tick holds row locks while it runs the checks, so `stop watch` can wait behind a
   tick. Writes from chat are audited with actor `unattributed`, like every other
   command that runs without an agent session.
-- `execute_command` (agent) refuses audited commands, so the agent cannot create or stop
-  watches. The agent tool registry stays at 14.
+- The agent has five dedicated tools (`list_watches`, `list_alerts`, `create_watch`,
+  `stop_watch`, `acknowledge_alert`), offered and callable only when the scheduler is on;
+  with it off the registry is the original 14. The writes touch only the scheduler tables,
+  count against `MAX_WRITE_CALLS_PER_TURN`, and `stop_watch`/`acknowledge_alert` need a
+  code the session has seen (grounding types `watch` and `alert`). `execute_command` still
+  refuses audited commands.
 - Not done: alert expiry; the real lifespan start was checked live, not in a test.

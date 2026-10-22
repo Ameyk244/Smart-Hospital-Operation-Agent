@@ -129,6 +129,8 @@ harness_unavailable`; there is no fallback to the in-process runtime. Contract:
 | `mark_bed_clean` | Hospital data | Return a grounded CLEANING bed to AVAILABLE |
 | `remember_preference` | Session memory only | Store a preference |
 | `forget_preference` | Session memory only | Delete a preference |
+| `list_watches`, `list_alerts` | Scheduler (read) | List watches and alerts; ground task codes and alert ids (only with `SCHEDULER_ENABLED`) |
+| `create_watch`, `stop_watch`, `acknowledge_alert` | Scheduler tables only | Create a read-only watch; stop one or acknowledge an alert by a grounded code (only with `SCHEDULER_ENABLED`) |
 
 `reschedule_appointment`, `assign_bed`, `release_bed` and `mark_bed_clean` are the
 agent's only hospital-data writes. All three bed writes are audited like a reschedule

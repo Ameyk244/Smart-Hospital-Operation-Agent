@@ -187,6 +187,10 @@ Both entrances converge on `CommandRunner`. Registered operations are:
 | `assign_bed` | WRITE | Agent `assign_bed` tool |
 | `release_bed` | WRITE | Agent `release_bed` tool |
 | `mark_bed_clean` | WRITE | Agent `mark_bed_clean` tool |
+| `create_watch`, `stop_watch`, `acknowledge_alert`, `acknowledge_all_alerts` | WRITE (scheduler tables only) | Parser; agent `create_watch`, `stop_watch`, `acknowledge_alert` tools |
+| `list_watches`, `list_alerts` | READ | Parser, agent tools |
+
+The five scheduler tools exist, and the watch sentence is added to the prompt, only with `SCHEDULER_ENABLED=true`. `stop_watch` and `acknowledge_alert` need a task code or alert id the session has listed (grounding types `watch`, `alert`).
 
 `CommandRunner` commits success and rolls back expected command/not-found
 failures. Unexpected infrastructure or programming errors are not hidden.

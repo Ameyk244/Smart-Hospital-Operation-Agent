@@ -127,8 +127,9 @@ minimum number actually needed.
 - Three tools mutate hospital data: `reschedule_appointment`, `assign_bed`
   and `release_bed` (branch `hospital-expansion`, `docs/EXPANSION.md`). All
   three are grounded and audited through `CommandRunner`. Everything else is
-  either read-only or writes to session-scoped preference memory, not the
-  hospital schema.
+  either read-only, writes to session-scoped preference memory, or (with
+  `SCHEDULER_ENABLED`) writes only the scheduler tables (`create_watch`,
+  `stop_watch`, `acknowledge_alert`; `docs/SCHEDULER.md`), not hospital data.
 
 ## Harness runtime (branch `harness-smartgateway`)
 The agent's model loop can run in a separate harness process (a plugin on a
