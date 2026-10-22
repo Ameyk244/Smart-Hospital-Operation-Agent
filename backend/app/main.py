@@ -10,7 +10,7 @@ lifetime).
 
 import asyncio
 import sys
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -36,10 +36,11 @@ from app.api.routes import (  # noqa: E402
     voice,
 )
 from app.config import get_settings  # noqa: E402
-from app.db.session import engine  # noqa: E402
+from app.db.session import async_session_factory, engine  # noqa: E402
 from app.observability.logging_config import configure_logging  # noqa: E402
 from app.observability.request_context import RequestContextMiddleware  # noqa: E402
 from app.observability.telemetry import setup_telemetry, shutdown_telemetry  # noqa: E402
+from app.scheduler.runner import run_scheduler  # noqa: E402
 
 configure_logging()
 settings = get_settings()
@@ -50,7 +51,20 @@ async def lifespan(app: FastAPI):
     try:
         async with build_checkpointer(settings.database_url) as checkpointer:
             app.state.checkpointer = checkpointer
-            yield
+            scheduler = (
+                asyncio.create_task(
+                    run_scheduler(async_session_factory, settings.scheduler_tick_seconds)
+                )
+                if settings.scheduler_enabled
+                else None
+            )
+            try:
+                yield
+            finally:
+                if scheduler:
+                    scheduler.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await scheduler
     finally:
         shutdown_telemetry(telemetry)
 

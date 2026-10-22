@@ -77,7 +77,15 @@ async def test_in_process_with_keys_has_the_agent_and_jev_on_and_no_harness(clie
         "agent": {"runtime": "in_process", "status": "on"},
         "harness": {"status": "off"},
         "jev": {"status": "on"},
+        "scheduler": {"status": "off"},
     }
+
+
+@pytest.mark.parametrize("enabled, light", [(True, "on"), (False, "off")])
+async def test_scheduler_light_follows_the_setting(client, configure, enabled, light):
+    configure(scheduler_enabled=enabled)
+
+    assert (await lights(client))["scheduler"] == {"status": light}
 
 
 @pytest.mark.parametrize(

@@ -100,6 +100,36 @@ def _build_list_delayed_appointments(match: re.Match) -> Command:
     return Command("list_delayed_appointments", args)
 
 
+def _build_watch(condition: str) -> Callable[[re.Match], Command]:
+    def build(match: re.Match) -> Command:
+        args: dict[str, str | int] = {"condition": condition, "threshold": int(match.group("n"))}
+        if ward := match.groupdict().get("ward"):
+            args["ward_code"] = ward.upper()
+        return Command("create_watch", args)
+
+    return build
+
+
+def _build_list_watches(_match: re.Match) -> Command:
+    return Command("list_watches")
+
+
+def _build_stop_watch(match: re.Match) -> Command:
+    return Command("stop_watch", {"task_code": match.group("code").upper()})
+
+
+def _build_list_alerts(_match: re.Match) -> Command:
+    return Command("list_alerts")
+
+
+def _build_acknowledge_alert(match: re.Match) -> Command:
+    return Command("acknowledge_alert", {"alert_id": int(match.group("id"))})
+
+
+def _build_acknowledge_all_alerts(_match: re.Match) -> Command:
+    return Command("acknowledge_all_alerts")
+
+
 # What may follow `list scanners` / `list delayed appointments`. Anything else
 # in the tail (a misheard "MI", a typo, "banana", "please") means this is not
 # an exact command, so the parser misses and the request goes to Jev or the
@@ -147,6 +177,28 @@ _GRAMMAR: list[tuple[re.Pattern, Callable[[re.Match], Command]]] = [
         ),
         _build_list_delayed_appointments,
     ),
+    # Watches and alerts (docs/SCHEDULER.md). Always matched; the commands say
+    # so themselves when the scheduler is off.
+    (
+        re.compile(r"^watch\s+queue\s+wait\s+over\s+(?P<n>\d{1,6})\s+minutes?$", re.IGNORECASE),
+        _build_watch("QUEUE_WAIT_OVER"),
+    ),
+    (
+        re.compile(
+            r"^watch\s+free\s+beds\s+under\s+(?P<n>\d{1,6})(?:\s+in\s+(?P<ward>WRD-\d+))?$",
+            re.IGNORECASE,
+        ),
+        _build_watch("FREE_BEDS_UNDER"),
+    ),
+    (
+        re.compile(r"^watch\s+delayed\s+appointments\s+over\s+(?P<n>\d{1,6})$", re.IGNORECASE),
+        _build_watch("DELAYED_APPOINTMENTS_OVER"),
+    ),
+    (re.compile(r"^list\s+watches$", re.IGNORECASE), _build_list_watches),
+    (re.compile(r"^stop\s+watch\s+(?P<code>TSK-\d+)$", re.IGNORECASE), _build_stop_watch),
+    (re.compile(r"^list\s+alerts$", re.IGNORECASE), _build_list_alerts),
+    (re.compile(r"^acknowledge\s+alert\s+(?P<id>\d{1,9})$", re.IGNORECASE), _build_acknowledge_alert),
+    (re.compile(r"^acknowledge\s+all\s+alerts$", re.IGNORECASE), _build_acknowledge_all_alerts),
 ]
 
 

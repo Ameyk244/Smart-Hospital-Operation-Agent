@@ -125,6 +125,10 @@ class Settings(BaseSettings):
     llm_timeout_seconds: int = 30
     max_invalid_tool_calls: int = 3
 
+    # --- Scheduled watches and alerts (see docs/SCHEDULER.md) ---
+    scheduler_enabled: bool = False
+    scheduler_tick_seconds: int = Field(30, gt=0)
+
     # --- Harness runtime (see docs/harness-smart-hospital-operations.md) ---
     agent_runtime: Literal["in_process", "harness"] = "in_process"
     harness_url: str = Field("http://127.0.0.1:8891", pattern=r"^https?://[^/\s]+$")

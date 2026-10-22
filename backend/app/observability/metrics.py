@@ -183,6 +183,11 @@ class _Instruments:
             meter, "agent.tool.duration", "Tool execution time (executed calls only)"
         )
 
+        self.scheduler_runs = meter.create_counter(
+            "scheduler.task.runs", unit="{run}",
+            description="Watch checks by condition and status (ok, alerted, failed)",
+        )
+
         meter.create_observable_gauge(
             "db.pool.connections", callbacks=[_observe_pool], unit="{connection}",
             description="SQLAlchemy QueuePool size / checked out / overflow",
@@ -342,3 +347,7 @@ def record_tool_call(
 
 def record_checkpointer_operation(operation: str, seconds: float, status: str) -> None:
     _get().checkpointer_duration.record(seconds, {"operation": operation, "status": status})
+
+
+def record_scheduler_run(condition: str, status: str) -> None:
+    _get().scheduler_runs.add(1, {"condition": condition, "status": status})

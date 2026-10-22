@@ -50,6 +50,10 @@ services:
         value: 15
       - key: LLM_TIMEOUT_SECONDS
         value: 30
+      - key: SCHEDULER_ENABLED
+        value: false
+      - key: SCHEDULER_TICK_SECONDS
+        value: 30
 
   - type: web
     name: ameyk244-agentic-smart-hospital-web

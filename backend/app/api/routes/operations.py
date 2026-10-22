@@ -10,9 +10,12 @@ is a thin `CommandRunner.execute(Command(...))` call.
 What calls it: the frontend's operations view.
 """
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.db.session import get_db
 from app.execution.commands import Command, CommandRunner
 
@@ -95,3 +98,19 @@ async def list_emergency_queue(
 @router.get("/journey")
 async def patient_journey(patient_code: str, db: AsyncSession = Depends(get_db)) -> object:
     return await _run(db, "patient_journey", {"patient_code": patient_code})
+
+
+@router.get("/alerts")
+async def list_alerts(
+    status: Literal["open", "all"] = "open", db: AsyncSession = Depends(get_db)
+) -> object:
+    if not get_settings().scheduler_enabled:
+        return []
+    return await _run(db, "list_alerts", {"status": status.upper()})
+
+
+@router.get("/scheduled-tasks")
+async def list_scheduled_tasks(db: AsyncSession = Depends(get_db)) -> object:
+    if not get_settings().scheduler_enabled:
+        return []
+    return await _run(db, "list_watches", {})

@@ -195,3 +195,14 @@ async def test_execute_command_unparseable_text_is_reported_not_crashed(agent_se
     assert final_state["invalid_call_count"] == 0  # a normal tool failure, not a malformed call
     tool_messages = [m for m in final_state["messages"] if m.type == "tool"]
     assert "doesn't match any known command" in tool_messages[0].content
+
+
+async def test_execute_command_refuses_the_audited_watch_commands(seeded_session):
+    from app.agent.tools.base import ToolExecutionError
+    from app.agent.tools.command_tools import ExecuteCommandArgs, handle_execute_command
+
+    with pytest.raises(ToolExecutionError, match="not available through execute_command") as refused:
+        await handle_execute_command(
+            seeded_session, "s", ExecuteCommandArgs(command_text="watch free beds under 2")
+        )
+    assert refused.value.category == "not_permitted"

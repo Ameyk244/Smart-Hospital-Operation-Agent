@@ -45,11 +45,16 @@ class JevStatus(BaseModel):
     status: Literal["on", "off"]
 
 
+class SchedulerStatus(BaseModel):
+    status: Literal["on", "off"]
+
+
 class StatusResponse(BaseModel):
     mode: Literal[1, 2, 3]
     agent: AgentStatus
     harness: HarnessStatus
     jev: JevStatus
+    scheduler: SchedulerStatus
 
 
 async def _harness_is_up(settings: Settings) -> bool:
@@ -97,4 +102,5 @@ async def status(request: Request) -> StatusResponse:
         agent=AgentStatus(runtime=settings.agent_runtime, status=agent),
         harness=HarnessStatus(status=harness),
         jev=JevStatus(status="on" if jev_on else "off"),
+        scheduler=SchedulerStatus(status="on" if settings.scheduler_enabled else "off"),
     )
