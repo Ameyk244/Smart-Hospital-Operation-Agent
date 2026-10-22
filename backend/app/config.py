@@ -120,9 +120,14 @@ class Settings(BaseSettings):
     # --- Bounded agent execution (see docs/ARCHITECTURE.md §5) ---
     max_agent_rounds: int = 6
     max_tool_calls: int = 10
+    max_write_calls_per_turn: int = Field(0, ge=0)
     tool_timeout_seconds: int = 15
     llm_timeout_seconds: int = 30
     max_invalid_tool_calls: int = 3
+
+    # --- Scheduled watches and alerts (see docs/SCHEDULER.md) ---
+    scheduler_enabled: bool = False
+    scheduler_tick_seconds: int = Field(30, gt=0)
 
     # --- Harness runtime (see docs/harness-smart-hospital-operations.md) ---
     agent_runtime: Literal["in_process", "harness"] = "in_process"
@@ -155,6 +160,10 @@ class Settings(BaseSettings):
 
     # Same for the agent's assign_bed / release_bed (docs/EXPANSION.md 7a).
     require_bed_confirmation: bool = False
+
+    # When on, short task guidance (app/agent/skills/) is appended to the
+    # system prompt for messages that call for it. Off: the prompt is unchanged.
+    agent_skills_enabled: bool = False
 
     # --- Observability (see observability/README.md) ---
     # Off by default so a fresh clone and the test suite never try to export.

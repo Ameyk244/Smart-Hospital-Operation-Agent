@@ -1700,3 +1700,51 @@ statement that `reschedule_appointment` is the only hospital write was replaced 
 The app was left running in mode 3 (gateway with the front door on :8891, harness-mode backend on
 :8000, UI on :5173) with the free OpenRouter model and `REQUIRE_BED_CONFIRMATION=true`, as startup
 overrides; `.env` is unchanged. Branch `hospital-expansion` was merged into `master` and pushed.
+
+### Harness features (branch `harness-features`, both repos)
+
+Chosen after a README-level survey of what dsh ships against this project's rules (fresh agent
+per turn, no stored chat text, tools proxied to the backend). Most of dsh was ruled out for those
+reasons; each feature below is additive and off by default.
+
+1. **Retry of rate-limited requests (gateway).** `HOSPITAL_LLM_RETRY_RATE_LIMIT=true` adds
+   `RATE_LIMIT` to the retryable codes (one retry, jitter 0.2). Two mock-LLM e2e tests: 429 then
+   200 completes when on, fails with `model_error` when off. Provider text lands only in dsh's
+   in-memory `llm/retry` session event, which the gateway never reads; same exposure as the
+   existing 5xx retries.
+2. **Write-call cap (backend).** `MAX_WRITE_CALLS_PER_TURN` (0 = off). Enforced in `ToolTurn`, so
+   it holds in process and through the harness; carried across graph rounds like `tool_call_count`.
+   Over the cap: not executed, `write_limit_exceeded` event, turn continues. Five tests, scripted
+   model, test database only. Review fixes: only successful writes use the cap (preference writes
+   included); a refused write counts as an invalid call so a model that keeps retrying is stopped.
+3. **Compaction: not built, measured.** 265 recorded model rounds: max input 11.5k tokens,
+   none over 20k; longest session 58 messages. dsh compaction triggers near 70k tokens.
+4. **Task skills (backend, opt-in).** `AGENT_SKILLS_ENABLED=true` appends up to two short guidance
+   files from `backend/app/agent/skills/` (bed allocation, scanner reschedule, ER queue, patient
+   journey, app help, shift handover) to the system prompt, chosen by a small explicit keyword
+   table. No new tool and no gateway or contract change: the harness already gets `system` each
+   turn. **Limit:** it applies in harness mode and in process without a checkpointer; in process
+   with a checkpointer (the normal mode 1) the system message is fixed when the thread starts, so
+   the flag has no effect there, as for remembered preferences. Review fixes: broad words
+   (`help`, `confirm`, `emergency`) removed, `app_help` takes priority so "how do I assign a bed"
+   explains instead of steering a write.
+5. **Scheduler: designed, not built.** `docs/SCHEDULER.md`; needs two tables, so the migration
+   waits for explicit approval.
+6. **Scheduler: built** (migration `b7d2f4a96c18`, additive; `SCHEDULER_ENABLED`). Live in mode 3: watches
+   created in chat, a duplicate refused, alerts raised for ER-3 and ER-4, one acknowledged, one watch
+   stopped, scheduler light on in `/api/status`. Parser, Jev and agent messages unchanged. Details and
+   known limits in `docs/SCHEDULER.md`.
+7. **Scheduler tools for the agent.** Five tools (`list_watches`, `list_alerts`, `create_watch`,
+   `stop_watch`, `acknowledge_alert`) offered, with a watch sentence in the prompt and a `watches`
+   skill, only when `SCHEDULER_ENABLED` is on (`ToolSpec.requires_setting`); off, the tool list is the
+   original 14 and the prompt is unchanged. Live in mode 3: "alert me whenever fewer than 2 beds are
+   available" created watch TSK-3 through the agent (19 tools, 3 rounds). Review fixes: no domain-gate
+   additions (unplaced messages use Jev's scope check), alerts capped at 50 in the tool only, threshold
+   upper bound, unknown ward is a clean `not_found`. Known: a thread's system prompt is frozen when it
+   starts, so toggling the scheduler mid-thread leaves that thread's prompt stale.
+
+Final run of the `harness-features` branch in all three modes, one parser, one Jev and one agent
+message each (free MiniMax model, all new switches on): mode 1 (in process, no gateway), mode 2
+(gateway without the front door, UI on the backend) and mode 3 (front door, UI on the gateway) all
+answered `deterministic`, `jev` and `agent` with no termination reason and no backend errors; the
+agent turns in modes 2 and 3 took 3 rounds through the gateway. Not run: the full backend suite.

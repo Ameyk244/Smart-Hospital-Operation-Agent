@@ -194,6 +194,33 @@ def _format_deterministic_message(command: Command, success: bool, error: str | 
             return f"{data['patient']['name']} has no emergency visit."
         return f"{data['patient']['name']}: current stage {data['current_stage']}."
 
+    if command.name == "create_watch":
+        scope = f" in {data['scope_code']}" if data["scope_code"] else ""
+        return f"Watch {data['code']} started: {data['condition']} {data['threshold']}{scope}."
+
+    if command.name == "list_watches":
+        if not data:
+            return "No watches."
+        parts = ", ".join(
+            f"{w['code']} {w['condition']} {w['threshold']}{'' if w['active'] else ' (stopped)'}" for w in data
+        )
+        return f"Watches: {parts}."
+
+    if command.name == "stop_watch":
+        return f"Watch {data['code']} stopped."
+
+    if command.name == "list_alerts":
+        if not data:
+            return "No open alerts."
+        parts = "; ".join(f"#{a['id']} {a['severity']}: {a['summary']}" for a in data)
+        return f"{_plural(len(data), 'open alert')}: {parts}."
+
+    if command.name == "acknowledge_alert":
+        return f"Alert {data['id']} acknowledged."
+
+    if command.name == "acknowledge_all_alerts":
+        return f"Acknowledged {_plural(data['acknowledged'], 'alert')}."
+
     return f"OK — ran {command.name}."  # safety net; see docstring
 
 

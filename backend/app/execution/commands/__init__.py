@@ -10,6 +10,7 @@ from app.execution.commands import (  # noqa: F401
     patient_commands,
     queue_commands,
     reference_commands,
+    scheduler_commands,
     ward_commands,
 )
 from app.execution.commands.base import Command, CommandError, CommandResult, CommandRunner

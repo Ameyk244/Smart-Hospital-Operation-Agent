@@ -28,6 +28,11 @@ read-only, return `handled_by: deterministic`, and create no agent trace.
 | `list beds [available|occupied|cleaning]` | READ | Beds |
 | `show emergency queue` / `list emergency queue` | READ | Emergency queue |
 | `show journey <name>` / `show patient journey <name>` | READ | Patient journey |
+| `watch queue wait over N minutes` | SCHEDULER | Watches (needs `SCHEDULER_ENABLED`) |
+| `watch free beds under N [in WRD-n]` | SCHEDULER | Watches |
+| `watch delayed appointments over N` | SCHEDULER | Watches |
+| `list watches` / `stop watch TSK-n` | READ / SCHEDULER | Watches |
+| `list alerts` / `acknowledge alert N` / `acknowledge all alerts` | READ / SCHEDULER | Alerts |
 
 Anything else after `list scanners` or `list delayed appointments` (other than
 `that`/`are` before a scanner filter) makes the parser miss, so the request goes
@@ -124,6 +129,8 @@ harness_unavailable`; there is no fallback to the in-process runtime. Contract:
 | `mark_bed_clean` | Hospital data | Return a grounded CLEANING bed to AVAILABLE |
 | `remember_preference` | Session memory only | Store a preference |
 | `forget_preference` | Session memory only | Delete a preference |
+| `list_watches`, `list_alerts` | Scheduler (read) | List watches and alerts; ground task codes and alert ids (only with `SCHEDULER_ENABLED`) |
+| `create_watch`, `stop_watch`, `acknowledge_alert` | Scheduler tables only | Create a read-only watch; stop one or acknowledge an alert by a grounded code (only with `SCHEDULER_ENABLED`) |
 
 `reschedule_appointment`, `assign_bed`, `release_bed` and `mark_bed_clean` are the
 agent's only hospital-data writes. All three bed writes are audited like a reschedule
@@ -175,6 +182,10 @@ Move the first delayed MRI appointment to another available MRI scanner.
 Remember that I prefer MRI Scanner 2.
 What preferences do you remember?
 ```
+
+**Opt-in limits and guidance.** `MAX_WRITE_CALLS_PER_TURN` (default 0, off) stops a turn after that many successful write tools; a refused write is not executed and counts as an invalid call. `AGENT_SKILLS_ENABLED` (default off) appends short task guidance from `backend/app/agent/skills/` to the system prompt; it takes effect in harness mode and in process without a checkpointer.
+
+SCHEDULER rows write only the scheduler tables (`scheduled_tasks`, `alerts`), never hospital data; they are audited, parser-only (Jev cannot name them) and refused by the agent's `execute_command`. Off by default; see `docs/SCHEDULER.md`.
 
 ## 4. Contextual Follow-Ups
 

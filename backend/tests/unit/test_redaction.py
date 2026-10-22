@@ -226,3 +226,20 @@ def test_bed_write_arguments_keep_codes_and_redact_anything_else():
     assert kept == {"patient_code": "PT-1029", "bed_code": "BED-2"}
     leaked = redact_arguments({"bed_code": "Mary Brown", "query": "Mary Brown"})
     assert leaked == {"bed_code": REDACTED, "query": REDACTED}
+
+
+def test_watch_and_alert_arguments_pass_through_and_names_do_not():
+    args = {
+        "condition": "QUEUE_WAIT_OVER",
+        "threshold": 30,
+        "ward_code": "WRD-1",
+        "task_code": "TSK-2",
+        "alert_id": 5,
+        "status": "OPEN",
+    }
+    assert redact_arguments(args) == args
+    assert redact_arguments({"task_code": "my watch", "alert_id": "five", "condition": "any text"}) == {
+        "task_code": REDACTED,
+        "alert_id": REDACTED,
+        "condition": REDACTED,
+    }

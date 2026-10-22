@@ -9,13 +9,16 @@ import { WardsPage } from "./components/WardsPage";
 import { EmergencyQueuePage } from "./components/EmergencyQueuePage";
 import { JourneyPage } from "./components/JourneyPage";
 import { useTrace } from "./hooks/useTrace";
+import { AlertBell } from "./components/AlertBell";
+import { AlertsPage } from "./components/AlertsPage";
 import { useStatus } from "./hooks/useStatus";
+import { useOpenAlerts } from "./hooks/useOpenAlerts";
 
 // There's no router in this project and this doesn't justify adding one:
 // a handful of pages is a view switch, not a navigation graph.
 // The chat and trace column sits outside the switch, so it never remounts
 // when the page changes.
-type View = "console" | "wards" | "queue" | "journey" | "cost";
+type View = "console" | "wards" | "queue" | "journey" | "alerts" | "cost";
 
 const icon = (paths: ReactNode) => (
   <svg
@@ -67,6 +70,11 @@ const NAV_ITEMS: { view: View; label: string; icon: ReactNode }[] = [
     ),
   },
   {
+    view: "alerts",
+    label: "Alerts",
+    icon: icon(<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0" />),
+  },
+  {
     view: "cost",
     label: "Cost comparison",
     icon: icon(<path d="M12 2v20M17 6H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />),
@@ -89,6 +97,8 @@ function App() {
   const [view, setView] = useState<View>("console");
   const trace = useTrace(sessionId, traceRefreshToken);
   const status = useStatus();
+  const schedulerOn = status.status?.scheduler?.status === "on";
+  const openAlerts = useOpenAlerts(schedulerOn);
 
   function handleTurnComplete(codes: string[]) {
     setTraceRefreshToken((t) => t + 1);
@@ -101,6 +111,11 @@ function App() {
         <div className="app-header-row">
           <h1>Smart Hospital Operations Agent</h1>
           <div className="app-header-actions">
+            <AlertBell
+              schedulerOn={schedulerOn}
+              count={openAlerts.length}
+              onOpen={() => setView("alerts")}
+            />
             <StatusLights state={status} />
           </div>
         </div>
@@ -113,7 +128,7 @@ function App() {
       <div className="app-body">
         <nav className="sidebar" aria-label="Main navigation">
           <ul className="sidebar-list">
-            {NAV_ITEMS.map((item) => (
+            {NAV_ITEMS.filter((item) => item.view !== "alerts" || schedulerOn).map((item) => (
               <li key={item.view}>
                 <button
                   type="button"
@@ -135,6 +150,7 @@ function App() {
             {view === "wards" && <WardsPage touchedEntityCodes={touchedEntityCodes} />}
             {view === "queue" && <EmergencyQueuePage touchedEntityCodes={touchedEntityCodes} />}
             {view === "journey" && <JourneyPage touchedEntityCodes={touchedEntityCodes} />}
+            {view === "alerts" && <AlertsPage alerts={openAlerts} />}
             {view === "cost" && <CostComparisonPage onBack={() => setView("console")} />}
           </section>
           <section className="app-column app-column-side">

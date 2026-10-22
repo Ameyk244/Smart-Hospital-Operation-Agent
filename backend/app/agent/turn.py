@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.entity_codes import extract_entity_codes
 from app.agent.grounding import GroundingRejectedError
-from app.agent.tools import TOOL_REGISTRY, ToolExecutionError
+from app.agent.tools import ToolExecutionError, get_tool
 from app.agent.tools.base import ToolSpec
 from app.config import Settings
 from app.db.models.agent import EventStatus
@@ -62,6 +62,7 @@ class ToolTurn:
         settings: Settings,
         tool_call_count: int = 0,
         invalid_call_count: int = 0,
+        write_call_count: int = 0,
         touched_entity_codes: list[str] | None = None,
     ) -> None:
         self._session_id = session_id
@@ -69,6 +70,7 @@ class ToolTurn:
         self._settings = settings
         self.tool_call_count = tool_call_count
         self.invalid_call_count = invalid_call_count
+        self.write_call_count = write_call_count
         self.terminated_reason: str | None = None
         # Carried forward across rounds *within this turn* (tool_node can
         # run several times before the loop ends) but reset to [] fresh at
@@ -89,7 +91,7 @@ class ToolTurn:
         is None when the model's arguments could not be parsed."""
         # Registered name or "unknown": a model-invented name is free
         # text and never goes on a span or a metric.
-        tool_label = name if name in TOOL_REGISTRY else metrics.UNKNOWN_TOOL
+        tool_label = name if get_tool(name, self._settings) else metrics.UNKNOWN_TOOL
         with spans.span(
             "tool.execute", {"tool.name": tool_label}, context=parent_context
         ) as tool_span:
@@ -117,7 +119,7 @@ class ToolTurn:
     async def _execute(
         self, tool_span: trace.Span, name: str, args: dict | None, round_num: int
     ) -> str:
-        spec = TOOL_REGISTRY.get(name)
+        spec = get_tool(name, self._settings)
         if spec is None:
             self.invalid_call_count += 1
             _tool_outcome(tool_span, metrics.UNKNOWN_TOOL, EventStatus.REJECTED.value, "unknown_tool")
@@ -130,6 +132,14 @@ class ToolTurn:
             _tool_outcome(tool_span, spec.name, EventStatus.REJECTED.value, "invalid_argument")
             await self._record_rejection(round_num, spec.name, args, "invalid_argument")
             return error
+
+        if spec.is_write:
+            limit = self._settings.max_write_calls_per_turn
+            if limit and self.write_call_count >= limit:
+                self.invalid_call_count += 1
+                _tool_outcome(tool_span, spec.name, EventStatus.REJECTED.value, "write_limit_exceeded")
+                await self._record_rejection(round_num, spec.name, args, "write_limit_exceeded")
+                return "Not executed: this turn's write-call limit was reached."
 
         start = time.monotonic()
         async with self._session_factory() as session:
@@ -180,6 +190,7 @@ class ToolTurn:
 
             await session.commit()
             self.tool_call_count += 1
+            self.write_call_count += spec.is_write
             latency_ms = int((time.monotonic() - start) * 1000)
             _tool_outcome(tool_span, spec.name, EventStatus.SUCCESS.value, None, time.monotonic() - start)
             await self._record_executed(

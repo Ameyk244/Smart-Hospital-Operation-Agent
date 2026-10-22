@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent.grounding import GroundingRegistry
 from app.agent.tools.base import ToolExecutionError, ToolSpec, register_tool
 from app.execution.commands import CommandRunner
+from app.execution.commands.base import is_audited
 from app.parser.parser import parse
 
 _KNOWN_COMMAND_EXAMPLES = (
@@ -114,6 +115,10 @@ async def handle_execute_command(
         )
 
     assert outcome.command is not None
+    if is_audited(outcome.command.name):
+        raise ToolExecutionError(
+            f"{args.command_text!r} is not available through execute_command", category="not_permitted"
+        )
     result = await CommandRunner(session).execute(outcome.command)
     if not result.success:
         raise ToolExecutionError(result.error or "command failed", result.error_category or "tool_error")

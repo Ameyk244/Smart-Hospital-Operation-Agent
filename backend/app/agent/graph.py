@@ -41,6 +41,7 @@ from opentelemetry import trace
 from opentelemetry.context import Context
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.agent.skills import select_skills
 from app.agent.state import AgentState
 from app.agent.tools import all_tool_dicts
 from app.agent.turn import ToolTurn
@@ -106,6 +107,14 @@ SYSTEM_PROMPT = (
     "appointment, and remember preferences. Never change anything on a bare mention."
 )
 
+WATCH_PROMPT = (
+    " You can also list and create watches (list_watches, create_watch), stop one "
+    "(stop_watch), and list and acknowledge alerts (list_alerts, acknowledge_alert); a watch "
+    "is a read-only monitor that only raises alerts. task_code and alert_id values are "
+    "grounded like the codes above: they must come from list_watches, create_watch or "
+    "list_alerts results earlier in this conversation."
+)
+
 
 def _model_label(settings: Settings) -> str:
     """The configured model name: one fixed value per process, so it is
@@ -165,7 +174,7 @@ def _make_agent_node(
     settings: Settings,
     round_spans: _RoundSpans,
 ) -> Callable[[AgentState], Any]:
-    model_with_tools = chat_model.bind_tools(all_tool_dicts())
+    model_with_tools = chat_model.bind_tools(all_tool_dicts(settings))
     model_label = _model_label(settings)
 
     async def invoke_model(messages: list[Any], round_num: int) -> AIMessage | None:
@@ -314,6 +323,7 @@ def _make_tool_node(
             settings=settings,
             tool_call_count=state["tool_call_count"],
             invalid_call_count=state["invalid_call_count"],
+            write_call_count=state["write_call_count"],
             touched_entity_codes=state.get("touched_entity_codes", []),
         )
         new_messages = [
@@ -332,6 +342,7 @@ def _make_tool_node(
             "messages": new_messages,
             "tool_call_count": turn.tool_call_count,
             "invalid_call_count": turn.invalid_call_count,
+            "write_call_count": turn.write_call_count,
             "terminated_reason": turn.terminated_reason,
             "touched_entity_codes": turn.touched_entity_codes,
         }
@@ -363,24 +374,27 @@ def build_graph(
 
 
 async def build_system_message(
-    session_factory: async_sessionmaker[AsyncSession], session_id: str
+    session_factory: async_sessionmaker[AsyncSession],
+    session_id: str,
+    settings: Settings,
+    user_text: str | None = None,
 ) -> SystemMessage:
     """Base system prompt, plus this session's remembered preferences
     (concept 40: memory injection) when there are any — never fabricated,
     only what the `remember_preference` tool actually wrote for this exact
-    session_id."""
+    session_id — plus task guidance for `user_text` when one is given."""
     async with session_factory() as session:
         prefs = await PreferenceRepository(session).list_for_session(session_id)
-    if not prefs:
-        return SystemMessage(content=SYSTEM_PROMPT)
-    pref_lines = "\n".join(f"- {p.key}: {p.value}" for p in prefs)
-    return SystemMessage(
-        content=(
-            f"{SYSTEM_PROMPT}\n\n"
-            "Remembered preferences for this session (apply only where relevant to "
+    content = SYSTEM_PROMPT + (WATCH_PROMPT if settings.scheduler_enabled else "")
+    if prefs:
+        pref_lines = "\n".join(f"- {p.key}: {p.value}" for p in prefs)
+        content += (
+            "\n\nRemembered preferences for this session (apply only where relevant to "
             f"the current request, don't force them into unrelated answers):\n{pref_lines}"
         )
-    )
+    if user_text and (skills := select_skills(user_text, settings.scheduler_enabled)):
+        content += f"\n\nTask guidance for this request:\n{skills}"
+    return SystemMessage(content=content)
 
 
 async def run_agent(
@@ -422,13 +436,20 @@ async def run_agent(
         }
         existing = await compiled.aget_state(config)
         is_new_thread = not existing.values
-        system_message = await build_system_message(session_factory, session_id)
+        system_message = await build_system_message(session_factory, session_id, settings)
         messages: list[Any] = (
             [system_message] if is_new_thread else []
         ) + [HumanMessage(content=user_text)]
     else:
         config = {"recursion_limit": recursion_limit}
-        system_message = await build_system_message(session_factory, session_id)
+        # Rebuilt every turn here, so skills can follow the message; with a
+        # checkpointer the system message is fixed when the thread starts.
+        system_message = await build_system_message(
+            session_factory,
+            session_id,
+            settings,
+            user_text if settings.agent_skills_enabled else None,
+        )
         # `history` (concepts 35, 42): prior turns from ConversationMessage,
         # already converted to LangChain messages by the caller — the
         # fallback path for when no checkpointer is configured, so a
@@ -444,6 +465,7 @@ async def run_agent(
         "round_count": 0,
         "tool_call_count": 0,
         "invalid_call_count": 0,
+        "write_call_count": 0,
         "terminated_reason": None,
         "touched_entity_codes": [],
     }
@@ -522,7 +544,7 @@ async def record_turn_messages(
     if not existing.values:
         # Same first-message rule as run_agent: a thread's first message is
         # the system prompt, and run_agent skips adding it once state exists.
-        to_write.append(await build_system_message(session_factory, session_id))
+        to_write.append(await build_system_message(session_factory, session_id, settings))
     await compiled.aupdate_state(config, {"messages": to_write + messages}, as_node="agent")
 
 

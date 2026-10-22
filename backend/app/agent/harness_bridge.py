@@ -294,7 +294,9 @@ async def run_agent_via_harness(
         await SessionRepository(session).get_or_create(session_id)
         await session.commit()
 
-    system_message = await build_system_message(session_factory, session_id)
+    system_message = await build_system_message(
+        session_factory, session_id, settings, user_text if settings.agent_skills_enabled else None
+    )
     prior = (
         await get_thread_messages(
             session_id=session_id,
@@ -311,7 +313,7 @@ async def run_agent_via_harness(
         "system": system_message.content,
         "history": to_openai_messages([m for m in prior if not isinstance(m, SystemMessage)]),
         "user": user_text,
-        "tools": all_tool_dicts(),
+        "tools": all_tool_dicts(settings),
         "llm": {
             "model": settings.harness_model,
             "max_tokens": settings.harness_max_tokens,
@@ -382,6 +384,7 @@ async def run_agent_via_harness(
         "round_count": rounds,
         "tool_call_count": recorder.turn.tool_call_count,
         "invalid_call_count": recorder.turn.invalid_call_count,
+        "write_call_count": recorder.turn.write_call_count,
         "terminated_reason": reason,
         "touched_entity_codes": recorder.turn.touched_entity_codes,
     }

@@ -222,6 +222,30 @@ export interface CostComparison {
   assumptions: Record<string, number | string | null> | null;
 }
 
+// --- /api/operations/alerts, scheduled-tasks ---
+
+export type WatchCondition = "QUEUE_WAIT_OVER" | "FREE_BEDS_UNDER" | "DELAYED_APPOINTMENTS_OVER";
+
+export interface Alert {
+  id: number;
+  task_code: string;
+  severity: string;
+  summary: string;
+  entity_codes: string[];
+  created_at: string;
+  acknowledged_at: string | null;
+}
+
+export interface ScheduledTask {
+  code: string;
+  condition: WatchCondition;
+  threshold: number;
+  scope_code: string | null;
+  period_seconds: number;
+  active: boolean;
+  last_run_at: string | null;
+}
+
 // --- /api/status ---
 
 // on = working, off = not configured or switched off, down = configured but
@@ -233,4 +257,5 @@ export interface StatusResponse {
   harness: { status: Light };
   jev: { status: Exclude<Light, "down"> };
   mode: 1 | 2 | 3;
+  scheduler?: { status: "on" | "off" };
 }

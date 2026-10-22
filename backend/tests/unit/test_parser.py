@@ -265,3 +265,57 @@ def test_new_commands_are_exact_or_they_miss(text):
 @pytest.mark.parametrize("text", ["assign bed BED-2 to PT-1029", "release bed BED-1"])
 def test_the_parser_never_builds_a_bed_write(text):
     assert parse(text).matched is False
+
+
+@pytest.mark.parametrize(
+    "text, name, args",
+    [
+        ("watch queue wait over 30 minutes", "create_watch", {"condition": "QUEUE_WAIT_OVER", "threshold": 30}),
+        ("Watch queue wait over 1 minute.", "create_watch", {"condition": "QUEUE_WAIT_OVER", "threshold": 1}),
+        ("watch free beds under 2", "create_watch", {"condition": "FREE_BEDS_UNDER", "threshold": 2}),
+        (
+            "watch free beds under 2 in wrd-1",
+            "create_watch",
+            {"condition": "FREE_BEDS_UNDER", "threshold": 2, "ward_code": "WRD-1"},
+        ),
+        (
+            "watch delayed appointments over 3",
+            "create_watch",
+            {"condition": "DELAYED_APPOINTMENTS_OVER", "threshold": 3},
+        ),
+        ("list watches", "list_watches", {}),
+        ("stop watch tsk-2", "stop_watch", {"task_code": "TSK-2"}),
+        ("list alerts", "list_alerts", {}),
+        ("acknowledge alert 5", "acknowledge_alert", {"alert_id": 5}),
+        ("acknowledge all alerts", "acknowledge_all_alerts", {}),
+    ],
+)
+def test_watch_and_alert_commands(text, name, args):
+    outcome = parse(text)
+    assert outcome.command.name == name
+    assert outcome.command.args == args
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "watch queue wait over 30",
+        "watch queue wait over thirty minutes",
+        "watch queue wait over -5 minutes",
+        "watch free beds under",
+        "watch free beds under 2 in Cardiac Ward",
+        "watch free beds over 2",
+        "watch delayed appointments over 3 please",
+        "watch beds",
+        "list watches now",
+        "stop watch 2",
+        "stop watch TSK-",
+        "list alerts all",
+        "acknowledge alert",
+        "acknowledge alert five",
+        "acknowledge alerts",
+        "acknowledge all alert",
+    ],
+)
+def test_watch_and_alert_near_misses_do_not_match(text):
+    assert parse(text).matched is False

@@ -28,10 +28,19 @@ from app.db.models.hospital import (
     Staff,
     Ward,
 )
+from app.db.models.scheduler import (
+    Alert,
+    AlertSeverity,
+    ScheduledTask,
+    TaskKind,
+    WatchCondition,
+)
 
 __all__ = [
     "AgentEvent",
     "AgentSession",
+    "Alert",
+    "AlertSeverity",
     "Appointment",
     "AppointmentStatus",
     "AuditRecord",
@@ -47,10 +56,13 @@ __all__ = [
     "QueueStatus",
     "QueueUrgency",
     "Room",
+    "ScheduledTask",
     "Scanner",
     "ScannerStatus",
     "ScannerType",
     "SessionGroundedEntity",
     "Staff",
+    "TaskKind",
     "Ward",
+    "WatchCondition",
 ]

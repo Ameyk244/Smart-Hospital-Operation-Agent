@@ -76,8 +76,10 @@ _ALLOWED_ARGUMENTS: dict[str, Callable[[Any], bool]] = {
     "department_code": _matches(_CODE),
     "bed_code": _matches(_CODE),
     "ward_code": _matches(_CODE),
+    "task_code": _matches(_CODE),
     # enums
     "status": _matches(_ENUM),
+    "condition": _matches(_ENUM),
     "appointment_type": _matches(_ENUM),
     "type": _matches(_ENUM),
     "urgency": _matches(_ENUM),
@@ -89,6 +91,7 @@ _ALLOWED_ARGUMENTS: dict[str, Callable[[Any], bool]] = {
     "buffered_ms": _is_number,
     # reschedule proposal resolution: the id of the proposal's `agent_events` row
     "proposal_id": _is_number,
+    "alert_id": _is_number,
     # Jev consultation (`jev_invoked`): all seven keys the trace panel reads
     "choice": _matches(_IDENTIFIER),
     "confidence": _is_number,

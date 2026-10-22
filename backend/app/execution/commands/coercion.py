@@ -17,6 +17,7 @@ from app.db.models.hospital import (
     ScannerStatus,
     ScannerType,
 )
+from app.db.models.scheduler import WatchCondition
 from app.execution.commands.base import CommandError
 
 E = TypeVar("E")
@@ -57,3 +58,7 @@ def coerce_queue_urgency(value: Any) -> QueueUrgency | None:
 
 def coerce_queue_status(value: Any) -> QueueStatus | None:
     return _coerce_enum(value, QueueStatus, "queue status")
+
+
+def coerce_watch_condition(value: Any) -> WatchCondition | None:
+    return _coerce_enum(value, WatchCondition, "watch condition")
